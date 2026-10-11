@@ -279,6 +279,15 @@ void WebConsole::begin() {
         }
     );
     server.on(
+        "/api/automations/active",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleAutomationActivePost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
+    server.on(
         AsyncURIMatcher::exact("/api/automations"),
         HTTP_GET,
         [this](AsyncWebServerRequest *request) { handleAutomationsGet(request); }
@@ -1083,7 +1092,7 @@ void WebConsole::sendAutomationWriteResult(AsyncWebServerRequest *request, Autom
 }
 
 void WebConsole::handleAutomationsGet(AsyncWebServerRequest *request) {
-    if (!requireAdmin(request, nullptr)) {
+    if (!requireUser(request, nullptr)) {
         return;
     }
     if (automationStore == nullptr) {
@@ -1094,6 +1103,33 @@ void WebConsole::handleAutomationsGet(AsyncWebServerRequest *request) {
         request->beginResponse(200, "application/json", automationStore->listSummaryJson());
     response->addHeader("Cache-Control", "no-store");
     request->send(response);
+}
+
+void WebConsole::handleAutomationActivePost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireUser(request, nullptr)) {
+        return;
+    }
+    if (automationStore == nullptr) {
+        request->send(500, "text/plain", "Automations unavailable");
+        return;
+    }
+    String name;
+    bool active = false;
+    extractJsonString(body.c_str(), "name", name);
+    extractJsonBool(body.c_str(), "active", active);
+    if (name.length() == 0 || !AutomationStore::isNameSafe(name.c_str())) {
+        request->send(400, "text/plain", "Need automation name");
+        return;
+    }
+    if (!automationStore->setActive(name.c_str(), active, nullptr)) {
+        request->send(404, "text/plain", "Automation not found");
+        return;
+    }
+    request->send(200, "text/plain", "Updated");
 }
 
 void WebConsole::handleAutomationsStoreGet(AsyncWebServerRequest *request) {

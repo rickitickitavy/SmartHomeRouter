@@ -7,6 +7,7 @@
 
 struct ConsoleBinding {
     char *ieeeText;
+    char *automationName;
     uint8_t channel;
     char *title;
     char *unit;

@@ -19,10 +19,11 @@
             }
             var sectionIndex;
             for (sectionIndex = 0; sectionIndex < sections.length; sectionIndex++) {
+                sections[sectionIndex].classList.remove("active");
+            }
+            for (sectionIndex = 0; sectionIndex < sections.length; sectionIndex++) {
                 if (sections[sectionIndex].id == "section-" + name) {
                     sections[sectionIndex].classList.add("active");
-                } else {
-                    sections[sectionIndex].classList.remove("active");
                 }
             }
             if (name == "system") {
@@ -35,14 +36,8 @@
             } else {
                 stopStatusPolling();
             }
-            if (name == "mqtt") {
-                loadMqtt();
-            }
-            if (name == "wifi") {
-                loadWifi();
-            }
-            if (name == "zigbee") {
-                loadZigbee();
+            if (name == "network") {
+                showNetworkTab("wifi");
             }
             if (name == "devices") {
                 ensureDeviceTypeCatalog();
@@ -102,6 +97,36 @@
                 refreshSlaveResetPause();
             } else {
                 stopSlaveResetPauseTicker();
+            }
+        }
+
+        function showNetworkTab(name) {
+            var buttons = document.querySelectorAll(".network-tab-btn");
+            var panels = document.querySelectorAll(".network-tab-panel");
+            var buttonIndex;
+            for (buttonIndex = 0; buttonIndex < buttons.length; buttonIndex++) {
+                if (buttons[buttonIndex].getAttribute("data-tab") == name) {
+                    buttons[buttonIndex].classList.add("active");
+                } else {
+                    buttons[buttonIndex].classList.remove("active");
+                }
+            }
+            var panelIndex;
+            for (panelIndex = 0; panelIndex < panels.length; panelIndex++) {
+                if (panels[panelIndex].id == "network-tab-" + name) {
+                    panels[panelIndex].classList.add("active");
+                } else {
+                    panels[panelIndex].classList.remove("active");
+                }
+            }
+            if (name == "wifi") {
+                loadWifi();
+            }
+            if (name == "mqtt") {
+                loadMqtt();
+            }
+            if (name == "zigbee") {
+                loadZigbee();
             }
         }
 
@@ -197,10 +222,10 @@
             setStatusText("statusWifiMode", payload && payload.wifiMode ? payload.wifiMode : "—");
             setStatusText("statusWifiBssid", payload && payload.wifiBssid ? payload.wifiBssid : "—");
             setStatusText("statusWifiStaMac", payload && payload.wifiStaMac ? payload.wifiStaMac : "—");
-            if (payload && payload.heapUsedKb != null && payload.heapUsedPercent != null) {
+            if (payload && payload.heapFreeKb != null && payload.heapFreePercent != null) {
                 setStatusText(
                     "statusHeapUsage",
-                    String(payload.heapUsedKb) + " kB (" + String(payload.heapUsedPercent) + "%)"
+                    String(payload.heapFreeKb) + " kB (" + String(payload.heapFreePercent) + "%)"
                 );
             } else {
                 setStatusText("statusHeapUsage", "—");
@@ -208,9 +233,9 @@
             if (payload && payload.psramPresent) {
                 setStatusText(
                     "statusPsramUsage",
-                    String(payload.psramUsedKb != null ? payload.psramUsedKb : 0)
+                    String(payload.psramFreeKb != null ? payload.psramFreeKb : 0)
                         + " kB ("
-                        + String(payload.psramUsedPercent != null ? payload.psramUsedPercent : 0)
+                        + String(payload.psramFreePercent != null ? payload.psramFreePercent : 0)
                         + "%)"
                 );
             } else {
@@ -323,13 +348,43 @@
             }
         }
 
+        function setMaintenanceStoreError(message) {
+            var line = document.getElementById("maintenanceStoreError");
+            if (!line) {
+                return;
+            }
+            if (message) {
+                line.hidden = false;
+                line.textContent = message;
+            } else {
+                line.hidden = true;
+                line.textContent = "";
+            }
+        }
+
+        function clearStoreActionErrors(sectionErrorId) {
+            setMaintenanceStoreError("");
+            var sectionError = document.getElementById(sectionErrorId);
+            if (sectionError) {
+                sectionError.hidden = true;
+            }
+        }
+
+        function reportStoreActionError(sectionErrorId, error, fallbackMessage) {
+            var message = error && error.message ? error.message : (fallbackMessage || "Failed");
+            var sectionError = document.getElementById(sectionErrorId);
+            if (sectionError) {
+                sectionError.hidden = false;
+                sectionError.textContent = message;
+            }
+            setMaintenanceStoreError(message);
+        }
+
         function applyChromeForRoles() {
             var admin = isAdminUser();
             var canEditUsers = admin || hasRole("editUsers");
             var canAdd = admin || hasRole("addDevices");
-            setHidden(document.querySelector('.sidebar-btn[data-section="wifi"]'), !admin);
-            setHidden(document.querySelector('.sidebar-btn[data-section="mqtt"]'), !admin);
-            setHidden(document.querySelector('.sidebar-btn[data-section="zigbee"]'), !admin);
+            setHidden(document.querySelector('.sidebar-btn[data-section="network"]'), !admin);
             setHidden(document.querySelector('.sidebar-btn[data-section="automation"]'), !admin);
             setHidden(document.querySelector('.system-tab-btn[data-tab="update"]'), !admin);
             setHidden(document.querySelector('.system-tab-btn[data-tab="hardware"]'), !admin);
@@ -337,7 +392,7 @@
             var canEditConsoles = admin || hasRole("editConsoles");
             setHidden(document.querySelector('.sidebar-btn[data-section="consoles"]'), !canEditConsoles);
             setHidden(document.querySelector('.system-tab-btn[data-tab="maintenance"]'), !admin);
-            setHidden(document.getElementById("maintenanceSettingsCard"), !admin);
+            setHidden(document.getElementById("maintenanceAdminContent"), !admin);
             setHidden(document.getElementById("addDeviceBtn"), !canAdd);
             setHidden(document.getElementById("exportDevicesBtn"), !admin);
             setHidden(document.getElementById("restoreDevicesBtn"), !admin);
@@ -1079,37 +1134,25 @@
         }
 
         function restoreDevicesFromSelectedFile(file, fullRestore) {
-            var restoreError = document.getElementById("devicesRestoreError");
             var overwriteExisting = !!fullRestore;
-            if (restoreError) {
-                restoreError.hidden = true;
-            }
+            clearStoreActionErrors("devicesRestoreError");
             if (!file) {
                 return;
             }
             var reader = new FileReader();
             reader.onerror = function () {
-                if (restoreError) {
-                    restoreError.hidden = false;
-                    restoreError.textContent = "Failed to read the selected file";
-                }
+                reportStoreActionError("devicesRestoreError", null, "Failed to read the selected file");
             };
             reader.onload = function () {
                 var parsed;
                 try {
                     parsed = JSON.parse(String(reader.result || ""));
                 } catch (parseError) {
-                    if (restoreError) {
-                        restoreError.hidden = false;
-                        restoreError.textContent = "Selected file is not valid JSON";
-                    }
+                    reportStoreActionError("devicesRestoreError", null, "Selected file is not valid JSON");
                     return;
                 }
                 if (!Array.isArray(parsed)) {
-                    if (restoreError) {
-                        restoreError.hidden = false;
-                        restoreError.textContent = "Selected file must be a devices JSON array";
-                    }
+                    reportStoreActionError("devicesRestoreError", null, "Selected file must be a devices JSON array");
                     return;
                 }
                 fetch("/api/devices", { cache: "no-store" }).then(function (response) {
@@ -1163,10 +1206,7 @@
                         });
                     });
                 }).catch(function (error) {
-                    if (restoreError) {
-                        restoreError.hidden = false;
-                        restoreError.textContent = error && error.message ? error.message : "Restore failed";
-                    }
+                    reportStoreActionError("devicesRestoreError", error, "Restore failed");
                 });
             };
             reader.readAsText(file);
@@ -1175,6 +1215,7 @@
         var devicesRestoreOverwrite = false;
 
         function openDevicesRestoreDialog(fullRestore) {
+            clearStoreActionErrors("devicesRestoreError");
             var fileInput = document.getElementById("devicesRestoreFile");
             if (!fileInput) {
                 return;
@@ -1185,10 +1226,7 @@
         }
 
         function exportDevicesStore() {
-            var saveError = document.getElementById("devicesSaveError");
-            if (saveError) {
-                saveError.hidden = true;
-            }
+            clearStoreActionErrors("devicesSaveError");
             fetch("/api/devices/store", { cache: "no-store" }).then(function (response) {
                 return response.text().then(function (text) {
                     if (!response.ok) {
@@ -1205,10 +1243,7 @@
                     URL.revokeObjectURL(objectUrl);
                 });
             }).catch(function (error) {
-                if (saveError) {
-                    saveError.hidden = false;
-                    saveError.textContent = error && error.message ? error.message : "Export failed";
-                }
+                reportStoreActionError("devicesSaveError", error, "Export failed");
             });
         }
 
@@ -3871,8 +3906,9 @@
         var automationEditorBaseline = null;
         var automationEditorOriginalName = "";
         var automationNameListCache = [];
+        var automationListCache = [];
+        var automationSelectedGroup = "__all__";
         var automationListPollTimer = null;
-        var automationValueListSeq = 0;
         var consoleEditorDraft = null;
         var consoleEditorBaseline = null;
         var consoleEditorEditMode = false;
@@ -3884,12 +3920,49 @@
         var consoleDragBindingIndex = null;
         var placeAssignedConsoles = [];
         var placeActiveConsoleIndex = 0;
+        var placeAutomationStatusByName = {};
 
         function refreshPlaceConsolesIfActive() {
             var placeSection = document.getElementById("section-place");
             if (placeSection && placeSection.classList.contains("active")) {
-                renderPlaceConsoleTabs();
+                loadPlaceAutomationStatuses().finally(function () {
+                    renderPlaceConsoleTabs();
+                });
             }
+        }
+
+        function loadPlaceAutomationStatuses() {
+            return fetch("/api/automations", { cache: "no-store" }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error("automations unavailable");
+                }
+                return response.json();
+            }).then(function (rows) {
+                var map = {};
+                var list = Array.isArray(rows) ? rows : [];
+                var index;
+                for (index = 0; index < list.length; index++) {
+                    if (list[index] && list[index].name) {
+                        map[list[index].name] = !!list[index].active;
+                    }
+                }
+                placeAutomationStatusByName = map;
+            }).catch(function () {
+                placeAutomationStatusByName = {};
+            });
+        }
+
+        function setPlaceAutomationActive(name, active) {
+            return fetch("/api/automations/active", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: name, active: !!active })
+            }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error("active update failed");
+                }
+                placeAutomationStatusByName[name] = !!active;
+            });
         }
 
         function placeBindingChannel(binding) {
@@ -4091,10 +4164,35 @@
             row.className = "console-device-row";
             var title = document.createElement("span");
             title.className = "console-device-row-title";
-            title.textContent = binding.title || binding.ieee || "Device";
+            title.textContent = binding.title || binding.automation || binding.ieee || "Device";
             row.appendChild(title);
             var controls = document.createElement("div");
             controls.className = "console-device-row-controls";
+            if (binding && binding.automation) {
+                var automationName = binding.automation;
+                var automationOn = !!placeAutomationStatusByName[automationName];
+                var automationSwitch = document.createElement("button");
+                automationSwitch.type = "button";
+                automationSwitch.className = "console-switch" + (automationOn ? " is-on" : "");
+                automationSwitch.setAttribute("aria-label", "Automation on off");
+                if (!Object.prototype.hasOwnProperty.call(placeAutomationStatusByName, automationName)) {
+                    automationSwitch.disabled = true;
+                    automationSwitch.className += " is-disabled";
+                } else {
+                    automationSwitch.onclick = (function (name, currentlyOn) {
+                        return function () {
+                            setPlaceAutomationActive(name, !currentlyOn).then(function () {
+                                refreshPlaceConsolesIfActive();
+                            }).catch(function () {
+                                refreshPlaceConsolesIfActive();
+                            });
+                        };
+                    })(automationName, automationOn);
+                }
+                controls.appendChild(automationSwitch);
+                row.appendChild(controls);
+                return row;
+            }
             var device = findRegisteredDevice(binding.ieee);
             if (!device) {
                 var unavailable = document.createElement("span");
@@ -4287,15 +4385,18 @@
         }
 
         function loadPlaceConsoles() {
-            fetch("/api/consoles/mine", { cache: "no-store" }).then(function (response) {
-                return response.text().then(function (text) {
-                    if (!response.ok) {
-                        throw new Error(text || ("HTTP " + response.status));
-                    }
-                    return JSON.parse(text || "[]");
-                });
-            }).then(function (rows) {
-                placeAssignedConsoles = Array.isArray(rows) ? rows : [];
+            Promise.all([
+                fetch("/api/consoles/mine", { cache: "no-store" }).then(function (response) {
+                    return response.text().then(function (text) {
+                        if (!response.ok) {
+                            throw new Error(text || ("HTTP " + response.status));
+                        }
+                        return JSON.parse(text || "[]");
+                    });
+                }),
+                loadPlaceAutomationStatuses()
+            ]).then(function (parts) {
+                placeAssignedConsoles = Array.isArray(parts[0]) ? parts[0] : [];
                 renderPlaceConsoleTabs();
             }).catch(function () {
                 placeAssignedConsoles = [];
@@ -4319,6 +4420,8 @@
                 name: "",
                 title: "",
                 active: true,
+                group: "",
+                minTriggerIntervalSec: 0,
                 timer: { use: false, autoRestart: false, startOnBoot: false, defaultTime: 0, counting: false, timeLeft: 0 },
                 listen: [],
                 condition: emptyAutomationCondition(),
@@ -4345,24 +4448,37 @@
         function buildEditableDiscreteControl(currentValue, discreteValues, onChange) {
             var host = document.createElement("div");
             host.className = "automation-value-combo";
+            if (discreteValues && discreteValues.length > 0) {
+                var select = document.createElement("select");
+                var values = discreteValues.slice();
+                var current = currentValue != null ? String(currentValue) : "";
+                if (current && values.indexOf(current) < 0) {
+                    values.unshift(current);
+                }
+                if (!current) {
+                    var blankOption = document.createElement("option");
+                    blankOption.value = "";
+                    blankOption.textContent = "—";
+                    select.appendChild(blankOption);
+                }
+                var valueIndex;
+                for (valueIndex = 0; valueIndex < values.length; valueIndex++) {
+                    var option = document.createElement("option");
+                    option.value = values[valueIndex];
+                    option.textContent = values[valueIndex];
+                    select.appendChild(option);
+                }
+                select.value = current;
+                select.onchange = function () {
+                    onChange(select.value);
+                };
+                host.appendChild(select);
+                return host;
+            }
             var input = document.createElement("input");
             input.type = "text";
             input.value = currentValue || "";
             input.autocomplete = "off";
-            if (discreteValues && discreteValues.length > 0) {
-                automationValueListSeq += 1;
-                var listId = "automationValueList" + String(automationValueListSeq);
-                var dataList = document.createElement("datalist");
-                dataList.id = listId;
-                var valueIndex;
-                for (valueIndex = 0; valueIndex < discreteValues.length; valueIndex++) {
-                    var option = document.createElement("option");
-                    option.value = discreteValues[valueIndex];
-                    dataList.appendChild(option);
-                }
-                input.setAttribute("list", listId);
-                host.appendChild(dataList);
-            }
             function commitValue() {
                 onChange(input.value);
             }
@@ -4442,14 +4558,314 @@
                 });
             }).then(function (rows) {
                 var list = Array.isArray(rows) ? rows : [];
+                automationListCache = list;
                 automationNameListCache = list.map(function (row) { return row.name || ""; }).filter(Boolean);
-                renderAutomationTable(list);
+                renderAutomationGroupList();
+                renderAutomationTable(filteredAutomationsForSelectedGroup());
             }).catch(function (error) {
                 if (errorLine) {
                     errorLine.hidden = false;
                     errorLine.textContent = error && error.message ? error.message : "Automations load failed";
                 }
             });
+        }
+
+        function automationGroupKey(row) {
+            var group = row && row.group != null ? String(row.group).trim() : "";
+            return group || "";
+        }
+
+        function collectAutomationGroupNames(rows) {
+            var names = [];
+            var seen = {};
+            var index;
+            for (index = 0; index < rows.length; index++) {
+                var group = automationGroupKey(rows[index]);
+                if (!group || seen[group]) {
+                    continue;
+                }
+                seen[group] = true;
+                names.push(group);
+            }
+            names.sort(function (left, right) {
+                return left.localeCompare(right);
+            });
+            return names;
+        }
+
+        function filteredAutomationsForSelectedGroup() {
+            var rows = automationListCache || [];
+            if (automationSelectedGroup === "__all__") {
+                return rows.slice();
+            }
+            var filtered = [];
+            var index;
+            for (index = 0; index < rows.length; index++) {
+                var group = automationGroupKey(rows[index]);
+                if (automationSelectedGroup === "__none__") {
+                    if (!group) {
+                        filtered.push(rows[index]);
+                    }
+                } else if (group === automationSelectedGroup) {
+                    filtered.push(rows[index]);
+                }
+            }
+            return filtered;
+        }
+
+        function renderAutomationGroupList() {
+            var body = document.getElementById("automationGroupList");
+            if (!body) {
+                return;
+            }
+            body.innerHTML = "";
+            var rows = automationListCache || [];
+            var groups = collectAutomationGroupNames(rows);
+            var hasUngrouped = false;
+            var scan;
+            for (scan = 0; scan < rows.length; scan++) {
+                if (!automationGroupKey(rows[scan])) {
+                    hasUngrouped = true;
+                    break;
+                }
+            }
+            function addGroupRow(key, label) {
+                var tableRow = document.createElement("tr");
+                if (automationSelectedGroup === key) {
+                    tableRow.className = "is-selected";
+                }
+                tableRow.onclick = (function (storedKey) {
+                    return function () {
+                        automationSelectedGroup = storedKey;
+                        renderAutomationGroupList();
+                        renderAutomationTable(filteredAutomationsForSelectedGroup());
+                    };
+                })(key);
+                var cell = document.createElement("td");
+                cell.textContent = label;
+                tableRow.appendChild(cell);
+                body.appendChild(tableRow);
+            }
+            addGroupRow("__all__", "All");
+            var groupIndex;
+            for (groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+                addGroupRow(groups[groupIndex], groups[groupIndex]);
+            }
+            if (hasUngrouped) {
+                addGroupRow("__none__", "Not in group");
+            }
+            var editDialog = document.getElementById("automationEditDialog");
+            if (editDialog && !editDialog.hidden) {
+                syncAutomationGroupComboFromPoll(groups);
+            }
+        }
+
+        var automationGroupComboNames = [];
+
+        function refreshAutomationGroupComboNames() {
+            var names = collectAutomationGroupNames(automationListCache || []);
+            var seen = {};
+            var index;
+            for (index = 0; index < names.length; index++) {
+                seen[names[index]] = true;
+            }
+            var groupBody = document.getElementById("automationGroupList");
+            if (groupBody) {
+                var rows = groupBody.querySelectorAll("tr");
+                var rowIndex;
+                for (rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+                    var cell = rows[rowIndex].querySelector("td");
+                    var label = cell ? String(cell.textContent || "").trim() : "";
+                    if (!label || label === "All" || label === "Not in group" || seen[label]) {
+                        continue;
+                    }
+                    seen[label] = true;
+                    names.push(label);
+                }
+            }
+            var input = document.getElementById("automationEditGroup");
+            var current = input ? String(input.value || "").trim() : "";
+            if (current && !seen[current]) {
+                names.push(current);
+            }
+            names.sort(function (left, right) {
+                return left.localeCompare(right);
+            });
+            automationGroupComboNames = names;
+            return names;
+        }
+
+        function isAutomationGroupComboOpen() {
+            var combo = document.getElementById("automationEditGroupCombo");
+            return !!(combo && combo.classList.contains("is-open"));
+        }
+
+        function syncAutomationGroupComboFromPoll(groups) {
+            automationGroupComboNames = Array.isArray(groups) ? groups.slice() : [];
+            automationGroupComboNames.sort(function (left, right) {
+                return left.localeCompare(right);
+            });
+            if (!isAutomationGroupComboOpen()) {
+                return;
+            }
+            refreshAutomationGroupComboNames();
+            renderAutomationGroupComboList("", false);
+            placeAutomationGroupComboList();
+        }
+
+        function fillAutomationGroupSelect(groups, selectedGroup) {
+            var input = document.getElementById("automationEditGroup");
+            var selected = selectedGroup != null ? String(selectedGroup).trim() : "";
+            if (input && !isAutomationGroupComboOpen() && document.activeElement !== input) {
+                input.value = selected;
+            } else if (input && selected && !input.value) {
+                input.value = selected;
+            }
+            automationGroupComboNames = Array.isArray(groups) ? groups.slice() : [];
+            if (selected && automationGroupComboNames.indexOf(selected) < 0) {
+                automationGroupComboNames.push(selected);
+            }
+            automationGroupComboNames.sort(function (left, right) {
+                return left.localeCompare(right);
+            });
+        }
+
+        function renderAutomationGroupComboList(filterText, filterEnabled) {
+            var list = document.getElementById("automationEditGroupList");
+            if (!list) {
+                return;
+            }
+            list.innerHTML = "";
+            var filter = filterEnabled ? String(filterText || "").trim().toLowerCase() : "";
+            var index;
+            for (index = 0; index < automationGroupComboNames.length; index++) {
+                var name = automationGroupComboNames[index];
+                if (filter && name.toLowerCase().indexOf(filter) < 0) {
+                    continue;
+                }
+                var item = document.createElement("li");
+                item.className = "combo-field-option";
+                item.setAttribute("role", "option");
+                item.textContent = name;
+                item.onmousedown = (function (storedName) {
+                    return function (event) {
+                        event.preventDefault();
+                        var groupInput = document.getElementById("automationEditGroup");
+                        if (groupInput) {
+                            groupInput.value = storedName;
+                        }
+                        closeAutomationGroupCombo();
+                        if (groupInput) {
+                            groupInput.focus();
+                        }
+                    };
+                })(name);
+                list.appendChild(item);
+            }
+            if (!list.children.length) {
+                var empty = document.createElement("li");
+                empty.className = "combo-field-option is-empty";
+                empty.textContent = automationGroupComboNames.length ? "No matches" : "No groups yet";
+                list.appendChild(empty);
+            }
+        }
+
+        function placeAutomationGroupComboList() {
+            var combo = document.getElementById("automationEditGroupCombo");
+            var list = document.getElementById("automationEditGroupList");
+            if (!combo || !list || list.hidden) {
+                return;
+            }
+            if (list.parentNode !== document.body) {
+                document.body.appendChild(list);
+            }
+            var rect = combo.getBoundingClientRect();
+            list.style.position = "fixed";
+            list.style.left = String(Math.round(rect.left)) + "px";
+            list.style.width = String(Math.round(rect.width)) + "px";
+            list.style.top = String(Math.round(rect.bottom + 2)) + "px";
+            list.style.zIndex = "80";
+        }
+
+        function openAutomationGroupCombo(filterWhileTyping) {
+            var list = document.getElementById("automationEditGroupList");
+            var combo = document.getElementById("automationEditGroupCombo");
+            var input = document.getElementById("automationEditGroup");
+            if (!list || !combo) {
+                return;
+            }
+            refreshAutomationGroupComboNames();
+            renderAutomationGroupComboList(input ? input.value : "", !!filterWhileTyping);
+            list.hidden = false;
+            list.removeAttribute("hidden");
+            combo.classList.add("is-open");
+            placeAutomationGroupComboList();
+        }
+
+        function closeAutomationGroupCombo() {
+            var list = document.getElementById("automationEditGroupList");
+            var combo = document.getElementById("automationEditGroupCombo");
+            if (list) {
+                list.hidden = true;
+                list.setAttribute("hidden", "");
+                if (combo && list.parentNode !== combo) {
+                    combo.appendChild(list);
+                }
+            }
+            if (combo) {
+                combo.classList.remove("is-open");
+            }
+        }
+
+        function toggleAutomationGroupCombo() {
+            var list = document.getElementById("automationEditGroupList");
+            if (!list || list.hidden) {
+                openAutomationGroupCombo(false);
+            } else {
+                closeAutomationGroupCombo();
+            }
+        }
+
+        function setupAutomationGroupCombo() {
+            var input = document.getElementById("automationEditGroup");
+            var toggle = document.getElementById("automationEditGroupToggle");
+            var combo = document.getElementById("automationEditGroupCombo");
+            if (!input || !toggle || !combo || combo.getAttribute("data-ready") === "1") {
+                return;
+            }
+            combo.setAttribute("data-ready", "1");
+            toggle.onmousedown = function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+            };
+            toggle.onclick = function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                toggleAutomationGroupCombo();
+            };
+            input.oninput = function () {
+                closeAutomationGroupCombo();
+            };
+            input.onkeydown = function (event) {
+                if (event.key === "Escape") {
+                    closeAutomationGroupCombo();
+                }
+            };
+            document.addEventListener("mousedown", function (event) {
+                var target = event.target;
+                if (combo.contains(target)) {
+                    return;
+                }
+                if (target && target.closest && target.closest("#automationEditGroupList")) {
+                    return;
+                }
+                closeAutomationGroupCombo();
+            });
+            window.addEventListener("resize", placeAutomationGroupComboList);
+            var body = document.querySelector("#automationEditDialog .automation-edit-body");
+            if (body) {
+                body.addEventListener("scroll", placeAutomationGroupComboList);
+            }
         }
 
         function renderAutomationTable(rows) {
@@ -4498,10 +4914,7 @@
         }
 
         function exportAllAutomations() {
-            var errorLine = document.getElementById("automationsSaveError");
-            if (errorLine) {
-                errorLine.hidden = true;
-            }
+            clearStoreActionErrors("automationsSaveError");
             fetch("/api/automations/store", { cache: "no-store" }).then(function (response) {
                 return response.text().then(function (text) {
                     if (!response.ok) {
@@ -4518,14 +4931,12 @@
                     URL.revokeObjectURL(objectUrl);
                 });
             }).catch(function (error) {
-                if (errorLine) {
-                    errorLine.hidden = false;
-                    errorLine.textContent = error && error.message ? error.message : "Export failed";
-                }
+                reportStoreActionError("automationsSaveError", error, "Export failed");
             });
         }
 
         function chooseAutomationsRestoreFile() {
+            clearStoreActionErrors("automationsSaveError");
             var fileInput = document.getElementById("automationsRestoreFile");
             if (!fileInput) {
                 return;
@@ -4537,19 +4948,16 @@
         function onAutomationsRestoreFileSelected(event) {
             var fileInput = event && event.target ? event.target : null;
             var file = fileInput && fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
-            var errorLine = document.getElementById("automationsSaveError");
             if (!file) {
                 return;
             }
             if (!window.confirm("Import replaces all automations with this file. Continue?")) {
                 return;
             }
+            clearStoreActionErrors("automationsSaveError");
             var reader = new FileReader();
             reader.onerror = function () {
-                if (errorLine) {
-                    errorLine.hidden = false;
-                    errorLine.textContent = "Failed to read the selected file";
-                }
+                reportStoreActionError("automationsSaveError", null, "Failed to read the selected file");
             };
             reader.onload = function () {
                 var text = reader.result ? String(reader.result) : "";
@@ -4557,17 +4965,11 @@
                 try {
                     parsed = JSON.parse(text);
                 } catch (parseError) {
-                    if (errorLine) {
-                        errorLine.hidden = false;
-                        errorLine.textContent = "Selected file is not valid JSON";
-                    }
+                    reportStoreActionError("automationsSaveError", null, "Selected file is not valid JSON");
                     return;
                 }
                 if (!Array.isArray(parsed)) {
-                    if (errorLine) {
-                        errorLine.hidden = false;
-                        errorLine.textContent = "Selected file must be an automations JSON array";
-                    }
+                    reportStoreActionError("automationsSaveError", null, "Selected file must be an automations JSON array");
                     return;
                 }
                 fetch("/api/automations/restore", {
@@ -4582,10 +4984,7 @@
                         loadAutomations();
                     });
                 }).catch(function (error) {
-                    if (errorLine) {
-                        errorLine.hidden = false;
-                        errorLine.textContent = error && error.message ? error.message : "Import failed";
-                    }
+                    reportStoreActionError("automationsSaveError", error, "Import failed");
                 });
             };
             reader.readAsText(file);
@@ -4674,6 +5073,7 @@
         }
 
         function closeAutomationEditDialog() {
+            closeAutomationGroupCombo();
             automationEditorDraft = null;
             automationEditorBaseline = null;
             automationEditorOriginalName = "";
@@ -4701,8 +5101,16 @@
                 return;
             }
             automationEditorDraft.name = (document.getElementById("automationEditName").value || "").trim();
+            var groupInput = document.getElementById("automationEditGroup");
+            automationEditorDraft.group = groupInput ? (groupInput.value || "").trim() : "";
             automationEditorDraft.title = (document.getElementById("automationEditTitle").value || "").trim();
             automationEditorDraft.active = !!document.getElementById("automationEditActive").checked;
+            var minTriggerIntervalSec = parseInt(
+                document.getElementById("automationMinTriggerIntervalSec").value,
+                10
+            );
+            automationEditorDraft.minTriggerIntervalSec =
+                minTriggerIntervalSec > 0 ? minTriggerIntervalSec : 0;
             if (!automationEditorDraft.timer) {
                 automationEditorDraft.timer = {};
             }
@@ -4744,8 +5152,19 @@
                 + " (" + zigbeeDeviceTypeLabel(device.type) + ")";
         }
 
-        function fillDeviceSelect(select, selectedIeee) {
+        var AUTOMATION_IEEE_CURRENT_TIME = "@time";
+
+        function fillDeviceSelect(select, selectedIeee, includeCurrentTime) {
             select.innerHTML = "";
+            if (includeCurrentTime) {
+                var timeOption = document.createElement("option");
+                timeOption.value = AUTOMATION_IEEE_CURRENT_TIME;
+                timeOption.textContent = "Current time";
+                if (selectedIeee === AUTOMATION_IEEE_CURRENT_TIME) {
+                    timeOption.selected = true;
+                }
+                select.appendChild(timeOption);
+            }
             var list = registeredDeviceRows || [];
             var index;
             for (index = 0; index < list.length; index++) {
@@ -4760,14 +5179,44 @@
             }
         }
 
+        function isAutomationCurrentTimeIeee(ieeeText) {
+            return (ieeeText || "") === AUTOMATION_IEEE_CURRENT_TIME;
+        }
+
+        function normalizeTimeOfDayValue(value) {
+            var text = String(value || "").trim();
+            var match = text.match(/^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/);
+            if (!match) {
+                return "";
+            }
+            var hours = parseInt(match[1], 10);
+            var minutes = parseInt(match[2], 10);
+            var seconds = match[3] != null ? parseInt(match[3], 10) : 0;
+            if (hours > 23 || minutes > 59 || seconds > 59) {
+                return "";
+            }
+            function pad(part) {
+                return part < 10 ? "0" + String(part) : String(part);
+            }
+            return pad(hours) + ":" + pad(minutes) + ":" + pad(seconds);
+        }
+
         function renderAutomationEditor() {
             if (!automationEditorDraft) {
                 return;
             }
             document.getElementById("automationEditName").value = automationEditorDraft.name || "";
             document.getElementById("automationEditName").readOnly = false;
+            fillAutomationGroupSelect(
+                collectAutomationGroupNames(automationListCache || []),
+                automationEditorDraft.group || ""
+            );
             document.getElementById("automationEditTitle").value = automationEditorDraft.title || "";
             document.getElementById("automationEditActive").checked = !!automationEditorDraft.active;
+            document.getElementById("automationMinTriggerIntervalSec").value =
+                automationEditorDraft.minTriggerIntervalSec > 0
+                    ? String(automationEditorDraft.minTriggerIntervalSec)
+                    : "";
             var timer = automationEditorDraft.timer || {};
             document.getElementById("automationTimerUse").checked = !!timer.use;
             document.getElementById("automationTimerAutoRestart").checked = !!timer.autoRestart;
@@ -4933,7 +5382,7 @@
                 return;
             }
             var deviceSelect = document.createElement("select");
-            fillDeviceSelect(deviceSelect, node.ieee || "");
+            fillDeviceSelect(deviceSelect, node.ieee || "", true);
             var channelInput = document.createElement("input");
             channelInput.type = "number";
             channelInput.min = "1";
@@ -4943,8 +5392,20 @@
                 node.channel = channelValue > 0 ? channelValue : 1;
             };
             var cmpSelect = document.createElement("select");
-            cmpSelect.innerHTML = "<option>EQUAL</option><option>GREATER</option><option>LESS</option><option>CONTAINS</option><option>STARTS</option><option>ENDS</option>";
-            cmpSelect.value = node.cmp || "EQUAL";
+            function refreshCompareOpControl() {
+                var currentTime = isAutomationCurrentTimeIeee(node.ieee);
+                var previous = node.cmp || (currentTime ? "GREATER" : "EQUAL");
+                if (currentTime) {
+                    cmpSelect.innerHTML = "<option>GREATER</option><option>LESS</option>";
+                    if (previous !== "GREATER" && previous !== "LESS") {
+                        previous = "GREATER";
+                    }
+                } else {
+                    cmpSelect.innerHTML = "<option>EQUAL</option><option>GREATER</option><option>LESS</option><option>CONTAINS</option><option>STARTS</option><option>ENDS</option>";
+                }
+                cmpSelect.value = previous;
+                node.cmp = cmpSelect.value;
+            }
             cmpSelect.onchange = function () { node.cmp = cmpSelect.value; };
             var clusterInput = document.createElement("input");
             clusterInput.type = "number";
@@ -4953,6 +5414,27 @@
             var valueHost = document.createElement("div");
             function refreshCompareValueControl() {
                 valueHost.innerHTML = "";
+                if (isAutomationCurrentTimeIeee(node.ieee)) {
+                    var timeInput = document.createElement("input");
+                    timeInput.type = "text";
+                    timeInput.placeholder = "HH:MM:SS";
+                    timeInput.value = normalizeTimeOfDayValue(node.value) || (node.value || "");
+                    timeInput.onchange = function () {
+                        var normalized = normalizeTimeOfDayValue(timeInput.value);
+                        node.value = normalized || timeInput.value;
+                        if (normalized) {
+                            timeInput.value = normalized;
+                        }
+                    };
+                    valueHost.appendChild(timeInput);
+                    channelInput.hidden = true;
+                    clusterInput.hidden = true;
+                    delete node.cluster;
+                    node.channel = 1;
+                    return;
+                }
+                channelInput.hidden = false;
+                clusterInput.hidden = false;
                 var discreteValues = discreteAutomationCompareValues(node.ieee || "", !!node.cluster);
                 valueHost.appendChild(buildEditableDiscreteControl(
                     node.value || "",
@@ -4964,6 +5446,15 @@
             }
             deviceSelect.onchange = function () {
                 node.ieee = deviceSelect.value;
+                if (isAutomationCurrentTimeIeee(node.ieee)) {
+                    if (node.cmp !== "GREATER" && node.cmp !== "LESS") {
+                        node.cmp = "GREATER";
+                    }
+                    if (!normalizeTimeOfDayValue(node.value)) {
+                        node.value = "00:00:00";
+                    }
+                }
+                refreshCompareOpControl();
                 refreshCompareValueControl();
             };
             clusterInput.onchange = function () {
@@ -4975,6 +5466,7 @@
                 }
                 refreshCompareValueControl();
             };
+            refreshCompareOpControl();
             refreshCompareValueControl();
             box.appendChild(deviceSelect);
             box.appendChild(channelInput);
@@ -5211,6 +5703,16 @@
                 }
                 return;
             }
+            if (automationEditorDraft.timer
+                && automationEditorDraft.timer.use
+                && (automationEditorDraft.timer.autoRestart || automationEditorDraft.timer.startOnBoot)
+                && !(automationEditorDraft.timer.defaultTime > 0)) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = "Default time is required when Start on boot or Auto restart is enabled";
+                }
+                return;
+            }
             var payload = cloneAutomationDraft(automationEditorDraft);
             payload.originalName = automationEditorOriginalName || payload.name;
             delete payload.timer.counting;
@@ -5352,10 +5854,7 @@
         }
 
         function exportAllConsoles() {
-            var errorLine = document.getElementById("consolesSaveError");
-            if (errorLine) {
-                errorLine.hidden = true;
-            }
+            clearStoreActionErrors("consolesSaveError");
             fetch("/api/consoles/store", { cache: "no-store" }).then(function (response) {
                 return response.text().then(function (text) {
                     if (!response.ok) {
@@ -5372,18 +5871,12 @@
                     URL.revokeObjectURL(objectUrl);
                 });
             }).catch(function (error) {
-                if (errorLine) {
-                    errorLine.hidden = false;
-                    errorLine.textContent = error && error.message ? error.message : "Export failed";
-                }
+                reportStoreActionError("consolesSaveError", error, "Export failed");
             });
         }
 
         function chooseConsolesRestoreFile() {
-            var errorLine = document.getElementById("consolesSaveError");
-            if (errorLine) {
-                errorLine.hidden = true;
-            }
+            clearStoreActionErrors("consolesSaveError");
             var fileInput = document.getElementById("consolesRestoreFile");
             if (!fileInput) {
                 return;
@@ -5395,19 +5888,16 @@
         function onConsolesRestoreFileSelected(event) {
             var fileInput = event && event.target ? event.target : null;
             var file = fileInput && fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
-            var errorLine = document.getElementById("consolesSaveError");
             if (!file) {
                 return;
             }
             if (!window.confirm("Import replaces all consoles with this file. Continue?")) {
                 return;
             }
+            clearStoreActionErrors("consolesSaveError");
             var reader = new FileReader();
             reader.onerror = function () {
-                if (errorLine) {
-                    errorLine.hidden = false;
-                    errorLine.textContent = "Failed to read the selected file";
-                }
+                reportStoreActionError("consolesSaveError", null, "Failed to read the selected file");
             };
             reader.onload = function () {
                 var text = reader.result ? String(reader.result) : "";
@@ -5415,17 +5905,11 @@
                 try {
                     parsed = JSON.parse(text);
                 } catch (parseError) {
-                    if (errorLine) {
-                        errorLine.hidden = false;
-                        errorLine.textContent = "Selected file is not valid JSON";
-                    }
+                    reportStoreActionError("consolesSaveError", null, "Selected file is not valid JSON");
                     return;
                 }
                 if (!Array.isArray(parsed)) {
-                    if (errorLine) {
-                        errorLine.hidden = false;
-                        errorLine.textContent = "Selected file must be a consoles JSON array";
-                    }
+                    reportStoreActionError("consolesSaveError", null, "Selected file must be a consoles JSON array");
                     return;
                 }
                 fetch("/api/consoles/restore", {
@@ -5440,10 +5924,7 @@
                         loadConsoles();
                     });
                 }).catch(function (error) {
-                    if (errorLine) {
-                        errorLine.hidden = false;
-                        errorLine.textContent = error && error.message ? error.message : "Import failed";
-                    }
+                    reportStoreActionError("consolesSaveError", error, "Import failed");
                 });
             };
             reader.readAsText(file);
@@ -5525,7 +6006,9 @@
                 consoleEditorBaseline = JSON.stringify(consoleEditorDraft);
                 consoleEditorEditMode = true;
                 document.getElementById("consoleEditDialog").hidden = false;
-                renderConsoleEditor();
+                return loadPlaceAutomationStatuses().finally(function () {
+                    renderConsoleEditor();
+                });
             }).catch(function (error) {
                 if (errorLine) {
                     errorLine.hidden = false;
@@ -5938,7 +6421,7 @@
             var addDeviceButton = document.createElement("button");
             addDeviceButton.type = "button";
             addDeviceButton.className = "btn btn-secondary btn-inline";
-            addDeviceButton.textContent = "Add device";
+            addDeviceButton.textContent = "Add binding";
             addDeviceButton.onclick = (function (storedIndex) {
                 return function () {
                     openConsoleDeviceDialog(storedIndex, -1);
@@ -5995,9 +6478,26 @@
             dragHandle.textContent = "⋮";
             var title = document.createElement("span");
             title.className = "console-device-row-title";
-            title.textContent = binding.title || binding.ieee || "Device";
+            title.textContent = binding.title
+                || binding.automation
+                || binding.ieee
+                || "Binding";
             row.appendChild(dragHandle);
             row.appendChild(title);
+            if (binding && binding.automation) {
+                var previewControls = document.createElement("div");
+                previewControls.className = "console-device-row-controls";
+                var previewSwitch = document.createElement("button");
+                previewSwitch.type = "button";
+                previewSwitch.disabled = true;
+                var previewOn = !!placeAutomationStatusByName[binding.automation];
+                previewSwitch.className = "console-switch"
+                    + (previewOn ? " is-on" : "")
+                    + " is-disabled";
+                previewSwitch.setAttribute("aria-label", "Automation on off");
+                previewControls.appendChild(previewSwitch);
+                row.appendChild(previewControls);
+            }
             return row;
         }
 
@@ -6171,6 +6671,21 @@
             return parseInt(channels, 10) || 1;
         }
 
+        function updateConsoleBindingTargetFields() {
+            var target = document.getElementById("consoleBindingTarget");
+            var isAutomation = target && target.value === "automation";
+            setHidden(document.getElementById("consoleDeviceSelectField"), isAutomation);
+            setHidden(document.getElementById("consoleAutomationSelectField"), !isAutomation);
+            if (isAutomation) {
+                setHidden(document.getElementById("consoleDeviceChannelField"), true);
+                setHidden(document.getElementById("consoleDeviceUnitField"), true);
+                setHidden(document.getElementById("consoleDeviceDecimalsField"), true);
+            } else {
+                updateConsoleDeviceChannelField();
+                updateConsoleDeviceUnitField();
+            }
+        }
+
         function openConsoleDeviceDialog(widgetIndex, bindingIndex) {
             readConsoleEditorFields();
             consoleDeviceDialogWidgetIndex = widgetIndex;
@@ -6179,12 +6694,15 @@
                 ? consoleEditorDraft.widgets[widgetIndex].devices[bindingIndex]
                 : { ieee: "", channel: 1, title: "", unit: "", decimals: -1 };
             document.getElementById("consoleDeviceDialogError").hidden = true;
-            fetch("/api/devices", { cache: "no-store" }).then(function (response) {
-                return response.json();
-            }).then(function (rows) {
+            var targetSelect = document.getElementById("consoleBindingTarget");
+            targetSelect.value = binding.automation ? "automation" : "device";
+            Promise.all([
+                fetch("/api/devices", { cache: "no-store" }).then(function (response) { return response.json(); }),
+                fetch("/api/automations", { cache: "no-store" }).then(function (response) { return response.json(); })
+            ]).then(function (parts) {
                 var select = document.getElementById("consoleDeviceSelect");
                 select.innerHTML = "";
-                var list = Array.isArray(rows) ? rows : [];
+                var list = Array.isArray(parts[0]) ? parts[0] : [];
                 var index;
                 for (index = 0; index < list.length; index++) {
                     var option = document.createElement("option");
@@ -6198,36 +6716,53 @@
                     }
                     select.appendChild(option);
                 }
+                var automationSelect = document.getElementById("consoleAutomationSelect");
+                automationSelect.innerHTML = "";
+                var automations = Array.isArray(parts[1]) ? parts[1] : [];
+                for (index = 0; index < automations.length; index++) {
+                    var autoOption = document.createElement("option");
+                    autoOption.value = automations[index].name || "";
+                    autoOption.textContent = automations[index].title
+                        ? (automations[index].title + " (" + automations[index].name + ")")
+                        : (automations[index].name || "Automation");
+                    if (binding.automation && binding.automation === automations[index].name) {
+                        autoOption.selected = true;
+                    }
+                    automationSelect.appendChild(autoOption);
+                }
                 document.getElementById("consoleDeviceTitle").value = binding.title || "";
-                updateConsoleDeviceChannelField();
-                var channelSelect = document.getElementById("consoleDeviceChannel");
-                if (binding.channel) {
-                    channelSelect.value = String(binding.channel);
-                }
-                updateConsoleDeviceUnitField();
-                var unitSelect = document.getElementById("consoleDeviceUnit");
-                if (binding.unit) {
-                    unitSelect.value = binding.unit;
-                }
-                updateConsoleDeviceDecimalsField();
-                var decimalsSelect = document.getElementById("consoleDeviceDecimals");
-                if (decimalsSelect && !document.getElementById("consoleDeviceDecimalsField").hidden) {
-                    var decimalsValue = binding.decimals;
-                    if (decimalsValue === undefined || decimalsValue === null || decimalsValue === "" || decimalsValue < 0) {
-                        decimalsSelect.value = String(defaultMeasurementDecimals(
-                            select.options[select.selectedIndex]
-                                ? select.options[select.selectedIndex].getAttribute("data-type") || ""
-                                : ""
-                        ));
-                    } else {
-                        decimalsSelect.value = String(decimalsValue);
+                updateConsoleBindingTargetFields();
+                if (targetSelect.value !== "automation") {
+                    updateConsoleDeviceChannelField();
+                    var channelSelect = document.getElementById("consoleDeviceChannel");
+                    if (binding.channel) {
+                        channelSelect.value = String(binding.channel);
+                    }
+                    updateConsoleDeviceUnitField();
+                    var unitSelect = document.getElementById("consoleDeviceUnit");
+                    if (binding.unit) {
+                        unitSelect.value = binding.unit;
+                    }
+                    updateConsoleDeviceDecimalsField();
+                    var decimalsSelect = document.getElementById("consoleDeviceDecimals");
+                    if (decimalsSelect && !document.getElementById("consoleDeviceDecimalsField").hidden) {
+                        var decimalsValue = binding.decimals;
+                        if (decimalsValue === undefined || decimalsValue === null || decimalsValue === "" || decimalsValue < 0) {
+                            decimalsSelect.value = String(defaultMeasurementDecimals(
+                                select.options[select.selectedIndex]
+                                    ? select.options[select.selectedIndex].getAttribute("data-type") || ""
+                                    : ""
+                            ));
+                        } else {
+                            decimalsSelect.value = String(decimalsValue);
+                        }
                     }
                 }
                 document.getElementById("consoleDeviceDialog").hidden = false;
                 consoleDeviceDialogBaseline = JSON.stringify(readConsoleDeviceDialogBody());
             }).catch(function () {
                 document.getElementById("consoleDeviceDialogError").hidden = false;
-                document.getElementById("consoleDeviceDialogError").textContent = "Could not load devices";
+                document.getElementById("consoleDeviceDialogError").textContent = "Could not load devices or automations";
             });
         }
 
@@ -6337,6 +6872,16 @@
         }
 
         function readConsoleDeviceDialogBody() {
+            var target = document.getElementById("consoleBindingTarget");
+            var title = document.getElementById("consoleDeviceTitle").value;
+            if (target && target.value === "automation") {
+                var automationSelect = document.getElementById("consoleAutomationSelect");
+                var automationName = automationSelect ? automationSelect.value : "";
+                return {
+                    automation: automationName,
+                    title: title || automationName
+                };
+            }
             var deviceSelect = document.getElementById("consoleDeviceSelect");
             var channelSelect = document.getElementById("consoleDeviceChannel");
             var unitSelect = document.getElementById("consoleDeviceUnit");
@@ -6352,7 +6897,7 @@
             return {
                 ieee: deviceSelect ? deviceSelect.value : "",
                 channel: channelSelect ? parseInt(channelSelect.value, 10) || 1 : 1,
-                title: document.getElementById("consoleDeviceTitle").value,
+                title: title,
                 unit: unitSelect && !document.getElementById("consoleDeviceUnitField").hidden ? unitSelect.value : "",
                 decimals: decimals
             };
@@ -6384,13 +6929,19 @@
             var errorLine = document.getElementById("consoleDeviceDialogError");
             errorLine.hidden = true;
             var body = readConsoleDeviceDialogBody();
-            if (!body.ieee) {
+            if (body.automation) {
+                if (!body.automation) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = "Choose an automation";
+                    return;
+                }
+            } else if (!body.ieee) {
                 errorLine.hidden = false;
                 errorLine.textContent = "Choose a device";
                 return;
             }
             if (!body.title) {
-                body.title = body.ieee;
+                body.title = body.automation || body.ieee;
             }
             var widgetIndex = consoleDeviceDialogWidgetIndex;
             if (!consoleEditorDraft.widgets[widgetIndex].devices) {
@@ -6512,6 +7063,7 @@
         window.onload = function () {
             setupPasswordToggle("wifiPassword", "wifiPasswordToggle");
             setupPasswordToggle("mqttPassword", "mqttPasswordToggle");
+            setupAutomationGroupCombo();
             document.getElementById("wifiMode").onchange = updateApIpVisibility;
             document.getElementById("mqttServerType").onchange = updateMqttServerVisibility;
             document.addEventListener("keydown", onDocumentKeyDown);
@@ -6573,13 +7125,11 @@
         <h1 class="sidebar-title">Gateway</h1>
         <button type="button" class="sidebar-btn" data-section="place" onclick="showMainSection('place')">Place</button>
         <button type="button" class="sidebar-btn active" data-section="status" onclick="showMainSection('status')">Status</button>
-        <button type="button" class="sidebar-btn" data-section="wifi" onclick="showMainSection('wifi')">WiFi</button>
-        <button type="button" class="sidebar-btn" data-section="mqtt" onclick="showMainSection('mqtt')">MQTT</button>
-        <button type="button" class="sidebar-btn" data-section="zigbee" onclick="showMainSection('zigbee')">ZigBee</button>
+        <button type="button" class="sidebar-btn" data-section="network" onclick="showMainSection('network')">Network</button>
         <button type="button" class="sidebar-btn" data-section="devices" onclick="showMainSection('devices')">Devices</button>
         <button type="button" class="sidebar-btn" data-section="automation" onclick="showMainSection('automation')">Automation</button>
-        <button type="button" class="sidebar-btn" data-section="security" onclick="showMainSection('security')">Security</button>
         <button type="button" class="sidebar-btn" data-section="consoles" onclick="showMainSection('consoles')">Consoles</button>
+        <button type="button" class="sidebar-btn" data-section="security" onclick="showMainSection('security')">Security</button>
         <button type="button" class="sidebar-btn" data-section="appearance" onclick="showMainSection('appearance')">Appearance</button>
         <button type="button" class="sidebar-btn" data-section="system" onclick="showMainSection('system')">System</button>
         <button type="button" class="sidebar-btn sidebar-signout" onclick="openSignOutConfirm()">Sign out</button>
@@ -6596,13 +7146,13 @@
                         </div>
                     </div>
                     <div class="status-group status-memory-group">
-                        <h3 class="group-title">Memory</h3>
+                        <h3 class="group-title">Free memory</h3>
                         <div class="status-row">
-                            <span class="status-row-label">RAM</span>
+                            <span class="status-row-label">Free RAM</span>
                             <p id="statusHeapUsage" class="status-value">—</p>
                         </div>
                         <div class="status-row">
-                            <span class="status-row-label">PSRAM</span>
+                            <span class="status-row-label">Free PSRAM</span>
                             <p id="statusPsramUsage" class="status-value">—</p>
                         </div>
                     </div>
@@ -6674,139 +7224,144 @@
             </div>
         </section>
 
-        <section id="section-wifi" class="section-panel settings-card" aria-label="WiFi">
-            <h2 class="section-title">WiFi</h2>
-            <p id="wifiSaveError" class="save-error" hidden></p>
-            <p id="wifiSaveSuccess" class="save-success" hidden></p>
-            <div class="settings-scroll">
-            <div class="field">
-                <label for="wifiBssid">BSSID</label>
-                <input id="wifiBssid" type="text" autocomplete="off">
-                <p class="field-hint">One network name for both modes: STA joins this name, AP advertises this name.</p>
-            </div>
-            <div class="field">
-                <label for="wifiPassword">PASSWORD</label>
-                <div class="password-row">
-                    <input id="wifiPassword" type="password" autocomplete="off">
-                    <button type="button" id="wifiPasswordToggle" class="password-toggle">Show</button>
+        <section id="section-network" class="section-panel settings-card" aria-label="Network">
+            <h2 class="section-title">Network</h2>
+            <nav class="tabs network-tabs" role="tablist" aria-label="Network groups">
+                <button type="button" class="network-tab-btn tab-btn active" data-tab="wifi" role="tab" onclick="showNetworkTab('wifi')">WiFi</button>
+                <button type="button" class="network-tab-btn tab-btn" data-tab="mqtt" role="tab" onclick="showNetworkTab('mqtt')">MQTT</button>
+                <button type="button" class="network-tab-btn tab-btn" data-tab="zigbee" role="tab" onclick="showNetworkTab('zigbee')">ZigBee</button>
+            </nav>
+            <div class="tab-content">
+                <div id="network-tab-wifi" class="network-tab-panel tab-panel active" role="tabpanel">
+                    <p id="wifiSaveError" class="save-error" hidden></p>
+                    <p id="wifiSaveSuccess" class="save-success" hidden></p>
+                    <div class="settings-scroll">
+                        <div class="field">
+                            <label for="wifiBssid">BSSID</label>
+                            <input id="wifiBssid" type="text" autocomplete="off">
+                            <p class="field-hint">One network name for both modes: STA joins this name, AP advertises this name.</p>
+                        </div>
+                        <div class="field">
+                            <label for="wifiPassword">PASSWORD</label>
+                            <div class="password-row">
+                                <input id="wifiPassword" type="password" autocomplete="off">
+                                <button type="button" id="wifiPasswordToggle" class="password-toggle">Show</button>
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="wifiDeviceName">DEVICE_NAME</label>
+                            <input id="wifiDeviceName" type="text" autocomplete="off">
+                            <p class="field-hint">Wi-Fi hostname only. Not used as the AP or STA network name.</p>
+                        </div>
+                        <div class="field" id="wifiApIpField">
+                            <label for="wifiApIp">AP IP</label>
+                            <input id="wifiApIp" type="text" autocomplete="off">
+                            <p class="field-hint">SoftAP address. Used only when the radio is in AP mode. Default 192.168.0.1.</p>
+                        </div>
+                        <div class="field">
+                            <label for="wifiMode">MODE</label>
+                            <select id="wifiMode">
+                                <option value="AP">AP</option>
+                                <option value="STA">STA</option>
+                            </select>
+                        </div>
+                        <div class="field field-check">
+                            <input id="wifiOtgEnabled" type="checkbox">
+                            <label for="wifiOtgEnabled">OTG_ENABLED</label>
+                        </div>
+                    </div>
+                    <div class="page-footer">
+                        <div class="page-footer-inner">
+                            <button type="button" class="btn btn-primary" onclick="saveWifi()">Save</button>
+                            <button type="button" class="btn btn-secondary" onclick="loadWifi()">Reset</button>
+                        </div>
+                    </div>
                 </div>
-            </div>
-            <div class="field">
-                <label for="wifiDeviceName">DEVICE_NAME</label>
-                <input id="wifiDeviceName" type="text" autocomplete="off">
-                <p class="field-hint">Wi-Fi hostname only. Not used as the AP or STA network name.</p>
-            </div>
-            <div class="field" id="wifiApIpField">
-                <label for="wifiApIp">AP IP</label>
-                <input id="wifiApIp" type="text" autocomplete="off">
-                <p class="field-hint">SoftAP address. Used only when the radio is in AP mode. Default 192.168.0.1.</p>
-            </div>
-            <div class="field">
-                <label for="wifiMode">MODE</label>
-                <select id="wifiMode">
-                    <option value="AP">AP</option>
-                    <option value="STA">STA</option>
-                </select>
-            </div>
-            <div class="field field-check">
-                <input id="wifiOtgEnabled" type="checkbox">
-                <label for="wifiOtgEnabled">OTG_ENABLED</label>
-            </div>
-            </div>
-            <div class="page-footer">
-                <div class="page-footer-inner">
-                    <button type="button" class="btn btn-primary" onclick="saveWifi()">Save</button>
-                    <button type="button" class="btn btn-secondary" onclick="loadWifi()">Reset</button>
+                <div id="network-tab-mqtt" class="network-tab-panel tab-panel" role="tabpanel">
+                    <p id="mqttSaveError" class="save-error" hidden></p>
+                    <p id="mqttSaveSuccess" class="save-success" hidden></p>
+                    <div class="settings-scroll">
+                        <div class="field">
+                            <label for="mqttServerType">SERVER TYPE</label>
+                            <select id="mqttServerType" onchange="updateMqttServerVisibility()">
+                                <option value="disable">disable</option>
+                                <option value="remote">remote</option>
+                                <option value="local">local</option>
+                            </select>
+                        </div>
+                        <div class="field" id="mqttServerField">
+                            <label for="mqttServer">SERVER</label>
+                            <input id="mqttServer" type="text" autocomplete="off">
+                            <p class="field-hint">Broker host or IPv4. Must be reachable from the STA LAN.</p>
+                        </div>
+                        <div class="field">
+                            <label for="mqttPort">PORT</label>
+                            <input id="mqttPort" type="number" min="1" max="65535" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label for="mqttUsername">USERNAME</label>
+                            <input id="mqttUsername" type="text" autocomplete="off">
+                            <p class="field-hint">Leave empty for anonymous brokers.</p>
+                        </div>
+                        <div class="field">
+                            <label for="mqttPassword">PASSWORD</label>
+                            <div class="password-row">
+                                <input id="mqttPassword" type="password" autocomplete="off">
+                                <button type="button" id="mqttPasswordToggle" class="password-toggle">Show</button>
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="mqttBaseTopic">BASE_TOPIC</label>
+                            <input id="mqttBaseTopic" type="text" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label for="mqttReconnectIntervalMs">RECONNECT_INTERVAL_MS</label>
+                            <input id="mqttReconnectIntervalMs" type="number" min="500" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label for="mqttClientTimeoutMs">CLIENT_TIMEOUT_MS</label>
+                            <input id="mqttClientTimeoutMs" type="number" min="50" max="1500" autocomplete="off">
+                            <p class="field-hint">Clamped to 50–1500 ms.</p>
+                        </div>
+                        <div class="field">
+                            <label for="mqttServerBornTopic">SERVER_BORN_TOPIC</label>
+                            <input id="mqttServerBornTopic" type="text" autocomplete="off">
+                            <p class="field-hint">Listen for any message to refresh Zigbee states. Empty disables born listen/announce.</p>
+                        </div>
+                        <div class="field">
+                            <label for="mqttBornIntervalMin">BORN_INTERVAL_MIN</label>
+                            <input id="mqttBornIntervalMin" type="number" min="5" max="120" autocomplete="off">
+                            <p class="field-hint">Minutes between host born announces after the first post-boot announce (5–120, default 20).</p>
+                        </div>
+                    </div>
+                    <div class="page-footer">
+                        <div class="page-footer-inner">
+                            <button type="button" class="btn btn-primary" onclick="saveMqtt()">Save</button>
+                            <button type="button" class="btn btn-secondary" onclick="loadMqtt()">Reset</button>
+                        </div>
+                    </div>
                 </div>
-            </div>
-        </section>
-
-        <section id="section-mqtt" class="section-panel settings-card" aria-label="MQTT">
-            <h2 class="section-title">MQTT</h2>
-            <p id="mqttSaveError" class="save-error" hidden></p>
-            <p id="mqttSaveSuccess" class="save-success" hidden></p>
-            <div class="settings-scroll">
-            <div class="field">
-                <label for="mqttServerType">SERVER TYPE</label>
-                <select id="mqttServerType" onchange="updateMqttServerVisibility()">
-                    <option value="disable">disable</option>
-                    <option value="remote">remote</option>
-                    <option value="local">local</option>
-                </select>
-            </div>
-            <div class="field" id="mqttServerField">
-                <label for="mqttServer">SERVER</label>
-                <input id="mqttServer" type="text" autocomplete="off">
-                <p class="field-hint">Broker host or IPv4. Must be reachable from the STA LAN.</p>
-            </div>
-            <div class="field">
-                <label for="mqttPort">PORT</label>
-                <input id="mqttPort" type="number" min="1" max="65535" autocomplete="off">
-            </div>
-            <div class="field">
-                <label for="mqttUsername">USERNAME</label>
-                <input id="mqttUsername" type="text" autocomplete="off">
-                <p class="field-hint">Leave empty for anonymous brokers.</p>
-            </div>
-            <div class="field">
-                <label for="mqttPassword">PASSWORD</label>
-                <div class="password-row">
-                    <input id="mqttPassword" type="password" autocomplete="off">
-                    <button type="button" id="mqttPasswordToggle" class="password-toggle">Show</button>
-                </div>
-            </div>
-            <div class="field">
-                <label for="mqttBaseTopic">BASE_TOPIC</label>
-                <input id="mqttBaseTopic" type="text" autocomplete="off">
-            </div>
-            <div class="field">
-                <label for="mqttReconnectIntervalMs">RECONNECT_INTERVAL_MS</label>
-                <input id="mqttReconnectIntervalMs" type="number" min="500" autocomplete="off">
-            </div>
-            <div class="field">
-                <label for="mqttClientTimeoutMs">CLIENT_TIMEOUT_MS</label>
-                <input id="mqttClientTimeoutMs" type="number" min="50" max="1500" autocomplete="off">
-                <p class="field-hint">Clamped to 50–1500 ms.</p>
-            </div>
-            <div class="field">
-                <label for="mqttServerBornTopic">SERVER_BORN_TOPIC</label>
-                <input id="mqttServerBornTopic" type="text" autocomplete="off">
-                <p class="field-hint">Listen for any message to refresh Zigbee states. Empty disables born listen/announce.</p>
-            </div>
-            <div class="field">
-                <label for="mqttBornIntervalMin">BORN_INTERVAL_MIN</label>
-                <input id="mqttBornIntervalMin" type="number" min="5" max="120" autocomplete="off">
-                <p class="field-hint">Minutes between host born announces after the first post-boot announce (5–120, default 20).</p>
-            </div>
-            </div>
-            <div class="page-footer">
-                <div class="page-footer-inner">
-                    <button type="button" class="btn btn-primary" onclick="saveMqtt()">Save</button>
-                    <button type="button" class="btn btn-secondary" onclick="loadMqtt()">Reset</button>
-                </div>
-            </div>
-        </section>
-
-        <section id="section-zigbee" class="section-panel settings-card" aria-label="ZigBee">
-            <h2 class="section-title">ZigBee</h2>
-            <p id="zigbeeSaveError" class="save-error" hidden></p>
-            <p id="zigbeeSaveSuccess" class="save-success" hidden></p>
-            <div class="settings-scroll">
-            <div class="field">
-                <label for="zigbeeChannel">CHANNEL</label>
-                <input id="zigbeeChannel" type="number" min="11" max="26" autocomplete="off">
-                <p class="field-hint">2.4 GHz Zigbee channel 11–26. Applied on the radio slave after restart.</p>
-            </div>
-            <div class="field">
-                <label for="zigbeePermitJoinOnBootSec">PERMIT_JOIN_ON_BOOT_SEC</label>
-                <input id="zigbeePermitJoinOnBootSec" type="number" min="0" max="254" autocomplete="off">
-                <p class="field-hint">Seconds the coordinator allows joins after it starts. 0 keeps the network closed.</p>
-            </div>
-            </div>
-            <div class="page-footer">
-                <div class="page-footer-inner">
-                    <button type="button" class="btn btn-primary" onclick="saveZigbee()">Save</button>
-                    <button type="button" class="btn btn-secondary" onclick="loadZigbee()">Reset</button>
+                <div id="network-tab-zigbee" class="network-tab-panel tab-panel" role="tabpanel">
+                    <p id="zigbeeSaveError" class="save-error" hidden></p>
+                    <p id="zigbeeSaveSuccess" class="save-success" hidden></p>
+                    <div class="settings-scroll">
+                        <div class="field">
+                            <label for="zigbeeChannel">CHANNEL</label>
+                            <input id="zigbeeChannel" type="number" min="11" max="26" autocomplete="off">
+                            <p class="field-hint">2.4 GHz Zigbee channel 11–26. Applied on the radio slave after restart.</p>
+                        </div>
+                        <div class="field">
+                            <label for="zigbeePermitJoinOnBootSec">PERMIT_JOIN_ON_BOOT_SEC</label>
+                            <input id="zigbeePermitJoinOnBootSec" type="number" min="0" max="254" autocomplete="off">
+                            <p class="field-hint">Seconds the coordinator allows joins after it starts. 0 keeps the network closed.</p>
+                        </div>
+                    </div>
+                    <div class="page-footer">
+                        <div class="page-footer-inner">
+                            <button type="button" class="btn btn-primary" onclick="saveZigbee()">Save</button>
+                            <button type="button" class="btn btn-secondary" onclick="loadZigbee()">Reset</button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>
@@ -6845,21 +7400,33 @@
             <h2 class="section-title">Automation</h2>
             <p id="automationsSaveError" class="save-error" hidden></p>
             <input id="automationsRestoreFile" type="file" accept=".json,application/json" hidden onchange="onAutomationsRestoreFileSelected(event)">
-            <div class="settings-scroll">
-                <table class="data-table selectable">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Active</th>
-                            <th>Use timer</th>
-                            <th>Timer default</th>
-                            <th>Counting</th>
-                            <th>Time left</th>
-                            <th>Last performed</th>
-                        </tr>
-                    </thead>
-                    <tbody id="automationTableBody"></tbody>
-                </table>
+            <div class="settings-scroll automation-section-layout">
+                <div class="automation-group-panel">
+                    <table class="data-table selectable automation-group-table">
+                        <thead>
+                            <tr>
+                                <th>Groups</th>
+                            </tr>
+                        </thead>
+                        <tbody id="automationGroupList"></tbody>
+                    </table>
+                </div>
+                <div class="automation-table-panel">
+                    <table class="data-table selectable">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Active</th>
+                                <th>Use timer</th>
+                                <th>Timer default</th>
+                                <th>Counting</th>
+                                <th>Time left</th>
+                                <th>Last performed</th>
+                            </tr>
+                        </thead>
+                        <tbody id="automationTableBody"></tbody>
+                    </table>
+                </div>
             </div>
             <div class="dialog-actions">
                 <button type="button" class="btn btn-primary" onclick="createAutomationAndEdit()">Add</button>
@@ -6868,6 +7435,186 @@
             </div>
         </section>
 
+        <section id="section-consoles" class="section-panel" aria-label="Consoles">
+            <h2 class="section-title">Consoles</h2>
+            <p id="consolesSaveError" class="save-error" hidden></p>
+            <input id="consolesRestoreFile" type="file" accept=".json,application/json" hidden onchange="onConsolesRestoreFileSelected(event)">
+            <div class="settings-scroll">
+                <table class="data-table selectable">
+                    <thead>
+                        <tr>
+                            <th>Console name</th>
+                            <th>Active</th>
+                            <th>Users</th>
+                        </tr>
+                    </thead>
+                    <tbody id="consoleTableBody"></tbody>
+                </table>
+            </div>
+            <div class="dialog-actions">
+                <button type="button" class="btn btn-primary" onclick="createConsoleAndEdit()">Add console</button>
+                <button type="button" class="btn btn-secondary" onclick="exportAllConsoles()">Export</button>
+                <button type="button" class="btn btn-secondary" onclick="chooseConsolesRestoreFile()">Import</button>
+            </div>
+        </section>
+
+        <section id="section-place" class="section-panel" aria-label="Place">
+            <h2 class="section-title">Place</h2>
+            <div class="place-console-shell">
+                <div id="placeConsoleTabs" class="tabs user-console-tabs" hidden></div>
+                <div id="placeConsolePanels" class="user-console-panels place-console-panels" hidden></div>
+                <p id="placeEmptyState" class="field-hint user-console-empty" hidden>No consoles are assigned to your account.</p>
+            </div>
+        </section>
+
+        <section id="section-appearance" class="section-panel" aria-label="Appearance">
+            <h2 class="section-title">Appearance</h2>
+            <div class="settings-scroll">
+                <p id="themeSaveError" class="save-error" hidden></p>
+                <div class="field">
+                    <label for="uiTheme">Theme</label>
+                    <div class="theme-control-row">
+                        <select id="uiTheme" onchange="onThemePickerChange()">
+                            <option value="light">Light</option>
+                            <option value="dark">Dark</option>
+                        </select>
+                        <button type="button" class="btn btn-primary" onclick="saveTheme()">Save</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="section-system" class="section-panel" aria-label="System">
+            <h2 class="section-title">System</h2>
+            <nav class="tabs system-tabs" role="tablist" aria-label="System groups">
+                <button type="button" class="system-tab-btn tab-btn active" data-tab="log" role="tab" onclick="showSystemTab('log')">Log</button>
+                <button type="button" class="system-tab-btn tab-btn" data-tab="update" role="tab" onclick="showSystemTab('update')">Update</button>
+                <button type="button" class="system-tab-btn tab-btn" data-tab="hardware" role="tab" onclick="showSystemTab('hardware')">Hardware</button>
+                <button type="button" class="system-tab-btn tab-btn" data-tab="maintenance" role="tab" onclick="showSystemTab('maintenance')">Maintenance</button>
+            </nav>
+            <div class="tab-content">
+                <div id="system-tab-log" class="system-tab-panel tab-panel active" role="tabpanel">
+                    <div class="upload-card log-card">
+                        <p class="field-hint">Viewer shows the last 64 KB. Download returns the entire host ring (up to 512 KB when PSRAM is available).</p>
+                        <textarea id="memoryLogViewer" class="log-viewer" readonly></textarea>
+                        <p id="logDownloadError" class="save-error" hidden></p>
+                        <div class="dialog-actions">
+                            <button type="button" class="btn btn-secondary btn-inline" onclick="refreshLog()">Refresh</button>
+                            <button type="button" class="btn btn-primary btn-inline" onclick="downloadLog()">Download full log</button>
+                        </div>
+                    </div>
+                </div>
+                <div id="system-tab-update" class="system-tab-panel tab-panel" role="tabpanel">
+                    <div class="upload-card">
+                        <h3 class="upload-title">Code (firmware)</h3>
+                        <p class="field-hint">Running version: <span id="firmwareVersion">—</span></p>
+                        <input id="updateCodeFile" type="file" accept=".zip,application/zip,application/octet-stream">
+                        <p id="updateCodeStatus" class="upload-status"></p>
+                        <button type="button" class="btn btn-primary btn-inline" onclick="uploadFirmware()">Update</button>
+                        <p class="field-hint">For USB programming of the slave, pause host EN resets for 120 seconds. Press again to cancel.</p>
+                        <button type="button" id="slaveResetPauseBtn" class="btn btn-secondary btn-inline" onclick="toggleSlaveResetPause()">Wait for update slave</button>
+                    </div>
+                </div>
+                <div id="system-tab-hardware" class="system-tab-panel tab-panel" role="tabpanel">
+                    <p id="hardwareSaveError" class="save-error" hidden></p>
+                    <p id="hardwareSaveSuccess" class="save-success" hidden></p>
+                    <div class="field">
+                        <label for="spiSpeedHz">SPI SPEED</label>
+                        <select id="spiSpeedHz">
+                            <option value="100000">100 kHz</option>
+                            <option value="250000">250 kHz</option>
+                            <option value="500000">500 kHz</option>
+                            <option value="1000000">1 MHz</option>
+                            <option value="2000000">2 MHz</option>
+                            <option value="4000000">4 MHz</option>
+                            <option value="8000000">8 MHz</option>
+                            <option value="10000000">10 MHz</option>
+                            <option value="20000000">20 MHz</option>
+                            <option value="40000000">40 MHz</option>
+                        </select>
+                        <p class="field-hint">Host SPI clock to the Zigbee slave. Maximum 40 MHz. Applied on Save without restart. Default 500 kHz.</p>
+                    </div>
+                    <div class="field">
+                        <label for="blueLedBrightness">BLUE LED brightness</label>
+                        <input id="blueLedBrightness" type="number" min="1" max="100" step="1" value="100">
+                        <p class="field-hint">PWM brightness for blue status LEDs on host and slave (1–100%). Default 100.</p>
+                    </div>
+                    <div class="field">
+                        <label for="greenLedBrightness">GREEN LED brightness</label>
+                        <input id="greenLedBrightness" type="number" min="1" max="100" step="1" value="100">
+                        <p class="field-hint">PWM brightness for green status LEDs on host and slave (1–100%). Default 100. Red LEDs stay digital full on/off.</p>
+                    </div>
+                    <div class="dialog-actions">
+                        <button type="button" class="btn btn-primary" onclick="saveHardware()">Save</button>
+                        <button type="button" class="btn btn-secondary" onclick="loadHardware()">Reset</button>
+                    </div>
+                </div>
+                <div id="system-tab-maintenance" class="system-tab-panel tab-panel" role="tabpanel">
+                    <div id="maintenanceAdminContent" hidden>
+                        <p id="maintenanceStoreError" class="save-error" hidden></p>
+                        <div id="maintenanceSettingsCard" class="upload-card">
+                            <h3 class="upload-title">Settings</h3>
+                            <p class="field-hint">Export MQTT, Zigbee, hardware, devices, users, and consoles. Restore replaces those groups when present in the file. Wi-Fi is never included.</p>
+                            <p id="settingsRestoreError" class="save-error" hidden></p>
+                            <input id="settingsRestoreFile" type="file" accept="application/json,.json" hidden onchange="onSettingsRestoreFileSelected(event)">
+                            <div class="dialog-actions">
+                                <button type="button" class="btn btn-secondary btn-inline" onclick="exportSettingsFile()">Export settings</button>
+                                <button type="button" class="btn btn-primary btn-inline" onclick="chooseSettingsRestoreFile()">Restore settings</button>
+                            </div>
+                        </div>
+                        <div class="upload-card">
+                            <h3 class="upload-title">Devices</h3>
+                            <p class="field-hint">Export the registered devices store, or restore devices from a JSON file (same as Devices → Restore).</p>
+                            <div class="dialog-actions">
+                                <button type="button" class="btn btn-secondary btn-inline" onclick="exportDevicesStore()">Export</button>
+                                <button type="button" class="btn btn-primary btn-inline" onclick="openDevicesRestoreDialog(false)">Restore</button>
+                            </div>
+                        </div>
+                        <div class="upload-card">
+                            <h3 class="upload-title">Consoles</h3>
+                            <p class="field-hint">Export all consoles, or restore by replacing the full consoles list from a JSON file.</p>
+                            <div class="dialog-actions">
+                                <button type="button" class="btn btn-secondary btn-inline" onclick="exportAllConsoles()">Export</button>
+                                <button type="button" class="btn btn-primary btn-inline" onclick="chooseConsolesRestoreFile()">Restore</button>
+                            </div>
+                        </div>
+                        <div class="upload-card">
+                            <h3 class="upload-title">Automations</h3>
+                            <p class="field-hint">Export all automations, or restore by replacing the full automations list from a JSON file.</p>
+                            <div class="dialog-actions">
+                                <button type="button" class="btn btn-secondary btn-inline" onclick="exportAllAutomations()">Export</button>
+                                <button type="button" class="btn btn-primary btn-inline" onclick="chooseAutomationsRestoreFile()">Restore</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="section-security" class="section-panel" aria-label="Security">
+            <h2 class="section-title">Security</h2>
+            <p id="usersSaveError" class="save-error" hidden></p>
+            <div class="settings-scroll">
+                <table class="data-table selectable">
+                    <thead>
+                        <tr>
+                            <th>User name</th>
+                            <th>Added</th>
+                            <th>Roles</th>
+                            <th>Blocked</th>
+                            <th>Theme</th>
+                        </tr>
+                    </thead>
+                    <tbody id="userTableBody"></tbody>
+                </table>
+            </div>
+            <div class="dialog-actions">
+                <button type="button" class="btn btn-primary" onclick="openUserDialog(null)">Add user</button>
+            </div>
+        </section>
+
+    </div>
+</div>
         <div id="searchDialog" class="dialog-overlay" hidden>
             <div class="dialog-panel" role="dialog" aria-label="Search devices">
                 <h3 class="upload-title">Search devices</h3>
@@ -7071,159 +7818,6 @@
                 </div>
             </div>
         </div>
-
-        <section id="section-place" class="section-panel" aria-label="Place">
-            <h2 class="section-title">Place</h2>
-            <div class="place-console-shell">
-                <div id="placeConsoleTabs" class="tabs user-console-tabs" hidden></div>
-                <div id="placeConsolePanels" class="user-console-panels place-console-panels" hidden></div>
-                <p id="placeEmptyState" class="field-hint user-console-empty" hidden>No consoles are assigned to your account.</p>
-            </div>
-        </section>
-
-        <section id="section-appearance" class="section-panel" aria-label="Appearance">
-            <h2 class="section-title">Appearance</h2>
-            <div class="settings-scroll">
-                <p id="themeSaveError" class="save-error" hidden></p>
-                <div class="field">
-                    <label for="uiTheme">Theme</label>
-                    <div class="theme-control-row">
-                        <select id="uiTheme" onchange="onThemePickerChange()">
-                            <option value="light">Light</option>
-                            <option value="dark">Dark</option>
-                        </select>
-                        <button type="button" class="btn btn-primary" onclick="saveTheme()">Save</button>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <section id="section-system" class="section-panel" aria-label="System">
-            <h2 class="section-title">System</h2>
-            <nav class="tabs system-tabs" role="tablist" aria-label="System groups">
-                <button type="button" class="system-tab-btn tab-btn active" data-tab="log" role="tab" onclick="showSystemTab('log')">Log</button>
-                <button type="button" class="system-tab-btn tab-btn" data-tab="update" role="tab" onclick="showSystemTab('update')">Update</button>
-                <button type="button" class="system-tab-btn tab-btn" data-tab="hardware" role="tab" onclick="showSystemTab('hardware')">Hardware</button>
-                <button type="button" class="system-tab-btn tab-btn" data-tab="maintenance" role="tab" onclick="showSystemTab('maintenance')">Maintenance</button>
-            </nav>
-            <div class="tab-content">
-                <div id="system-tab-log" class="system-tab-panel tab-panel active" role="tabpanel">
-                    <div class="upload-card log-card">
-                        <p class="field-hint">Viewer shows the last 64 KB. Download returns the entire host ring (up to 512 KB when PSRAM is available).</p>
-                        <textarea id="memoryLogViewer" class="log-viewer" readonly></textarea>
-                        <p id="logDownloadError" class="save-error" hidden></p>
-                        <div class="dialog-actions">
-                            <button type="button" class="btn btn-secondary btn-inline" onclick="refreshLog()">Refresh</button>
-                            <button type="button" class="btn btn-primary btn-inline" onclick="downloadLog()">Download full log</button>
-                        </div>
-                    </div>
-                </div>
-                <div id="system-tab-update" class="system-tab-panel tab-panel" role="tabpanel">
-                    <div class="upload-card">
-                        <h3 class="upload-title">Code (firmware)</h3>
-                        <p class="field-hint">Running version: <span id="firmwareVersion">—</span></p>
-                        <input id="updateCodeFile" type="file" accept=".zip,application/zip,application/octet-stream">
-                        <p id="updateCodeStatus" class="upload-status"></p>
-                        <button type="button" class="btn btn-primary btn-inline" onclick="uploadFirmware()">Update</button>
-                        <p class="field-hint">For USB programming of the slave, pause host EN resets for 120 seconds. Press again to cancel.</p>
-                        <button type="button" id="slaveResetPauseBtn" class="btn btn-secondary btn-inline" onclick="toggleSlaveResetPause()">Wait for update slave</button>
-                    </div>
-                </div>
-                <div id="system-tab-hardware" class="system-tab-panel tab-panel" role="tabpanel">
-                    <p id="hardwareSaveError" class="save-error" hidden></p>
-                    <p id="hardwareSaveSuccess" class="save-success" hidden></p>
-                    <div class="field">
-                        <label for="spiSpeedHz">SPI SPEED</label>
-                        <select id="spiSpeedHz">
-                            <option value="100000">100 kHz</option>
-                            <option value="250000">250 kHz</option>
-                            <option value="500000">500 kHz</option>
-                            <option value="1000000">1 MHz</option>
-                            <option value="2000000">2 MHz</option>
-                            <option value="4000000">4 MHz</option>
-                            <option value="8000000">8 MHz</option>
-                            <option value="10000000">10 MHz</option>
-                            <option value="20000000">20 MHz</option>
-                            <option value="40000000">40 MHz</option>
-                        </select>
-                        <p class="field-hint">Host SPI clock to the Zigbee slave. Maximum 40 MHz. Applied on Save without restart. Default 500 kHz.</p>
-                    </div>
-                    <div class="field">
-                        <label for="blueLedBrightness">BLUE LED brightness</label>
-                        <input id="blueLedBrightness" type="number" min="1" max="100" step="1" value="100">
-                        <p class="field-hint">PWM brightness for blue status LEDs on host and slave (1–100%). Default 100.</p>
-                    </div>
-                    <div class="field">
-                        <label for="greenLedBrightness">GREEN LED brightness</label>
-                        <input id="greenLedBrightness" type="number" min="1" max="100" step="1" value="100">
-                        <p class="field-hint">PWM brightness for green status LEDs on host and slave (1–100%). Default 100. Red LEDs stay digital full on/off.</p>
-                    </div>
-                    <div class="dialog-actions">
-                        <button type="button" class="btn btn-primary" onclick="saveHardware()">Save</button>
-                        <button type="button" class="btn btn-secondary" onclick="loadHardware()">Reset</button>
-                    </div>
-                </div>
-                <div id="system-tab-maintenance" class="system-tab-panel tab-panel" role="tabpanel">
-                    <div id="maintenanceSettingsCard" class="upload-card" hidden>
-                        <h3 class="upload-title">Settings</h3>
-                        <p class="field-hint">Export MQTT, Zigbee, hardware, devices, users, and consoles. Restore replaces those groups when present in the file. Wi-Fi is never included.</p>
-                        <p id="settingsRestoreError" class="save-error" hidden></p>
-                        <input id="settingsRestoreFile" type="file" accept="application/json,.json" hidden onchange="onSettingsRestoreFileSelected(event)">
-                        <div class="dialog-actions">
-                            <button type="button" class="btn btn-secondary btn-inline" onclick="exportSettingsFile()">Export settings</button>
-                            <button type="button" class="btn btn-primary btn-inline" onclick="chooseSettingsRestoreFile()">Restore settings</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <section id="section-security" class="section-panel" aria-label="Security">
-            <h2 class="section-title">Security</h2>
-            <p id="usersSaveError" class="save-error" hidden></p>
-            <div class="settings-scroll">
-                <table class="data-table selectable">
-                    <thead>
-                        <tr>
-                            <th>User name</th>
-                            <th>Added</th>
-                            <th>Roles</th>
-                            <th>Blocked</th>
-                            <th>Theme</th>
-                        </tr>
-                    </thead>
-                    <tbody id="userTableBody"></tbody>
-                </table>
-            </div>
-            <div class="dialog-actions">
-                <button type="button" class="btn btn-primary" onclick="openUserDialog(null)">Add user</button>
-            </div>
-        </section>
-
-        <section id="section-consoles" class="section-panel" aria-label="Consoles">
-            <h2 class="section-title">Consoles</h2>
-            <p id="consolesSaveError" class="save-error" hidden></p>
-            <input id="consolesRestoreFile" type="file" accept=".json,application/json" hidden onchange="onConsolesRestoreFileSelected(event)">
-            <div class="settings-scroll">
-                <table class="data-table selectable">
-                    <thead>
-                        <tr>
-                            <th>Console name</th>
-                            <th>Active</th>
-                            <th>Users</th>
-                        </tr>
-                    </thead>
-                    <tbody id="consoleTableBody"></tbody>
-                </table>
-            </div>
-            <div class="dialog-actions">
-                <button type="button" class="btn btn-primary" onclick="createConsoleAndEdit()">Add console</button>
-                <button type="button" class="btn btn-secondary" onclick="exportAllConsoles()">Export</button>
-                <button type="button" class="btn btn-secondary" onclick="chooseConsolesRestoreFile()">Import</button>
-            </div>
-        </section>
-    </div>
-</div>
 <div id="userDialog" class="dialog-overlay" hidden>
     <div class="dialog-panel" role="dialog" aria-label="User">
         <h3 id="userDialogTitle" class="upload-title">Add user</h3>
@@ -7317,48 +7911,63 @@
     <div class="dialog-panel console-edit-panel" role="dialog" aria-label="Edit automation">
         <h3 class="upload-title">Edit automation</h3>
         <p id="automationEditError" class="save-error" hidden></p>
-        <div class="field">
-            <label for="automationEditName">Name</label>
-            <input id="automationEditName" type="text" autocomplete="off">
-        </div>
-        <div class="field">
-            <label for="automationEditTitle">Title</label>
-            <input id="automationEditTitle" type="text" autocomplete="off">
-        </div>
-        <label class="field-check">
-            <input id="automationEditActive" type="checkbox" onchange="updateAutomationImportEnabled()">
-            Active
-        </label>
-        <div class="automation-timer-box">
-            <label class="field-check">
-                <input id="automationTimerUse" type="checkbox" onchange="updateAutomationTimerVisibility(); updateAutomationImportEnabled();">
-                Use timer
-            </label>
-            <div id="automationTimerDetails">
-                <label class="field-check">
-                    <input id="automationTimerStartOnBoot" type="checkbox">
-                    Start on boot
-                </label>
-                <p class="field-hint">If enabled, the timer starts 20 seconds after host boot using default time.</p>
-                <label class="field-check">
-                    <input id="automationTimerAutoRestart" type="checkbox">
-                    Auto restart
-                </label>
-                <div class="field">
-                    <label for="automationTimerDefaultTime">Default time (seconds)</label>
-                    <input id="automationTimerDefaultTime" type="number" min="0" step="1">
-                </div>
-                <p id="automationTimerRuntime" class="field-hint">Not counting</p>
+        <div class="automation-edit-body">
+            <div class="field">
+                <label for="automationEditName">Name</label>
+                <input id="automationEditName" type="text" autocomplete="off">
             </div>
+            <div class="field">
+                <label for="automationEditGroup">Group</label>
+                <div class="combo-field" id="automationEditGroupCombo">
+                    <input id="automationEditGroup" type="text" autocomplete="off" placeholder="Group name">
+                    <button type="button" class="combo-field-toggle" id="automationEditGroupToggle" aria-label="Show groups" tabindex="-1"></button>
+                    <ul class="combo-field-list" id="automationEditGroupList" hidden></ul>
+                </div>
+            </div>
+            <div class="field">
+                <label for="automationEditTitle">Title</label>
+                <input id="automationEditTitle" type="text" autocomplete="off">
+            </div>
+            <label class="field-check">
+                <input id="automationEditActive" type="checkbox" onchange="updateAutomationImportEnabled()">
+                Active
+            </label>
+            <div class="field">
+                <label for="automationMinTriggerIntervalSec">Min trigger interval (sec)</label>
+                <input id="automationMinTriggerIntervalSec" type="number" min="0" step="1" placeholder="Optional">
+                <p class="field-hint">If set, this automation is skipped until that many seconds have passed since the last activation. Leave empty for no limit.</p>
+            </div>
+            <div class="automation-timer-box">
+                <label class="field-check">
+                    <input id="automationTimerUse" type="checkbox" onchange="updateAutomationTimerVisibility(); updateAutomationImportEnabled();">
+                    Use timer
+                </label>
+                <div id="automationTimerDetails">
+                    <label class="field-check">
+                        <input id="automationTimerStartOnBoot" type="checkbox">
+                        Start on boot
+                    </label>
+                    <p class="field-hint">If enabled, the timer starts 20 seconds after host boot using default time.</p>
+                    <label class="field-check">
+                        <input id="automationTimerAutoRestart" type="checkbox">
+                        Auto restart
+                    </label>
+                    <div class="field">
+                        <label for="automationTimerDefaultTime">Default time (seconds)</label>
+                        <input id="automationTimerDefaultTime" type="number" min="0" step="1">
+                    </div>
+                    <p id="automationTimerRuntime" class="field-hint">Not counting</p>
+                </div>
+            </div>
+            <h4 class="upload-title">Triggered by devices</h4>
+            <div id="automationListenEditor"></div>
+            <h4 class="upload-title">Condition</h4>
+            <div id="automationConditionEditor"></div>
+            <h4 class="upload-title">Actions</h4>
+            <div id="automationActionsEditor"></div>
+            <input id="automationImportFile" type="file" accept="application/json,.json" hidden onchange="onAutomationImportFileSelected(event)">
         </div>
-        <h4 class="upload-title">Triggered by devices</h4>
-        <div id="automationListenEditor"></div>
-        <h4 class="upload-title">Condition</h4>
-        <div id="automationConditionEditor"></div>
-        <h4 class="upload-title">Actions</h4>
-        <div id="automationActionsEditor"></div>
-        <input id="automationImportFile" type="file" accept="application/json,.json" hidden onchange="onAutomationImportFileSelected(event)">
-        <div class="dialog-actions">
+        <div class="dialog-actions automation-edit-actions">
             <button type="button" class="btn btn-secondary btn-inline" onclick="exportAutomationJson()">Export</button>
             <button type="button" id="automationImportBtn" class="btn btn-secondary btn-inline" onclick="chooseAutomationImportFile()">Import</button>
             <button type="button" class="btn btn-primary" onclick="saveAutomationEditDialog()">Save</button>
@@ -7414,12 +8023,23 @@
     </div>
 </div>
 <div id="consoleDeviceDialog" class="dialog-overlay dialog-overlay-front" hidden>
-    <div class="dialog-panel" role="dialog" aria-label="Console device">
-        <h3 class="upload-title">Device binding</h3>
+    <div class="dialog-panel" role="dialog" aria-label="Console binding">
+        <h3 class="upload-title">Binding</h3>
         <p id="consoleDeviceDialogError" class="save-error" hidden></p>
         <div class="field">
+            <label for="consoleBindingTarget">Target</label>
+            <select id="consoleBindingTarget" onchange="updateConsoleBindingTargetFields()">
+                <option value="device">Device</option>
+                <option value="automation">Automation</option>
+            </select>
+        </div>
+        <div id="consoleDeviceSelectField" class="field">
             <label for="consoleDeviceSelect">Device</label>
             <select id="consoleDeviceSelect" onchange="updateConsoleDeviceChannelField(); updateConsoleDeviceUnitField();"></select>
+        </div>
+        <div id="consoleAutomationSelectField" class="field" hidden>
+            <label for="consoleAutomationSelect">Automation</label>
+            <select id="consoleAutomationSelect"></select>
         </div>
         <div id="consoleDeviceChannelField" class="field" hidden>
             <label for="consoleDeviceChannel">Channel</label>

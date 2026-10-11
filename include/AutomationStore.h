@@ -83,12 +83,15 @@ struct AutomationAction {
 struct AutomationRecord {
     char *name;
     char *title;
+    char *group;
     bool active;
+    uint32_t minTriggerIntervalSec;
     AutomationTimer timer;
     AutomationListener *listen;
     AutomationCondition *condition;
     AutomationAction *actions;
     unsigned long lastActivationMs;
+    bool lastConditionTrue;
     AutomationRecord *next;
 };
 
@@ -134,6 +137,9 @@ public:
     static void freeAutomation(AutomationRecord *automation);
     static void freeAutomationList(AutomationRecord *&head);
     static bool isNameSafe(const char *name);
+    static bool isCurrentTimeIeee(const char *ieeeText);
+    static bool isTimeOfDayValue(const char *value);
+    static bool conditionUsesCurrentTime(const AutomationCondition *node);
     static int countConditionNodes(const AutomationCondition *node);
     static bool conditionIsComplete(const AutomationCondition *node);
 
