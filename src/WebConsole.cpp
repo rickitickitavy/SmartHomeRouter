@@ -37,10 +37,16 @@ bool websocketPayloadIsPing(const uint8_t *data, size_t len) {
 
 }  // namespace
 
-WebConsole::WebConsole(SettingsManager *settingsManager, UserStore *userStore, ConsoleStore *consoleStore)
+WebConsole::WebConsole(
+    SettingsManager *settingsManager,
+    UserStore *userStore,
+    ConsoleStore *consoleStore,
+    AutomationStore *automationStore
+)
     : settingsManager(settingsManager),
       userStore(userStore),
       consoleStore(consoleStore),
+      automationStore(automationStore),
       server(80),
       devicesSocket("/ws/devices"),
       consolesSocket("/ws/consoles") {}
@@ -246,6 +252,50 @@ void WebConsole::begin() {
         AsyncURIMatcher::exact("/api/consoles"),
         HTTP_DELETE,
         [this](AsyncWebServerRequest *request) { handleConsoleDelete(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
+
+    server.on("/api/automations/item", HTTP_GET, [this](AsyncWebServerRequest *request) { handleAutomationGet(request); });
+    server.on("/api/automations/store", HTTP_GET, [this](AsyncWebServerRequest *request) { handleAutomationsStoreGet(request); });
+    server.on(
+        "/api/automations/restore",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleAutomationsRestorePost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxRestore);
+        }
+    );
+    server.on(
+        "/api/automations/update",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleAutomationPut(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxRestore);
+        }
+    );
+    server.on(
+        AsyncURIMatcher::exact("/api/automations"),
+        HTTP_GET,
+        [this](AsyncWebServerRequest *request) { handleAutomationsGet(request); }
+    );
+    server.on(
+        AsyncURIMatcher::exact("/api/automations"),
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleAutomationsPost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
+    server.on(
+        AsyncURIMatcher::exact("/api/automations"),
+        HTTP_DELETE,
+        [this](AsyncWebServerRequest *request) { handleAutomationDelete(request); },
         nullptr,
         [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
             appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
@@ -1004,6 +1054,209 @@ void WebConsole::handleConsoleDelete(AsyncWebServerRequest *request) {
     sendConsoleWriteResult(request, result);
 }
 
+void WebConsole::sendAutomationWriteResult(AsyncWebServerRequest *request, AutomationWriteResult result) {
+    if (result == AutomationWriteOk) {
+        request->send(200, "text/plain", "Saved");
+        return;
+    }
+    if (result == AutomationWriteNotFound) {
+        request->send(404, "text/plain", "Automation not found");
+        return;
+    }
+    if (result == AutomationWriteFull) {
+        request->send(400, "text/plain", "Automation table full");
+        return;
+    }
+    if (result == AutomationWriteBadName) {
+        request->send(400, "text/plain", "Bad automation name");
+        return;
+    }
+    if (result == AutomationWriteOutOfMemory) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
+    }
+    if (result == AutomationWriteValidation) {
+        request->send(400, "text/plain", "Need timer or at least one listener and condition");
+        return;
+    }
+    request->send(400, "text/plain", "Bad automation");
+}
+
+void WebConsole::handleAutomationsGet(AsyncWebServerRequest *request) {
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (automationStore == nullptr) {
+        request->send(500, "text/plain", "Automations unavailable");
+        return;
+    }
+    AsyncWebServerResponse *response =
+        request->beginResponse(200, "application/json", automationStore->listSummaryJson());
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleAutomationsStoreGet(AsyncWebServerRequest *request) {
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (automationStore == nullptr) {
+        request->send(500, "text/plain", "Automations unavailable");
+        return;
+    }
+    AsyncWebServerResponse *response =
+        request->beginResponse(200, "application/json", automationStore->listFullJson());
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleAutomationsRestorePost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (automationStore == nullptr) {
+        request->send(500, "text/plain", "Automations unavailable");
+        return;
+    }
+    String trimmed = body;
+    trimmed.trim();
+    if (trimmed.length() == 0 || trimmed.charAt(0) != '[') {
+        request->send(400, "text/plain", "Need an automations JSON array");
+        return;
+    }
+    if (!automationStore->replaceAllFromJson(trimmed)) {
+        request->send(400, "text/plain", "Need a valid automations list");
+        return;
+    }
+    request->send(200, "text/plain", "Restored");
+}
+
+void WebConsole::handleAutomationsPost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (automationStore == nullptr) {
+        request->send(500, "text/plain", "Automations unavailable");
+        return;
+    }
+    String name;
+    String title;
+    bool active = true;
+    extractJsonString(body.c_str(), "name", name);
+    extractJsonString(body.c_str(), "title", title);
+    extractJsonBool(body.c_str(), "active", active);
+    if (name.length() == 0) {
+        for (int attempt = 1; attempt <= AUTOMATION_STORE_MAX + 1; attempt++) {
+            name = "rule-" + String(attempt);
+            if (automationStore->findByName(name.c_str()) == nullptr) {
+                break;
+            }
+        }
+    }
+    if (title.length() == 0) {
+        title = name;
+    }
+    AutomationRecord *created = nullptr;
+    const AutomationWriteResult result =
+        automationStore->createAutomation(name.c_str(), title.c_str(), active, &created);
+    if (result != AutomationWriteOk || created == nullptr) {
+        sendAutomationWriteResult(request, result);
+        return;
+    }
+    AsyncWebServerResponse *response = request->beginResponse(
+        200,
+        "application/json",
+        automationStore->automationFullJson(created, true)
+    );
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleAutomationGet(AsyncWebServerRequest *request) {
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (automationStore == nullptr) {
+        request->send(500, "text/plain", "Automations unavailable");
+        return;
+    }
+    String name;
+    if (request->hasParam("name")) {
+        name = request->getParam("name")->value();
+    }
+    const AutomationRecord *automation = automationStore->findByName(name.c_str());
+    if (automation == nullptr) {
+        request->send(404, "text/plain", "Automation not found");
+        return;
+    }
+    AsyncWebServerResponse *response = request->beginResponse(
+        200,
+        "application/json",
+        automationStore->automationFullJson(automation, true)
+    );
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleAutomationPut(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (automationStore == nullptr) {
+        request->send(500, "text/plain", "Automations unavailable");
+        return;
+    }
+    String lookupName;
+    String name;
+    extractJsonString(body.c_str(), "originalName", lookupName);
+    extractJsonString(body.c_str(), "name", name);
+    if (lookupName.length() == 0) {
+        lookupName = name;
+    }
+    if (lookupName.length() == 0) {
+        request->send(400, "text/plain", "Need automation name");
+        return;
+    }
+    sendAutomationWriteResult(
+        request,
+        automationStore->replaceFromJson(lookupName.c_str(), body.c_str(), true)
+    );
+}
+
+void WebConsole::handleAutomationDelete(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (automationStore == nullptr) {
+        request->send(500, "text/plain", "Automations unavailable");
+        return;
+    }
+    String name;
+    extractJsonString(body.c_str(), "name", name);
+    const AutomationWriteResult result = automationStore->deleteAutomation(name.c_str());
+    if (result == AutomationWriteOk) {
+        request->send(200, "text/plain", "Deleted");
+        return;
+    }
+    sendAutomationWriteResult(request, result);
+}
+
 void WebConsole::handleUsersDelete(AsyncWebServerRequest *request) {
     String body;
     if (!takeRequestBody(request, &body)) {
@@ -1361,8 +1614,6 @@ void WebConsole::appendMqttSettingsJson(String &json) {
     appendJsonEscaped(json, settings->mqtt.username, sizeof(settings->mqtt.username));
     json += "\",\"password\":\"";
     appendJsonEscaped(json, settings->mqtt.password, sizeof(settings->mqtt.password));
-    json += "\",\"clientId\":\"";
-    appendJsonEscaped(json, settings->mqtt.clientId, sizeof(settings->mqtt.clientId));
     json += "\",\"baseTopic\":\"";
     appendJsonEscaped(json, settings->mqtt.baseTopic, sizeof(settings->mqtt.baseTopic));
     json += "\",\"reconnectIntervalMs\":";
@@ -1379,7 +1630,6 @@ bool WebConsole::applyMqttJson(const char *json, String *errorText) {
     String server;
     String username;
     String password;
-    String clientId;
     String baseTopic;
     String serverBornTopic;
     String serverTypeText;
@@ -1392,7 +1642,6 @@ bool WebConsole::applyMqttJson(const char *json, String *errorText) {
     const bool haveServerType = extractJsonString(json, "serverType", serverTypeText);
     const bool haveEnabled = extractJsonBool(json, "enabled", enabledLegacy);
     const bool haveServer = extractJsonString(json, "server", server);
-    const bool haveClientId = extractJsonString(json, "clientId", clientId);
     const bool haveBaseTopic = extractJsonString(json, "baseTopic", baseTopic);
     extractJsonString(json, "username", username);
     extractJsonString(json, "password", password);
@@ -1418,15 +1667,15 @@ bool WebConsole::applyMqttJson(const char *json, String *errorText) {
         }
         return false;
     }
-    if (!haveClientId || !haveBaseTopic) {
+    if (!haveBaseTopic) {
         if (errorText != nullptr) {
-            *errorText = "Need mqtt clientId, baseTopic";
+            *errorText = "Need mqtt baseTopic";
         }
         return false;
     }
     if (serverType != MqttServerTypeLocal && !haveServer) {
         if (errorText != nullptr) {
-            *errorText = "Need mqtt server, clientId, baseTopic";
+            *errorText = "Need mqtt server, baseTopic";
         }
         return false;
     }
@@ -1435,9 +1684,6 @@ bool WebConsole::applyMqttJson(const char *json, String *errorText) {
     }
     if (server.length() == 0) {
         server = DEFAULT_MQTT_SERVER;
-    }
-    if (clientId.length() == 0) {
-        clientId = DEFAULT_MQTT_CLIENT_ID;
     }
     if (baseTopic.length() == 0) {
         baseTopic = DEFAULT_MQTT_BASE_TOPIC;
@@ -1463,8 +1709,6 @@ bool WebConsole::applyMqttJson(const char *json, String *errorText) {
     settings->mqtt.username[sizeof(settings->mqtt.username) - 1] = '\0';
     strncpy(settings->mqtt.password, password.c_str(), sizeof(settings->mqtt.password) - 1);
     settings->mqtt.password[sizeof(settings->mqtt.password) - 1] = '\0';
-    strncpy(settings->mqtt.clientId, clientId.c_str(), sizeof(settings->mqtt.clientId) - 1);
-    settings->mqtt.clientId[sizeof(settings->mqtt.clientId) - 1] = '\0';
     strncpy(settings->mqtt.baseTopic, baseTopic.c_str(), sizeof(settings->mqtt.baseTopic) - 1);
     settings->mqtt.baseTopic[sizeof(settings->mqtt.baseTopic) - 1] = '\0';
     strncpy(
@@ -1584,6 +1828,8 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
     response->print(userStore->listExportJson());
     response->print(",\"consoles\":");
     response->print(consoleStore != nullptr ? consoleStore->listFullJson() : "[]");
+    response->print(",\"automations\":");
+    response->print(automationStore != nullptr ? automationStore->listFullJson() : "[]");
     response->print('}');
     request->send(response);
 }
@@ -1609,9 +1855,11 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
     const bool haveDevices = extractJsonKeyedSlice(body.c_str(), "devices", '[', devicesJson);
     String usersJson;
     String consolesJson;
+    String automationsJson;
     const bool haveUi = extractJsonKeyedSlice(body.c_str(), "ui", '{', uiJson);
     const bool haveUsers = extractJsonKeyedSlice(body.c_str(), "users", '[', usersJson);
     const bool haveConsoles = extractJsonKeyedSlice(body.c_str(), "consoles", '[', consolesJson);
+    const bool haveAutomations = extractJsonKeyedSlice(body.c_str(), "automations", '[', automationsJson);
     if (haveMqtt && !applyMqttJson(mqttJson.c_str(), &errorText)) {
         request->send(400, "text/plain", errorText);
         return;
@@ -1647,6 +1895,12 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
     if (haveConsoles) {
         if (consoleStore == nullptr || !consoleStore->replaceAllFromJson(consolesJson)) {
             request->send(400, "text/plain", "Need a valid consoles list");
+            return;
+        }
+    }
+    if (haveAutomations) {
+        if (automationStore == nullptr || !automationStore->replaceAllFromJson(automationsJson)) {
+            request->send(400, "text/plain", "Need a valid automations list");
             return;
         }
     }

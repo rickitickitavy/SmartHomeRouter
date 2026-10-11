@@ -69,6 +69,10 @@ public:
     void setRegistryPullDoneHandler(void (*handler)());
     using DeviceLiveChangedFn = void (*)(const uint8_t ieee[8]);
     void setDeviceLiveChangedHandler(DeviceLiveChangedFn handler);
+    using StatusValueChangedFn =
+        void (*)(const uint8_t ieee[8], uint8_t endpoint, uint16_t clusterOr0, const char *newState);
+    void setStatusValueChangedHandler(StatusValueChangedFn handler);
+    bool copyEndpointState(const uint8_t ieee[8], uint8_t endpoint, char *out, size_t outLen) const;
     void pumpOnlineWindows();
     bool commandsAllowed() const;
 
@@ -113,6 +117,7 @@ private:
     CachedDevice *deviceHead = nullptr;
     LightStateFn lightStateHandler = nullptr;
     DeviceLiveChangedFn deviceLiveChanged = nullptr;
+    StatusValueChangedFn statusValueChanged = nullptr;
     DeviceTopicMap *registryMap = nullptr;
     DeviceTopicMap pullMap;
     PendingDeviceChange pendingChanges[kPendingChangeSlots]{};

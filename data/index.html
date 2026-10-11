@@ -63,6 +63,11 @@
             if (name == "consoles") {
                 loadConsoles();
             }
+            if (name == "automation") {
+                startAutomationsLive();
+            } else {
+                stopAutomationsLive();
+            }
         }
 
         function showSystemTab(name) {
@@ -192,6 +197,25 @@
             setStatusText("statusWifiMode", payload && payload.wifiMode ? payload.wifiMode : "—");
             setStatusText("statusWifiBssid", payload && payload.wifiBssid ? payload.wifiBssid : "—");
             setStatusText("statusWifiStaMac", payload && payload.wifiStaMac ? payload.wifiStaMac : "—");
+            if (payload && payload.heapUsedKb != null && payload.heapUsedPercent != null) {
+                setStatusText(
+                    "statusHeapUsage",
+                    String(payload.heapUsedKb) + " kB (" + String(payload.heapUsedPercent) + "%)"
+                );
+            } else {
+                setStatusText("statusHeapUsage", "—");
+            }
+            if (payload && payload.psramPresent) {
+                setStatusText(
+                    "statusPsramUsage",
+                    String(payload.psramUsedKb != null ? payload.psramUsedKb : 0)
+                        + " kB ("
+                        + String(payload.psramUsedPercent != null ? payload.psramUsedPercent : 0)
+                        + "%)"
+                );
+            } else {
+                setStatusText("statusPsramUsage", "—");
+            }
             if (payload && payload.wifiRssiDbm != null) {
                 setStatusText("statusWifiSignal", String(payload.wifiRssiDbm) + " dBm");
             } else {
@@ -306,6 +330,7 @@
             setHidden(document.querySelector('.sidebar-btn[data-section="wifi"]'), !admin);
             setHidden(document.querySelector('.sidebar-btn[data-section="mqtt"]'), !admin);
             setHidden(document.querySelector('.sidebar-btn[data-section="zigbee"]'), !admin);
+            setHidden(document.querySelector('.sidebar-btn[data-section="automation"]'), !admin);
             setHidden(document.querySelector('.system-tab-btn[data-tab="update"]'), !admin);
             setHidden(document.querySelector('.system-tab-btn[data-tab="hardware"]'), !admin);
             setHidden(document.querySelector('.sidebar-btn[data-section="security"]'), !canEditUsers);
@@ -1439,7 +1464,6 @@
                 document.getElementById("mqttPort").value = mqttSettings.port || 1883;
                 document.getElementById("mqttUsername").value = mqttSettings.username || "";
                 document.getElementById("mqttPassword").value = mqttSettings.password || "";
-                document.getElementById("mqttClientId").value = mqttSettings.clientId || "";
                 document.getElementById("mqttBaseTopic").value = mqttSettings.baseTopic || "";
                 document.getElementById("mqttReconnectIntervalMs").value = mqttSettings.reconnectIntervalMs || 3000;
                 document.getElementById("mqttClientTimeoutMs").value = mqttSettings.clientTimeoutMs || 200;
@@ -1523,7 +1547,6 @@
                 port: parseInt(document.getElementById("mqttPort").value, 10),
                 username: document.getElementById("mqttUsername").value,
                 password: document.getElementById("mqttPassword").value,
-                clientId: document.getElementById("mqttClientId").value,
                 baseTopic: document.getElementById("mqttBaseTopic").value,
                 reconnectIntervalMs: parseInt(document.getElementById("mqttReconnectIntervalMs").value, 10),
                 clientTimeoutMs: parseInt(document.getElementById("mqttClientTimeoutMs").value, 10),
@@ -3844,6 +3867,12 @@
             apIpField.hidden = document.getElementById("wifiMode").value != "AP";
         }
 
+        var automationEditorDraft = null;
+        var automationEditorBaseline = null;
+        var automationEditorOriginalName = "";
+        var automationNameListCache = [];
+        var automationListPollTimer = null;
+        var automationValueListSeq = 0;
         var consoleEditorDraft = null;
         var consoleEditorBaseline = null;
         var consoleEditorEditMode = false;
@@ -4272,6 +4301,1032 @@
                 placeAssignedConsoles = [];
                 renderPlaceConsoleTabs();
             });
+        }
+
+        function emptyAutomationCondition() {
+            return {
+                kind: "comparison",
+                not: false,
+                ieee: registeredDeviceRows[0] ? registeredDeviceRows[0].ieee : "",
+                channel: 1,
+                cmp: "EQUAL",
+                value: ""
+            };
+        }
+
+        function cloneAutomationDraft(source) {
+            return JSON.parse(JSON.stringify(source || {
+                name: "",
+                title: "",
+                active: true,
+                timer: { use: false, autoRestart: false, startOnBoot: false, defaultTime: 0, counting: false, timeLeft: 0 },
+                listen: [],
+                condition: emptyAutomationCondition(),
+                actions: []
+            }));
+        }
+
+        function startAutomationsLive() {
+            loadAutomations();
+            if (automationListPollTimer) {
+                return;
+            }
+            automationListPollTimer = window.setInterval(loadAutomations, 1000);
+        }
+
+        function stopAutomationsLive() {
+            if (!automationListPollTimer) {
+                return;
+            }
+            window.clearInterval(automationListPollTimer);
+            automationListPollTimer = null;
+        }
+
+        function buildEditableDiscreteControl(currentValue, discreteValues, onChange) {
+            var host = document.createElement("div");
+            host.className = "automation-value-combo";
+            var input = document.createElement("input");
+            input.type = "text";
+            input.value = currentValue || "";
+            input.autocomplete = "off";
+            if (discreteValues && discreteValues.length > 0) {
+                automationValueListSeq += 1;
+                var listId = "automationValueList" + String(automationValueListSeq);
+                var dataList = document.createElement("datalist");
+                dataList.id = listId;
+                var valueIndex;
+                for (valueIndex = 0; valueIndex < discreteValues.length; valueIndex++) {
+                    var option = document.createElement("option");
+                    option.value = discreteValues[valueIndex];
+                    dataList.appendChild(option);
+                }
+                input.setAttribute("list", listId);
+                host.appendChild(dataList);
+            }
+            function commitValue() {
+                onChange(input.value);
+            }
+            input.onchange = commitValue;
+            input.oninput = commitValue;
+            host.appendChild(input);
+            return host;
+        }
+
+        function formatAutomationLastActivation(value) {
+            if (value === null || value === undefined || value === "") {
+                return "—";
+            }
+            if (typeof value === "string") {
+                return value;
+            }
+            if (typeof value === "number" && value > 1700000000) {
+                var date = new Date(value * 1000);
+                if (isNaN(date.getTime())) {
+                    return "—";
+                }
+                var pad = function (part) {
+                    return part < 10 ? "0" + String(part) : String(part);
+                };
+                return date.getFullYear()
+                    + "-" + pad(date.getMonth() + 1)
+                    + "-" + pad(date.getDate())
+                    + " " + pad(date.getHours())
+                    + ":" + pad(date.getMinutes())
+                    + ":" + pad(date.getSeconds());
+            }
+            return "—";
+        }
+
+        function findRegisteredDeviceByIeee(ieeeText) {
+            var list = registeredDeviceRows || [];
+            var index;
+            for (index = 0; index < list.length; index++) {
+                if ((list[index].ieee || "") === (ieeeText || "")) {
+                    return list[index];
+                }
+            }
+            return null;
+        }
+
+        function discreteAutomationCompareValues(ieeeText, hasCluster) {
+            if (hasCluster) {
+                return [];
+            }
+            var device = findRegisteredDeviceByIeee(ieeeText);
+            if (!device) {
+                return [];
+            }
+            return deviceTypeActionPayloads(device.type || "");
+        }
+
+        function updateAutomationTimerVisibility() {
+            var useTimer = document.getElementById("automationTimerUse");
+            var details = document.getElementById("automationTimerDetails");
+            if (!details || !useTimer) {
+                return;
+            }
+            details.hidden = !useTimer.checked;
+        }
+
+        function loadAutomations() {
+            var errorLine = document.getElementById("automationsSaveError");
+            if (errorLine) {
+                errorLine.hidden = true;
+            }
+            fetch("/api/automations", { cache: "no-store" }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    return JSON.parse(text || "[]");
+                });
+            }).then(function (rows) {
+                var list = Array.isArray(rows) ? rows : [];
+                automationNameListCache = list.map(function (row) { return row.name || ""; }).filter(Boolean);
+                renderAutomationTable(list);
+            }).catch(function (error) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = error && error.message ? error.message : "Automations load failed";
+                }
+            });
+        }
+
+        function renderAutomationTable(rows) {
+            var body = document.getElementById("automationTableBody");
+            if (!body) {
+                return;
+            }
+            body.innerHTML = "";
+            var index;
+            for (index = 0; index < rows.length; index++) {
+                var row = rows[index];
+                var timer = row.timer || {};
+                var tableRow = document.createElement("tr");
+                tableRow.onclick = (function (storedName) {
+                    return function () {
+                        openAutomationEditDialog(storedName);
+                    };
+                })(row.name);
+                var nameCell = document.createElement("td");
+                nameCell.textContent = row.name || "";
+                var activeCell = document.createElement("td");
+                activeCell.textContent = row.active ? "yes" : "no";
+                var useTimerCell = document.createElement("td");
+                useTimerCell.textContent = timer.use ? "yes" : "no";
+                var defaultTimeCell = document.createElement("td");
+                defaultTimeCell.textContent = timer.use
+                    ? String(timer.defaultTime != null ? timer.defaultTime : 0)
+                    : "—";
+                var countingCell = document.createElement("td");
+                countingCell.textContent = timer.use ? (timer.counting ? "yes" : "no") : "—";
+                var timeLeftCell = document.createElement("td");
+                timeLeftCell.textContent = timer.use && timer.counting
+                    ? String(timer.timeLeft != null ? timer.timeLeft : 0)
+                    : "—";
+                var lastCell = document.createElement("td");
+                lastCell.textContent = formatAutomationLastActivation(row.lastActivation);
+                tableRow.appendChild(nameCell);
+                tableRow.appendChild(activeCell);
+                tableRow.appendChild(useTimerCell);
+                tableRow.appendChild(defaultTimeCell);
+                tableRow.appendChild(countingCell);
+                tableRow.appendChild(timeLeftCell);
+                tableRow.appendChild(lastCell);
+                body.appendChild(tableRow);
+            }
+        }
+
+        function exportAllAutomations() {
+            var errorLine = document.getElementById("automationsSaveError");
+            if (errorLine) {
+                errorLine.hidden = true;
+            }
+            fetch("/api/automations/store", { cache: "no-store" }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    var blob = new Blob([text || "[]"], { type: "application/json;charset=utf-8" });
+                    var objectUrl = URL.createObjectURL(blob);
+                    var link = document.createElement("a");
+                    link.href = objectUrl;
+                    link.download = "automations.json";
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(objectUrl);
+                });
+            }).catch(function (error) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = error && error.message ? error.message : "Export failed";
+                }
+            });
+        }
+
+        function chooseAutomationsRestoreFile() {
+            var fileInput = document.getElementById("automationsRestoreFile");
+            if (!fileInput) {
+                return;
+            }
+            fileInput.value = "";
+            fileInput.click();
+        }
+
+        function onAutomationsRestoreFileSelected(event) {
+            var fileInput = event && event.target ? event.target : null;
+            var file = fileInput && fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+            var errorLine = document.getElementById("automationsSaveError");
+            if (!file) {
+                return;
+            }
+            if (!window.confirm("Import replaces all automations with this file. Continue?")) {
+                return;
+            }
+            var reader = new FileReader();
+            reader.onerror = function () {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = "Failed to read the selected file";
+                }
+            };
+            reader.onload = function () {
+                var text = reader.result ? String(reader.result) : "";
+                var parsed;
+                try {
+                    parsed = JSON.parse(text);
+                } catch (parseError) {
+                    if (errorLine) {
+                        errorLine.hidden = false;
+                        errorLine.textContent = "Selected file is not valid JSON";
+                    }
+                    return;
+                }
+                if (!Array.isArray(parsed)) {
+                    if (errorLine) {
+                        errorLine.hidden = false;
+                        errorLine.textContent = "Selected file must be an automations JSON array";
+                    }
+                    return;
+                }
+                fetch("/api/automations/restore", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: text
+                }).then(function (response) {
+                    return response.text().then(function (bodyText) {
+                        if (!response.ok) {
+                            throw new Error(bodyText || ("HTTP " + response.status));
+                        }
+                        loadAutomations();
+                    });
+                }).catch(function (error) {
+                    if (errorLine) {
+                        errorLine.hidden = false;
+                        errorLine.textContent = error && error.message ? error.message : "Import failed";
+                    }
+                });
+            };
+            reader.readAsText(file);
+        }
+
+        function createAutomationAndEdit() {
+            var errorLine = document.getElementById("automationsSaveError");
+            if (errorLine) {
+                errorLine.hidden = true;
+            }
+            fetch("/api/automations", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ active: true })
+            }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    return JSON.parse(text);
+                });
+            }).then(function (payload) {
+                loadAutomations();
+                openAutomationEditDialog(payload.name);
+            }).catch(function (error) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = error && error.message ? error.message : "Create failed";
+                }
+            });
+        }
+
+        function openAutomationEditDialog(automationName) {
+            var errorLine = document.getElementById("automationEditError");
+            if (errorLine) {
+                errorLine.hidden = true;
+            }
+            Promise.all([
+                fetch("/api/automations/item?name=" + encodeURIComponent(automationName), { cache: "no-store" })
+                    .then(function (response) {
+                        return response.text().then(function (text) {
+                            if (!response.ok) {
+                                throw new Error(text || ("HTTP " + response.status));
+                            }
+                            return JSON.parse(text);
+                        });
+                    }),
+                fetch("/api/devices", { cache: "no-store" }).then(function (response) { return response.json(); }),
+                fetch("/api/automations", { cache: "no-store" }).then(function (response) { return response.json(); })
+            ]).then(function (parts) {
+                var payload = parts[0];
+                registeredDeviceRows = Array.isArray(parts[1]) ? parts[1] : registeredDeviceRows;
+                automationNameListCache = (Array.isArray(parts[2]) ? parts[2] : [])
+                    .map(function (row) { return row.name || ""; }).filter(Boolean);
+                if (!payload || typeof payload !== "object" || !payload.name) {
+                    throw new Error("Bad automation payload");
+                }
+                automationEditorDraft = cloneAutomationDraft(payload);
+                if (!automationEditorDraft.condition) {
+                    automationEditorDraft.condition = emptyAutomationCondition();
+                }
+                if (!Array.isArray(automationEditorDraft.listen)) {
+                    automationEditorDraft.listen = [];
+                }
+                if (!Array.isArray(automationEditorDraft.actions)) {
+                    automationEditorDraft.actions = [];
+                }
+                if (!automationEditorDraft.timer) {
+                    automationEditorDraft.timer = {
+                        use: false,
+                        autoRestart: false,
+                        startOnBoot: false,
+                        defaultTime: 0
+                    };
+                }
+                automationEditorOriginalName = automationEditorDraft.name;
+                automationEditorBaseline = JSON.stringify(automationEditorDraft);
+                document.getElementById("automationEditDialog").hidden = false;
+                renderAutomationEditor();
+            }).catch(function (error) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = error && error.message ? error.message : "Load failed";
+                }
+            });
+        }
+
+        function closeAutomationEditDialog() {
+            automationEditorDraft = null;
+            automationEditorBaseline = null;
+            automationEditorOriginalName = "";
+            document.getElementById("automationEditDialog").hidden = true;
+        }
+
+        function automationEditHasUnsavedChanges() {
+            if (automationEditorBaseline == null || automationEditorDraft == null) {
+                return false;
+            }
+            readAutomationEditorFields();
+            return automationEditorBaseline !== JSON.stringify(automationEditorDraft);
+        }
+
+        function requestCloseAutomationEditDialog() {
+            if (automationEditHasUnsavedChanges()) {
+                openUnsavedChangesDialog(closeAutomationEditDialog);
+                return;
+            }
+            closeAutomationEditDialog();
+        }
+
+        function readAutomationEditorFields() {
+            if (!automationEditorDraft) {
+                return;
+            }
+            automationEditorDraft.name = (document.getElementById("automationEditName").value || "").trim();
+            automationEditorDraft.title = (document.getElementById("automationEditTitle").value || "").trim();
+            automationEditorDraft.active = !!document.getElementById("automationEditActive").checked;
+            if (!automationEditorDraft.timer) {
+                automationEditorDraft.timer = {};
+            }
+            automationEditorDraft.timer.use = !!document.getElementById("automationTimerUse").checked;
+            automationEditorDraft.timer.autoRestart = !!document.getElementById("automationTimerAutoRestart").checked;
+            automationEditorDraft.timer.startOnBoot =
+                !!document.getElementById("automationTimerStartOnBoot").checked;
+            var defaultTime = parseInt(document.getElementById("automationTimerDefaultTime").value, 10);
+            automationEditorDraft.timer.defaultTime = defaultTime > 0 ? defaultTime : 0;
+        }
+
+        function automationDialogIsEmpty() {
+            if (!automationEditorDraft) {
+                return true;
+            }
+            readAutomationEditorFields();
+            var listenEmpty = !automationEditorDraft.listen || automationEditorDraft.listen.length === 0;
+            var actionsEmpty = !automationEditorDraft.actions || automationEditorDraft.actions.length === 0;
+            var condition = automationEditorDraft.condition;
+            var conditionEmpty = !condition;
+            if (condition && condition.kind === "container") {
+                conditionEmpty = !condition.children || condition.children.length === 0;
+            } else if (condition) {
+                conditionEmpty = !(condition.ieee || "").trim() && !(condition.value || "").trim();
+            }
+            var timerUnused = !(automationEditorDraft.timer && automationEditorDraft.timer.use);
+            return listenEmpty && actionsEmpty && conditionEmpty && timerUnused;
+        }
+
+        function updateAutomationImportEnabled() {
+            var importBtn = document.getElementById("automationImportBtn");
+            if (importBtn) {
+                importBtn.disabled = !automationDialogIsEmpty();
+            }
+        }
+
+        function deviceOptionLabel(device) {
+            return (device.name || device.friendlyName || device.ieee || "Device")
+                + " (" + zigbeeDeviceTypeLabel(device.type) + ")";
+        }
+
+        function fillDeviceSelect(select, selectedIeee) {
+            select.innerHTML = "";
+            var list = registeredDeviceRows || [];
+            var index;
+            for (index = 0; index < list.length; index++) {
+                var option = document.createElement("option");
+                option.value = list[index].ieee || "";
+                option.textContent = deviceOptionLabel(list[index]);
+                option.setAttribute("data-channels", String(deviceChannelCount(list[index])));
+                if (selectedIeee && selectedIeee === list[index].ieee) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            }
+        }
+
+        function renderAutomationEditor() {
+            if (!automationEditorDraft) {
+                return;
+            }
+            document.getElementById("automationEditName").value = automationEditorDraft.name || "";
+            document.getElementById("automationEditName").readOnly = false;
+            document.getElementById("automationEditTitle").value = automationEditorDraft.title || "";
+            document.getElementById("automationEditActive").checked = !!automationEditorDraft.active;
+            var timer = automationEditorDraft.timer || {};
+            document.getElementById("automationTimerUse").checked = !!timer.use;
+            document.getElementById("automationTimerAutoRestart").checked = !!timer.autoRestart;
+            document.getElementById("automationTimerStartOnBoot").checked = !!timer.startOnBoot;
+            document.getElementById("automationTimerDefaultTime").value =
+                timer.defaultTime > 0 ? String(timer.defaultTime) : "";
+            document.getElementById("automationTimerRuntime").textContent =
+                timer.counting
+                    ? ("Counting: " + String(timer.timeLeft || 0) + " s left")
+                    : "Not counting";
+            updateAutomationTimerVisibility();
+            renderAutomationListenEditor();
+            renderAutomationConditionEditor();
+            renderAutomationActionsEditor();
+            updateAutomationImportEnabled();
+        }
+
+        function renderAutomationListenEditor() {
+            var host = document.getElementById("automationListenEditor");
+            if (!host || !automationEditorDraft) {
+                return;
+            }
+            host.innerHTML = "";
+            var listen = automationEditorDraft.listen || [];
+            var index;
+            for (index = 0; index < listen.length; index++) {
+                (function (listenIndex) {
+                    var row = document.createElement("div");
+                    row.className = "field";
+                    var deviceSelect = document.createElement("select");
+                    fillDeviceSelect(deviceSelect, listen[listenIndex].ieee || "");
+                    deviceSelect.onchange = function () {
+                        automationEditorDraft.listen[listenIndex].ieee = deviceSelect.value;
+                        updateAutomationImportEnabled();
+                    };
+                    var clusterInput = document.createElement("input");
+                    clusterInput.type = "number";
+                    clusterInput.min = "0";
+                    clusterInput.placeholder = "cluster (optional)";
+                    clusterInput.value = listen[listenIndex].cluster ? String(listen[listenIndex].cluster) : "";
+                    clusterInput.onchange = function () {
+                        var clusterValue = parseInt(clusterInput.value, 10);
+                        if (clusterValue > 0) {
+                            automationEditorDraft.listen[listenIndex].cluster = clusterValue;
+                        } else {
+                            delete automationEditorDraft.listen[listenIndex].cluster;
+                        }
+                        updateAutomationImportEnabled();
+                    };
+                    var removeBtn = document.createElement("button");
+                    removeBtn.type = "button";
+                    removeBtn.className = "btn btn-secondary btn-inline";
+                    removeBtn.textContent = "Remove";
+                    removeBtn.onclick = function () {
+                        automationEditorDraft.listen.splice(listenIndex, 1);
+                        renderAutomationListenEditor();
+                        updateAutomationImportEnabled();
+                    };
+                    row.appendChild(deviceSelect);
+                    row.appendChild(clusterInput);
+                    row.appendChild(removeBtn);
+                    host.appendChild(row);
+                })(index);
+            }
+            var addBtn = document.createElement("button");
+            addBtn.type = "button";
+            addBtn.className = "btn btn-secondary btn-inline automation-add-btn";
+            addBtn.textContent = "Add device to trigger";
+            addBtn.onclick = function () {
+                var firstIeee = registeredDeviceRows[0] ? registeredDeviceRows[0].ieee : "";
+                automationEditorDraft.listen.push({ ieee: firstIeee || "" });
+                renderAutomationListenEditor();
+                updateAutomationImportEnabled();
+            };
+            host.appendChild(addBtn);
+        }
+
+        function renderConditionNode(node, path, host) {
+            var box = document.createElement("div");
+            box.className = "field";
+            box.style.marginLeft = path.length > 1 ? "16px" : "0";
+            var kindSelect = document.createElement("select");
+            kindSelect.innerHTML = "<option value=\"comparison\">comparison</option><option value=\"container\">container</option>";
+            kindSelect.value = node.kind || "comparison";
+            var notCheck = document.createElement("label");
+            notCheck.className = "field-check";
+            notCheck.innerHTML = "<input type=\"checkbox\"> NOT";
+            notCheck.firstChild.checked = !!node.not;
+            notCheck.firstChild.onchange = function () {
+                node.not = !!notCheck.firstChild.checked;
+            };
+            kindSelect.onchange = function () {
+                if (kindSelect.value === "container") {
+                    node.kind = "container";
+                    node.op = node.op || "AND";
+                    node.children = node.children || [];
+                    delete node.ieee;
+                    delete node.cmp;
+                    delete node.value;
+                    delete node.channel;
+                    delete node.cluster;
+                } else {
+                    node.kind = "comparison";
+                    node.ieee = node.ieee || (registeredDeviceRows[0] ? registeredDeviceRows[0].ieee : "");
+                    node.channel = node.channel || 1;
+                    node.cmp = node.cmp || "EQUAL";
+                    node.value = node.value || "";
+                    delete node.children;
+                    delete node.op;
+                }
+                renderAutomationConditionEditor();
+            };
+            box.appendChild(kindSelect);
+            box.appendChild(notCheck);
+            if (node.kind === "container") {
+                var opSelect = document.createElement("select");
+                opSelect.innerHTML = "<option value=\"AND\">AND</option><option value=\"OR\">OR</option><option value=\"XOR\">XOR</option>";
+                opSelect.value = node.op || "AND";
+                opSelect.onchange = function () { node.op = opSelect.value; };
+                box.appendChild(opSelect);
+                var addChild = document.createElement("button");
+                addChild.type = "button";
+                addChild.className = "btn btn-secondary btn-inline";
+                addChild.textContent = "Add child";
+                addChild.onclick = function () {
+                    node.children = node.children || [];
+                    node.children.push({
+                        kind: "comparison",
+                        not: false,
+                        ieee: registeredDeviceRows[0] ? registeredDeviceRows[0].ieee : "",
+                        channel: 1,
+                        cmp: "EQUAL",
+                        value: ""
+                    });
+                    renderAutomationConditionEditor();
+                    updateAutomationImportEnabled();
+                };
+                box.appendChild(addChild);
+                host.appendChild(box);
+                var childIndex;
+                for (childIndex = 0; childIndex < (node.children || []).length; childIndex++) {
+                    (function (child, childPath) {
+                        var childHost = document.createElement("div");
+                        host.appendChild(childHost);
+                        renderConditionNode(child, childPath, childHost);
+                        var removeChild = document.createElement("button");
+                        removeChild.type = "button";
+                        removeChild.className = "btn btn-secondary btn-inline";
+                        removeChild.textContent = "Remove child";
+                        removeChild.onclick = function () {
+                            var parent = automationEditorDraft.condition;
+                            var walk;
+                            for (walk = 1; walk < childPath.length - 1; walk++) {
+                                parent = parent.children[childPath[walk]];
+                            }
+                            parent.children.splice(childPath[childPath.length - 1], 1);
+                            renderAutomationConditionEditor();
+                            updateAutomationImportEnabled();
+                        };
+                        childHost.appendChild(removeChild);
+                    })(node.children[childIndex], path.concat([childIndex]));
+                }
+                return;
+            }
+            var deviceSelect = document.createElement("select");
+            fillDeviceSelect(deviceSelect, node.ieee || "");
+            var channelInput = document.createElement("input");
+            channelInput.type = "number";
+            channelInput.min = "1";
+            channelInput.value = String(node.channel || 1);
+            channelInput.onchange = function () {
+                var channelValue = parseInt(channelInput.value, 10);
+                node.channel = channelValue > 0 ? channelValue : 1;
+            };
+            var cmpSelect = document.createElement("select");
+            cmpSelect.innerHTML = "<option>EQUAL</option><option>GREATER</option><option>LESS</option><option>CONTAINS</option><option>STARTS</option><option>ENDS</option>";
+            cmpSelect.value = node.cmp || "EQUAL";
+            cmpSelect.onchange = function () { node.cmp = cmpSelect.value; };
+            var clusterInput = document.createElement("input");
+            clusterInput.type = "number";
+            clusterInput.placeholder = "cluster optional";
+            clusterInput.value = node.cluster ? String(node.cluster) : "";
+            var valueHost = document.createElement("div");
+            function refreshCompareValueControl() {
+                valueHost.innerHTML = "";
+                var discreteValues = discreteAutomationCompareValues(node.ieee || "", !!node.cluster);
+                valueHost.appendChild(buildEditableDiscreteControl(
+                    node.value || "",
+                    discreteValues,
+                    function (nextValue) {
+                        node.value = nextValue;
+                    }
+                ));
+            }
+            deviceSelect.onchange = function () {
+                node.ieee = deviceSelect.value;
+                refreshCompareValueControl();
+            };
+            clusterInput.onchange = function () {
+                var clusterValue = parseInt(clusterInput.value, 10);
+                if (clusterValue > 0) {
+                    node.cluster = clusterValue;
+                } else {
+                    delete node.cluster;
+                }
+                refreshCompareValueControl();
+            };
+            refreshCompareValueControl();
+            box.appendChild(deviceSelect);
+            box.appendChild(channelInput);
+            box.appendChild(cmpSelect);
+            box.appendChild(valueHost);
+            box.appendChild(clusterInput);
+            host.appendChild(box);
+        }
+
+        function renderAutomationConditionEditor() {
+            var host = document.getElementById("automationConditionEditor");
+            if (!host || !automationEditorDraft) {
+                return;
+            }
+            host.innerHTML = "";
+            if (!automationEditorDraft.condition) {
+                automationEditorDraft.condition = emptyAutomationCondition();
+            }
+            renderConditionNode(automationEditorDraft.condition, [0], host);
+            updateAutomationImportEnabled();
+        }
+
+        function fillAutomationNameSelect(select, selectedName) {
+            select.innerHTML = "";
+            var names = automationNameListCache.slice();
+            if (automationEditorDraft && automationEditorDraft.name
+                && names.indexOf(automationEditorDraft.name) < 0) {
+                names.push(automationEditorDraft.name);
+            }
+            var index;
+            for (index = 0; index < names.length; index++) {
+                var option = document.createElement("option");
+                option.value = names[index];
+                option.textContent = names[index];
+                if (selectedName && selectedName === names[index]) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            }
+        }
+
+        function renderAutomationActionsEditor() {
+            var host = document.getElementById("automationActionsEditor");
+            if (!host || !automationEditorDraft) {
+                return;
+            }
+            host.innerHTML = "";
+            var actions = automationEditorDraft.actions || [];
+            var index;
+            for (index = 0; index < actions.length; index++) {
+                (function (actionIndex) {
+                    var action = actions[actionIndex];
+                    var row = document.createElement("div");
+                    row.className = "field";
+                    var targetSelect = document.createElement("select");
+                    targetSelect.innerHTML = "<option value=\"device\">Device</option><option value=\"automation\">Automation</option>";
+                    targetSelect.value = action.target === "automation" ? "automation" : "device";
+                    targetSelect.onchange = function () {
+                        if (targetSelect.value === "automation") {
+                            automationEditorDraft.actions[actionIndex] = {
+                                target: "automation",
+                                name: automationNameListCache[0] || automationEditorDraft.name || "",
+                                op: "ENABLE"
+                            };
+                        } else {
+                            automationEditorDraft.actions[actionIndex] = {
+                                target: "device",
+                                ieee: registeredDeviceRows[0] ? registeredDeviceRows[0].ieee : "",
+                                channel: 1,
+                                payload: "ON"
+                            };
+                        }
+                        renderAutomationActionsEditor();
+                        updateAutomationImportEnabled();
+                    };
+                    row.appendChild(targetSelect);
+                    if (targetSelect.value === "device") {
+                        var deviceSelect = document.createElement("select");
+                        fillDeviceSelect(deviceSelect, action.ieee || "");
+                        var channelInput = document.createElement("input");
+                        channelInput.type = "number";
+                        channelInput.min = "1";
+                        channelInput.value = String(action.channel || 1);
+                        channelInput.onchange = function () {
+                            var channelValue = parseInt(channelInput.value, 10);
+                            automationEditorDraft.actions[actionIndex].channel = channelValue > 0 ? channelValue : 1;
+                        };
+                        var payloadHost = document.createElement("div");
+                        function refreshActionPayloadControl() {
+                            payloadHost.innerHTML = "";
+                            var discreteValues = discreteAutomationCompareValues(
+                                automationEditorDraft.actions[actionIndex].ieee || "",
+                                false
+                            );
+                            payloadHost.appendChild(buildEditableDiscreteControl(
+                                automationEditorDraft.actions[actionIndex].payload || "",
+                                discreteValues,
+                                function (nextValue) {
+                                    automationEditorDraft.actions[actionIndex].payload = nextValue;
+                                }
+                            ));
+                        }
+                        deviceSelect.onchange = function () {
+                            automationEditorDraft.actions[actionIndex].ieee = deviceSelect.value;
+                            refreshActionPayloadControl();
+                        };
+                        refreshActionPayloadControl();
+                        row.appendChild(deviceSelect);
+                        row.appendChild(channelInput);
+                        row.appendChild(payloadHost);
+                    } else {
+                        var nameSelect = document.createElement("select");
+                        fillAutomationNameSelect(nameSelect, action.name || "");
+                        var opSelect = document.createElement("select");
+                        function refreshOps() {
+                            // Timer ops listed for all automation targets; firmware rejects if target has no timer.
+                            var ops = ["ENABLE", "DISABLE", "STOP TIMER", "START TIMER", "RESTART TIMER"];
+                            var previous = opSelect.value || action.op || "ENABLE";
+                            opSelect.innerHTML = "";
+                            var opIndex;
+                            for (opIndex = 0; opIndex < ops.length; opIndex++) {
+                                var option = document.createElement("option");
+                                option.value = ops[opIndex];
+                                option.textContent = ops[opIndex];
+                                opSelect.appendChild(option);
+                            }
+                            opSelect.value = previous;
+                            if (!opSelect.value) {
+                                opSelect.value = "ENABLE";
+                            }
+                            automationEditorDraft.actions[actionIndex].op = opSelect.value;
+                            timeInput.hidden = opSelect.value !== "START TIMER";
+                        }
+                        var timeInput = document.createElement("input");
+                        timeInput.type = "number";
+                        timeInput.min = "1";
+                        timeInput.placeholder = "seconds (optional)";
+                        timeInput.value = action.time ? String(action.time) : "";
+                        timeInput.onchange = function () {
+                            var seconds = parseInt(timeInput.value, 10);
+                            if (seconds > 0) {
+                                automationEditorDraft.actions[actionIndex].time = seconds;
+                            } else {
+                                delete automationEditorDraft.actions[actionIndex].time;
+                            }
+                        };
+                        nameSelect.onchange = function () {
+                            automationEditorDraft.actions[actionIndex].name = nameSelect.value;
+                            refreshOps();
+                        };
+                        opSelect.onchange = function () {
+                            automationEditorDraft.actions[actionIndex].op = opSelect.value;
+                            timeInput.hidden = opSelect.value !== "START TIMER";
+                        };
+                        refreshOps();
+                        row.appendChild(nameSelect);
+                        row.appendChild(opSelect);
+                        row.appendChild(timeInput);
+                    }
+                    var toolbar = document.createElement("div");
+                    toolbar.className = "automation-action-toolbar";
+                    var upBtn = document.createElement("button");
+                    upBtn.type = "button";
+                    upBtn.className = "btn btn-secondary";
+                    upBtn.textContent = "Up";
+                    upBtn.onclick = function () {
+                        if (actionIndex <= 0) {
+                            return;
+                        }
+                        var swap = automationEditorDraft.actions[actionIndex - 1];
+                        automationEditorDraft.actions[actionIndex - 1] = automationEditorDraft.actions[actionIndex];
+                        automationEditorDraft.actions[actionIndex] = swap;
+                        renderAutomationActionsEditor();
+                    };
+                    var downBtn = document.createElement("button");
+                    downBtn.type = "button";
+                    downBtn.className = "btn btn-secondary";
+                    downBtn.textContent = "Down";
+                    downBtn.onclick = function () {
+                        if (actionIndex >= automationEditorDraft.actions.length - 1) {
+                            return;
+                        }
+                        var swap = automationEditorDraft.actions[actionIndex + 1];
+                        automationEditorDraft.actions[actionIndex + 1] = automationEditorDraft.actions[actionIndex];
+                        automationEditorDraft.actions[actionIndex] = swap;
+                        renderAutomationActionsEditor();
+                    };
+                    var removeBtn = document.createElement("button");
+                    removeBtn.type = "button";
+                    removeBtn.className = "btn btn-secondary";
+                    removeBtn.textContent = "Remove";
+                    removeBtn.onclick = function () {
+                        if (!window.confirm("Remove this action?")) {
+                            return;
+                        }
+                        automationEditorDraft.actions.splice(actionIndex, 1);
+                        renderAutomationActionsEditor();
+                        updateAutomationImportEnabled();
+                    };
+                    toolbar.appendChild(upBtn);
+                    toolbar.appendChild(downBtn);
+                    toolbar.appendChild(removeBtn);
+                    row.appendChild(toolbar);
+                    host.appendChild(row);
+                })(index);
+            }
+            var addBtn = document.createElement("button");
+            addBtn.type = "button";
+            addBtn.className = "btn btn-secondary btn-inline automation-add-btn";
+            addBtn.textContent = "Add action";
+            addBtn.onclick = function () {
+                automationEditorDraft.actions.push({
+                    target: "device",
+                    ieee: registeredDeviceRows[0] ? registeredDeviceRows[0].ieee : "",
+                    channel: 1,
+                    payload: "ON"
+                });
+                renderAutomationActionsEditor();
+                updateAutomationImportEnabled();
+            };
+            host.appendChild(addBtn);
+        }
+
+        function saveAutomationEditDialog() {
+            var errorLine = document.getElementById("automationEditError");
+            if (errorLine) {
+                errorLine.hidden = true;
+            }
+            readAutomationEditorFields();
+            if (!automationEditorDraft.name) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = "Name is required";
+                }
+                return;
+            }
+            var payload = cloneAutomationDraft(automationEditorDraft);
+            payload.originalName = automationEditorOriginalName || payload.name;
+            delete payload.timer.counting;
+            delete payload.timer.timeLeft;
+            delete payload.lastActivation;
+            fetch("/api/automations/update", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    automationEditorBaseline = JSON.stringify(automationEditorDraft);
+                    loadAutomations();
+                    closeAutomationEditDialog();
+                });
+            }).catch(function (error) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = error && error.message ? error.message : "Save failed";
+                }
+            });
+        }
+
+        function openAutomationDeleteConfirm() {
+            document.getElementById("automationDeleteConfirmDialog").hidden = false;
+        }
+
+        function closeAutomationDeleteConfirm() {
+            document.getElementById("automationDeleteConfirmDialog").hidden = true;
+        }
+
+        function confirmDeleteAutomation() {
+            var errorLine = document.getElementById("automationEditError");
+            var name = automationEditorOriginalName || (automationEditorDraft && automationEditorDraft.name);
+            fetch("/api/automations", {
+                method: "DELETE",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: name })
+            }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    closeAutomationDeleteConfirm();
+                    closeAutomationEditDialog();
+                    loadAutomations();
+                });
+            }).catch(function (error) {
+                closeAutomationDeleteConfirm();
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = error && error.message ? error.message : "Delete failed";
+                }
+            });
+        }
+
+        function exportAutomationJson() {
+            readAutomationEditorFields();
+            var payload = cloneAutomationDraft(automationEditorDraft);
+            delete payload.timer.counting;
+            delete payload.timer.timeLeft;
+            var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+            var objectUrl = URL.createObjectURL(blob);
+            var link = document.createElement("a");
+            link.href = objectUrl;
+            link.download = (payload.name || "automation") + ".json";
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(objectUrl);
+        }
+
+        function chooseAutomationImportFile() {
+            if (!automationDialogIsEmpty()) {
+                return;
+            }
+            var fileInput = document.getElementById("automationImportFile");
+            if (!fileInput) {
+                return;
+            }
+            fileInput.value = "";
+            fileInput.click();
+        }
+
+        function onAutomationImportFileSelected(event) {
+            var fileInput = event && event.target ? event.target : null;
+            var file = fileInput && fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+            var errorLine = document.getElementById("automationEditError");
+            if (!file || !automationDialogIsEmpty()) {
+                return;
+            }
+            var reader = new FileReader();
+            reader.onload = function () {
+                try {
+                    var parsed = JSON.parse(reader.result ? String(reader.result) : "{}");
+                    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+                        throw new Error("Need one automation object");
+                    }
+                    var keptName = automationEditorDraft.name;
+                    automationEditorDraft = cloneAutomationDraft(parsed);
+                    automationEditorDraft.name = keptName;
+                    if (!automationEditorDraft.condition) {
+                        automationEditorDraft.condition = emptyAutomationCondition();
+                    }
+                    renderAutomationEditor();
+                } catch (error) {
+                    if (errorLine) {
+                        errorLine.hidden = false;
+                        errorLine.textContent = error && error.message ? error.message : "Import failed";
+                    }
+                }
+            };
+            reader.readAsText(file);
         }
 
         function loadConsoles() {
@@ -5401,6 +6456,14 @@
                 requestCloseConsoleEditDialog();
                 return true;
             }
+            if (dialogId === "automationEditDialog") {
+                requestCloseAutomationEditDialog();
+                return true;
+            }
+            if (dialogId === "automationDeleteConfirmDialog") {
+                closeAutomationDeleteConfirm();
+                return true;
+            }
             if (dialogId === "consoleDeleteConfirmDialog") {
                 closeConsoleDeleteConfirm();
                 return true;
@@ -5514,9 +6577,10 @@
         <button type="button" class="sidebar-btn" data-section="mqtt" onclick="showMainSection('mqtt')">MQTT</button>
         <button type="button" class="sidebar-btn" data-section="zigbee" onclick="showMainSection('zigbee')">ZigBee</button>
         <button type="button" class="sidebar-btn" data-section="devices" onclick="showMainSection('devices')">Devices</button>
-        <button type="button" class="sidebar-btn" data-section="appearance" onclick="showMainSection('appearance')">Appearance</button>
+        <button type="button" class="sidebar-btn" data-section="automation" onclick="showMainSection('automation')">Automation</button>
         <button type="button" class="sidebar-btn" data-section="security" onclick="showMainSection('security')">Security</button>
         <button type="button" class="sidebar-btn" data-section="consoles" onclick="showMainSection('consoles')">Consoles</button>
+        <button type="button" class="sidebar-btn" data-section="appearance" onclick="showMainSection('appearance')">Appearance</button>
         <button type="button" class="sidebar-btn" data-section="system" onclick="showMainSection('system')">System</button>
         <button type="button" class="sidebar-btn sidebar-signout" onclick="openSignOutConfirm()">Sign out</button>
     </nav>
@@ -5529,6 +6593,17 @@
                         <div class="status-row">
                             <span class="status-row-label">Online time</span>
                             <p id="statusOnlineTime" class="status-value">—</p>
+                        </div>
+                    </div>
+                    <div class="status-group status-memory-group">
+                        <h3 class="group-title">Memory</h3>
+                        <div class="status-row">
+                            <span class="status-row-label">RAM</span>
+                            <p id="statusHeapUsage" class="status-value">—</p>
+                        </div>
+                        <div class="status-row">
+                            <span class="status-row-label">PSRAM</span>
+                            <p id="statusPsramUsage" class="status-value">—</p>
                         </div>
                     </div>
                     <div class="status-group">
@@ -5681,10 +6756,6 @@
                 </div>
             </div>
             <div class="field">
-                <label for="mqttClientId">CLIENT_ID</label>
-                <input id="mqttClientId" type="text" autocomplete="off">
-            </div>
-            <div class="field">
                 <label for="mqttBaseTopic">BASE_TOPIC</label>
                 <input id="mqttBaseTopic" type="text" autocomplete="off">
             </div>
@@ -5767,6 +6838,33 @@
                     <button type="button" id="restoreDevicesBtn" class="btn btn-secondary" onclick="openDevicesRestoreDialog(false)">Restore</button>
                     <button type="button" id="fullRestoreDevicesBtn" class="btn btn-secondary" onclick="openDevicesRestoreDialog(true)">Full restore</button>
                 </div>
+            </div>
+        </section>
+
+        <section id="section-automation" class="section-panel" aria-label="Automation">
+            <h2 class="section-title">Automation</h2>
+            <p id="automationsSaveError" class="save-error" hidden></p>
+            <input id="automationsRestoreFile" type="file" accept=".json,application/json" hidden onchange="onAutomationsRestoreFileSelected(event)">
+            <div class="settings-scroll">
+                <table class="data-table selectable">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Active</th>
+                            <th>Use timer</th>
+                            <th>Timer default</th>
+                            <th>Counting</th>
+                            <th>Time left</th>
+                            <th>Last performed</th>
+                        </tr>
+                    </thead>
+                    <tbody id="automationTableBody"></tbody>
+                </table>
+            </div>
+            <div class="dialog-actions">
+                <button type="button" class="btn btn-primary" onclick="createAutomationAndEdit()">Add</button>
+                <button type="button" class="btn btn-secondary" onclick="exportAllAutomations()">Export all</button>
+                <button type="button" class="btn btn-secondary" onclick="chooseAutomationsRestoreFile()">Import all</button>
             </div>
         </section>
 
@@ -6024,10 +7122,9 @@
                     <div class="upload-card">
                         <h3 class="upload-title">Code (firmware)</h3>
                         <p class="field-hint">Running version: <span id="firmwareVersion">—</span></p>
-                        <p class="field-hint">Upload a ZIP with <code>slave.bin</code> and/or <code>host.bin</code> (only present images are applied). Build with PlatformIO envs <code>esp32-c6-slave</code> / <code>esp32-s3-host</code>, then <code>scripts/firmware_join.py</code>.</p>
                         <input id="updateCodeFile" type="file" accept=".zip,application/zip,application/octet-stream">
                         <p id="updateCodeStatus" class="upload-status"></p>
-                        <button type="button" class="btn btn-primary btn-inline" onclick="uploadFirmware()">Upload joined package</button>
+                        <button type="button" class="btn btn-primary btn-inline" onclick="uploadFirmware()">Update</button>
                         <p class="field-hint">For USB programming of the slave, pause host EN resets for 120 seconds. Press again to cancel.</p>
                         <button type="button" id="slaveResetPauseBtn" class="btn btn-secondary btn-inline" onclick="toggleSlaveResetPause()">Wait for update slave</button>
                     </div>
@@ -6213,6 +7310,70 @@
         <div class="dialog-actions">
             <button type="button" class="btn btn-primary" onclick="signOut()">Sign out</button>
             <button type="button" class="btn btn-secondary" onclick="closeSignOutConfirm()">Cancel</button>
+        </div>
+    </div>
+</div>
+<div id="automationEditDialog" class="dialog-overlay console-edit-overlay" hidden>
+    <div class="dialog-panel console-edit-panel" role="dialog" aria-label="Edit automation">
+        <h3 class="upload-title">Edit automation</h3>
+        <p id="automationEditError" class="save-error" hidden></p>
+        <div class="field">
+            <label for="automationEditName">Name</label>
+            <input id="automationEditName" type="text" autocomplete="off">
+        </div>
+        <div class="field">
+            <label for="automationEditTitle">Title</label>
+            <input id="automationEditTitle" type="text" autocomplete="off">
+        </div>
+        <label class="field-check">
+            <input id="automationEditActive" type="checkbox" onchange="updateAutomationImportEnabled()">
+            Active
+        </label>
+        <div class="automation-timer-box">
+            <label class="field-check">
+                <input id="automationTimerUse" type="checkbox" onchange="updateAutomationTimerVisibility(); updateAutomationImportEnabled();">
+                Use timer
+            </label>
+            <div id="automationTimerDetails">
+                <label class="field-check">
+                    <input id="automationTimerStartOnBoot" type="checkbox">
+                    Start on boot
+                </label>
+                <p class="field-hint">If enabled, the timer starts 20 seconds after host boot using default time.</p>
+                <label class="field-check">
+                    <input id="automationTimerAutoRestart" type="checkbox">
+                    Auto restart
+                </label>
+                <div class="field">
+                    <label for="automationTimerDefaultTime">Default time (seconds)</label>
+                    <input id="automationTimerDefaultTime" type="number" min="0" step="1">
+                </div>
+                <p id="automationTimerRuntime" class="field-hint">Not counting</p>
+            </div>
+        </div>
+        <h4 class="upload-title">Triggered by devices</h4>
+        <div id="automationListenEditor"></div>
+        <h4 class="upload-title">Condition</h4>
+        <div id="automationConditionEditor"></div>
+        <h4 class="upload-title">Actions</h4>
+        <div id="automationActionsEditor"></div>
+        <input id="automationImportFile" type="file" accept="application/json,.json" hidden onchange="onAutomationImportFileSelected(event)">
+        <div class="dialog-actions">
+            <button type="button" class="btn btn-secondary btn-inline" onclick="exportAutomationJson()">Export</button>
+            <button type="button" id="automationImportBtn" class="btn btn-secondary btn-inline" onclick="chooseAutomationImportFile()">Import</button>
+            <button type="button" class="btn btn-primary" onclick="saveAutomationEditDialog()">Save</button>
+            <button type="button" class="btn btn-secondary" onclick="openAutomationDeleteConfirm()">Delete</button>
+            <button type="button" class="btn btn-secondary" onclick="requestCloseAutomationEditDialog()">Cancel</button>
+        </div>
+    </div>
+</div>
+<div id="automationDeleteConfirmDialog" class="dialog-overlay dialog-overlay-front" hidden>
+    <div class="dialog-panel" role="dialog" aria-label="Delete automation">
+        <h3 class="upload-title">Delete automation</h3>
+        <p class="field-hint">Delete this automation permanently?</p>
+        <div class="dialog-actions">
+            <button type="button" class="btn btn-primary" onclick="confirmDeleteAutomation()">Delete</button>
+            <button type="button" class="btn btn-secondary" onclick="closeAutomationDeleteConfirm()">Cancel</button>
         </div>
     </div>
 </div>

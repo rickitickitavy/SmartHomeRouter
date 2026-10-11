@@ -6,6 +6,7 @@
 #include "FoundDeviceList.h"
 #include "UserStore.h"
 #include "ConsoleStore.h"
+#include "AutomationStore.h"
 
 class WebConsole {
 public:
@@ -23,7 +24,12 @@ public:
     using DevicesRestoredFn = bool (*)(const uint8_t (*removedIeees)[8], int removedCount);
     using UsersRestoredFn = bool (*)(const char (*removedNames)[USER_NAME_MAX], int removedCount);
 
-    explicit WebConsole(SettingsManager *settingsManager, UserStore *userStore, ConsoleStore *consoleStore);
+    explicit WebConsole(
+        SettingsManager *settingsManager,
+        UserStore *userStore,
+        ConsoleStore *consoleStore,
+        AutomationStore *automationStore
+    );
 
     void begin();
     void rebind();
@@ -53,6 +59,7 @@ private:
     SettingsManager *settingsManager;
     UserStore *userStore;
     ConsoleStore *consoleStore;
+    AutomationStore *automationStore;
     FoundDeviceList *foundDevices = nullptr;
     SearchStartFn startSearch = nullptr;
     SearchStopFn stopSearch = nullptr;
@@ -129,9 +136,17 @@ private:
     void handleConsoleGet(AsyncWebServerRequest *request);
     void handleConsolePut(AsyncWebServerRequest *request);
     void handleConsoleDelete(AsyncWebServerRequest *request);
+    void handleAutomationsGet(AsyncWebServerRequest *request);
+    void handleAutomationsPost(AsyncWebServerRequest *request);
+    void handleAutomationsStoreGet(AsyncWebServerRequest *request);
+    void handleAutomationsRestorePost(AsyncWebServerRequest *request);
+    void handleAutomationGet(AsyncWebServerRequest *request);
+    void handleAutomationPut(AsyncWebServerRequest *request);
+    void handleAutomationDelete(AsyncWebServerRequest *request);
     void fillUserFromJson(const char *json, UserRecord *user);
     void sendUserWriteResult(AsyncWebServerRequest *request, UserWriteResult result);
     void sendConsoleWriteResult(AsyncWebServerRequest *request, ConsoleWriteResult result);
+    void sendAutomationWriteResult(AsyncWebServerRequest *request, AutomationWriteResult result);
     void appendMqttSettingsJson(String &json);
     bool applyMqttJson(const char *json, String *errorText);
     bool applyZigbeeJson(const char *json, String *errorText);

@@ -6,6 +6,7 @@
 
 #include <new>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 ZigbeeSpiProxy ZIGBEE_SPI_PROXY;
@@ -135,8 +136,22 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
         LOGGER.warning("Host channel cache full for device");
         return;
     }
+    const bool valueChanged = strcmp(statusSlot->state, message) != 0;
     strncpy(statusSlot->state, message, sizeof(statusSlot->state) - 1);
     statusSlot->state[sizeof(statusSlot->state) - 1] = '\0';
+    if (valueChanged && statusValueChanged != nullptr) {
+        uint16_t clusterOr0 = 0;
+        const char *clusterMark = strstr(message, "cl=0x");
+        if (clusterMark != nullptr) {
+            clusterOr0 = (uint16_t)strtoul(clusterMark + 5, nullptr, 16);
+        } else {
+            clusterMark = strstr(message, "cl=");
+            if (clusterMark != nullptr) {
+                clusterOr0 = (uint16_t)strtoul(clusterMark + 3, nullptr, 0);
+            }
+        }
+        statusValueChanged(slot->ieee, endpoint, clusterOr0, statusSlot->state);
+    }
 }
 
 ZigbeeSpiProxy::CachedDevice *ZigbeeSpiProxy::allocSlot(const uint8_t ieee[8]) {
@@ -327,6 +342,49 @@ void ZigbeeSpiProxy::setRegistryPullDoneHandler(void (*handler)()) {
 
 void ZigbeeSpiProxy::setDeviceLiveChangedHandler(DeviceLiveChangedFn handler) {
     deviceLiveChanged = handler;
+}
+
+void ZigbeeSpiProxy::setStatusValueChangedHandler(StatusValueChangedFn handler) {
+    statusValueChanged = handler;
+}
+
+bool ZigbeeSpiProxy::copyEndpointState(
+    const uint8_t ieee[8],
+    uint8_t endpoint,
+    char *out,
+    size_t outLen
+) const {
+    if (out == nullptr || outLen == 0 || ieee == nullptr) {
+        return false;
+    }
+    out[0] = '\0';
+    const CachedDevice *slot = findByIeee(ieee);
+    if (slot == nullptr || slot->channels == nullptr) {
+        return false;
+    }
+    const EndpointStatus *best = nullptr;
+    for (uint8_t index = 0; index < slot->channelCapacity; index++) {
+        const EndpointStatus *candidate = &slot->channels[index];
+        if (candidate->state[0] == '\0') {
+            continue;
+        }
+        if (endpoint == 0) {
+            if (best == nullptr || candidate->endpoint < best->endpoint) {
+                best = candidate;
+            }
+            continue;
+        }
+        if (candidate->endpoint == endpoint) {
+            best = candidate;
+            break;
+        }
+    }
+    if (best == nullptr) {
+        return false;
+    }
+    strncpy(out, best->state, outLen - 1);
+    out[outLen - 1] = '\0';
+    return true;
 }
 
 void ZigbeeSpiProxy::notifyDeviceLiveChanged(const uint8_t ieee[8]) {
