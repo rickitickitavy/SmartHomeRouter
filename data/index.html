@@ -188,14 +188,28 @@
             }
         }
 
-        function formatMqttLocalStatus(statusId) {
-            if (statusId === "listening") {
-                return "listening";
+        function formatMqttServerType(serverType) {
+            if (serverType === "remote" || serverType === "local" || serverType === "disable") {
+                return serverType;
             }
-            if (statusId === "down") {
-                return "down";
+            return "—";
+        }
+
+        function formatMqttRuntimeStatus(payload) {
+            if (payload && payload.mqttStatus) {
+                return String(payload.mqttStatus);
             }
-            return "unused";
+            var serverType = payload && payload.mqttServerType;
+            if (serverType === "disable") {
+                return "off";
+            }
+            if (serverType === "local") {
+                return payload && payload.mqttLocalStatus === "listening" ? "listening" : "off";
+            }
+            if (serverType === "remote") {
+                return payload && payload.mqttConnected ? "connected" : "not connected";
+            }
+            return "—";
         }
 
         function applyGatewayStatus(payload) {
@@ -210,7 +224,8 @@
             var slaveVersion = payload && payload.slaveVersion ? payload.slaveVersion : "";
             applyChipFirmwareVersion(masterVersion);
             setStatusText("statusSlaveFirmwareVersion", slaveVersion ? slaveVersion : "—");
-            setStatusText("statusMqttLocal", formatMqttLocalStatus(payload && payload.mqttLocalStatus));
+            setStatusText("statusMqttMode", formatMqttServerType(payload && payload.mqttServerType));
+            setStatusText("statusMqttStatus", formatMqttRuntimeStatus(payload));
             setStatusText(
                 "statusMqttTopics",
                 payload && payload.mqttTopicCount != null ? String(payload.mqttTopicCount) : "—"
@@ -4257,15 +4272,7 @@
 
         function placeRenderGrid(host, consoleLayout) {
             var grid = document.createElement("div");
-            grid.className = "console-grid";
-            var columns = parseInt(consoleLayout && consoleLayout.columns, 10);
-            if (!columns || columns < 1) {
-                columns = 2;
-            }
-            if (columns > 6) {
-                columns = 6;
-            }
-            grid.style.gridTemplateColumns = "repeat(" + String(columns) + ", minmax(0, 1fr))";
+            grid.className = "console-grid console-grid-view";
             var widgets = consoleLayout && consoleLayout.widgets;
             if (!widgets || !widgets.length) {
                 var emptyWidget = document.createElement("p");
@@ -7189,8 +7196,12 @@
                     <div class="status-group">
                         <h3 class="group-title">MQTT</h3>
                         <div class="status-row">
-                            <span class="status-row-label">Local status</span>
-                            <p id="statusMqttLocal" class="status-value">—</p>
+                            <span class="status-row-label">Current mode</span>
+                            <p id="statusMqttMode" class="status-value">—</p>
+                        </div>
+                        <div class="status-row">
+                            <span class="status-row-label">Status</span>
+                            <p id="statusMqttStatus" class="status-value">—</p>
                         </div>
                         <div class="status-row">
                             <span class="status-row-label">Active topics</span>
@@ -7819,68 +7830,70 @@
             </div>
         </div>
 <div id="userDialog" class="dialog-overlay" hidden>
-    <div class="dialog-panel" role="dialog" aria-label="User">
+    <div class="dialog-panel user-dialog-panel" role="dialog" aria-label="User">
         <h3 id="userDialogTitle" class="upload-title">Add user</h3>
         <p id="userDialogError" class="save-error" hidden></p>
-        <div class="field">
-            <label for="userName">User name</label>
-            <input id="userName" type="text" autocomplete="off">
+        <div class="user-dialog-body">
+            <div class="field">
+                <label for="userName">User name</label>
+                <input id="userName" type="text" autocomplete="off">
+            </div>
+            <div class="field">
+                <label for="userPassword">Password</label>
+                <input id="userPassword" type="password" autocomplete="new-password">
+                <p class="field-hint">Leave empty when editing to keep the current password. The stored hash is never shown.</p>
+            </div>
+            <div class="user-dialog-roles">
+                <label class="field-check">
+                    <input id="userIsAdmin" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
+                    Admin
+                </label>
+                <label class="field-check">
+                    <input id="userEditDevices" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
+                    Edit devices
+                </label>
+                <label class="field-check">
+                    <input id="userAddDevices" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
+                    Add devices
+                </label>
+                <label class="field-check">
+                    <input id="userRemoveDevices" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
+                    Delete devices
+                </label>
+                <label class="field-check">
+                    <input id="userEditUsers" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
+                    Edit users
+                </label>
+                <label class="field-check">
+                    <input id="userEditConsoles" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
+                    Console editor
+                </label>
+                <label class="field-check">
+                    <input id="userControlDevices" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
+                    Other device control
+                </label>
+                <label class="field-check">
+                    <input id="userMonitor" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
+                    Monitor
+                </label>
+            </div>
+            <div id="userAssignedConsolesField" class="field">
+                <label>Assigned consoles</label>
+                <div id="userConsolesCheckboxes" class="user-consoles-checkboxes"></div>
+            </div>
+            <div class="field">
+                <label for="userTheme">Theme</label>
+                <select id="userTheme">
+                    <option value="dark">Dark</option>
+                    <option value="light">Light</option>
+                </select>
+            </div>
+            <label class="field-check">
+                <input id="userIsBlocked" type="checkbox">
+                Blocked
+            </label>
         </div>
-        <div class="field">
-            <label for="userPassword">Password</label>
-            <input id="userPassword" type="password" autocomplete="new-password">
-            <p class="field-hint">Leave empty when editing to keep the current password. The stored hash is never shown.</p>
-        </div>
-        <div class="user-dialog-roles">
-            <label class="field-check">
-                <input id="userIsAdmin" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
-                Admin
-            </label>
-            <label class="field-check">
-                <input id="userEditDevices" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
-                Edit devices
-            </label>
-            <label class="field-check">
-                <input id="userAddDevices" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
-                Add devices
-            </label>
-            <label class="field-check">
-                <input id="userRemoveDevices" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
-                Delete devices
-            </label>
-            <label class="field-check">
-                <input id="userEditUsers" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
-                Edit users
-            </label>
-            <label class="field-check">
-                <input id="userEditConsoles" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
-                Console editor
-            </label>
-            <label class="field-check">
-                <input id="userControlDevices" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
-                Other device control
-            </label>
-            <label class="field-check">
-                <input id="userMonitor" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
-                Monitor
-            </label>
-        </div>
-        <div id="userAssignedConsolesField" class="field">
-            <label>Assigned consoles</label>
-            <div id="userConsolesCheckboxes" class="user-consoles-checkboxes"></div>
-        </div>
-        <div class="field">
-            <label for="userTheme">Theme</label>
-            <select id="userTheme">
-                <option value="dark">Dark</option>
-                <option value="light">Light</option>
-            </select>
-        </div>
-        <label class="field-check">
-            <input id="userIsBlocked" type="checkbox">
-            Blocked
-        </label>
-        <div class="dialog-actions">
+        <div class="dialog-actions user-dialog-actions">
             <button type="button" id="userSaveBtn" class="btn btn-primary" onclick="saveUserDialog()">Save</button>
             <button type="button" id="userDeleteBtn" class="btn btn-secondary" hidden onclick="openUserDeleteConfirm()">Delete</button>
             <button type="button" class="btn btn-secondary" onclick="requestCloseUserDialog()">Cancel</button>

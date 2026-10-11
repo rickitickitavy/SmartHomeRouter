@@ -617,15 +617,7 @@
 
         function renderConsoleGrid(host, consoleLayout) {
             var grid = document.createElement("div");
-            grid.className = "console-grid";
-            var columns = parseInt(consoleLayout && consoleLayout.columns, 10);
-            if (!columns || columns < 1) {
-                columns = 2;
-            }
-            if (columns > 6) {
-                columns = 6;
-            }
-            grid.style.gridTemplateColumns = "repeat(" + String(columns) + ", minmax(0, 1fr))";
+            grid.className = "console-grid console-grid-view";
             var widgets = consoleLayout && consoleLayout.widgets;
             if (!widgets || !widgets.length) {
                 var emptyWidget = document.createElement("p");

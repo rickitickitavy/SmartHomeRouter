@@ -705,21 +705,32 @@ static String hostGatewayStatusJson() {
         }
     }
     const GlobalSettings *globalSettings = settingsManager != nullptr ? settingsManager->getSettings() : nullptr;
+    const MqttServerType mqttServerType =
+        globalSettings != nullptr ? globalSettings->mqtt.serverType : MqttServerTypeDisable;
     const char *mqttLocalStatus = "unused";
+    const char *mqttStatus = "off";
+    const bool mqttClientConnected = mqttClient != nullptr && mqttClient->isConnected();
     int mqttTopicCount = topicMap != nullptr ? topicMap->uniqueMqttTopicCount() : 0;
     int mqttConnectionCount = 0;
-    if (globalSettings != nullptr && globalSettings->mqtt.serverType == MqttServerTypeLocal) {
+    if (mqttServerType == MqttServerTypeLocal) {
         if (mqttBroker != nullptr && mqttBroker->isListening()) {
             mqttLocalStatus = "listening";
+            mqttStatus = "listening";
             mqttConnectionCount = mqttBroker->connectionCount();
-            if (mqttClient != nullptr && mqttClient->isConnected()) {
+            if (mqttClientConnected) {
                 mqttConnectionCount++;
             }
         } else {
             mqttLocalStatus = "down";
+            mqttStatus = "off";
         }
-    } else if (mqttClient != nullptr && mqttClient->isConnected()) {
-        mqttConnectionCount = 1;
+    } else if (mqttServerType == MqttServerTypeRemote) {
+        mqttStatus = mqttClientConnected ? "connected" : "not connected";
+        if (mqttClientConnected) {
+            mqttConnectionCount = 1;
+        }
+    } else {
+        mqttStatus = "off";
     }
 
     const char *wifiModeText = "AP";
@@ -752,7 +763,11 @@ static String hostGatewayStatusJson() {
     json += ZIGBEE_SPI_PROXY.pairingActive() ? "true" : "false";
     json += ",\"onlineSec\":";
     json += String((unsigned long)(millis() / 1000UL));
-    json += ",\"mqttLocalStatus\":\"";
+    json += ",\"mqttServerType\":\"";
+    json += mqttServerTypeName(mqttServerType);
+    json += "\",\"mqttStatus\":\"";
+    json += mqttStatus;
+    json += "\",\"mqttLocalStatus\":\"";
     json += mqttLocalStatus;
     json += "\",\"mqttTopicCount\":";
     json += String(mqttTopicCount);

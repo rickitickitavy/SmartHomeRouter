@@ -476,15 +476,19 @@ The Devices group SHALL show registered device count, online device count, packe
 - **THEN** Devices shows count 3, online 1, packets sent 4, and packets received 9
 
 ### Requirement: Status MQTT group
-The MQTT group SHALL show local broker status, active MQTT topic count, and MQTT connection count. Connection count SHALL include remote LAN clients connected to the onboard broker when it is listening, plus the host client when it is connected.
+The MQTT group SHALL show current mode (`disable`, `remote`, or `local`), runtime status, active MQTT topic count, and MQTT connection count. Runtime status SHALL be `connected` or `not connected` when mode is remote, `listening` or `off` when mode is local, and `off` when mode is disable. Connection count SHALL include remote LAN clients connected to the onboard broker when it is listening, plus the host client when it is connected.
 
 #### Scenario: Local broker with a remote client
 - **WHEN** SERVER TYPE is local, the onboard broker is listening, the host client is connected, and one other MQTT client is connected
-- **THEN** MQTT shows local status as listening, a topic count, and connections 2
+- **THEN** MQTT shows current mode local, status listening, a topic count, and connections 2
 
 #### Scenario: Broker unused
 - **WHEN** SERVER TYPE is disable
-- **THEN** MQTT local status is not listening (or unused) and connections is 0
+- **THEN** MQTT shows current mode disable, status off, and connections is 0
+
+#### Scenario: Remote disconnected
+- **WHEN** SERVER TYPE is remote and the host client is not connected
+- **THEN** MQTT shows current mode remote and status not connected
 
 ### Requirement: Status WiFi group
 The WiFi group SHALL show Wi-Fi mode, BSSID (the same network name field as the WiFi card), and Wi-Fi signal strength. When the host is STA-associated, signal strength SHALL be the current STA RSSI. When there is no STA link, signal strength SHALL show an empty or placeholder value, not a stale STA RSSI.
@@ -977,3 +981,14 @@ In the Consoles edit dialog, adding a binding MUST allow choosing a registered d
 #### Scenario: Add automation binding
 - **WHEN** the editor adds automation `yard-light` to a widget and saves
 - **THEN** the console JSON includes that automation binding and the user page shows its On/Off row
+
+### Requirement: Place view-mode consoles match adaptive user layout
+When the gateway console shows an assigned console in Place (or equivalent operator view mode), that view-mode surface MUST use the same full-viewport-friendly shell sizing and the same one- vs two-column widget width rules as the simple-user control page. The Consoles editor dialog MAY keep its authoring grid and saved `columns` for edit and drag-reorder.
+
+#### Scenario: Place narrow width stacks widgets
+- **WHEN** an operator opens Place view for a console whose content width is under 13 cm
+- **THEN** visible widgets stack in one full-width column as on the simple-user page
+
+#### Scenario: Editor keeps authoring columns
+- **WHEN** an editor opens the Consoles edit dialog for a console saved with three columns
+- **THEN** the edit grid still uses that authoring column count for layout and drag targets
