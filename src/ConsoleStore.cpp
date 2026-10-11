@@ -1,4 +1,5 @@
 #include "ConsoleStore.h"
+#include "AutomationStore.h"
 #include "UserStore.h"
 #include "JsonField.h"
 #include "Logger.h"
@@ -56,6 +57,7 @@ void ConsoleStore::freeBindingList(ConsoleBinding *&listHead) {
     while (listHead != nullptr) {
         ConsoleBinding *next = listHead->next;
         free(listHead->ieeeText);
+        free(listHead->automationName);
         free(listHead->title);
         free(listHead->unit);
         free(listHead);
@@ -225,10 +227,15 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         }
         memset(binding, 0, sizeof(*binding));
         String ieeeText;
+        String automationName;
         String title;
         String unit;
         int channel = 1;
         int decimals = -1;
+        extractJsonString(object.c_str(), "automation", automationName);
+        if (automationName.length() == 0) {
+            extractJsonString(object.c_str(), "automationName", automationName);
+        }
         extractJsonString(object.c_str(), "ieee", ieeeText);
         if (ieeeText.length() == 0) {
             extractJsonString(object.c_str(), "deviceIeee", ieeeText);
@@ -249,11 +256,32 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         if (decimals > 3) {
             decimals = 3;
         }
+        const bool isAutomation = automationName.length() > 0;
+        if (isAutomation) {
+            if (!AutomationStore::isNameSafe(automationName.c_str())) {
+                free(binding);
+                freeBindingList(*outBindings);
+                return false;
+            }
+            ieeeText = "";
+            unit = "";
+            decimals = -1;
+            channel = 1;
+        } else if (ieeeText.length() == 0) {
+            free(binding);
+            freeBindingList(*outBindings);
+            return false;
+        }
         binding->ieeeText = duplicateBoundedString(ieeeText.c_str(), IEEE_TEXT_MAX - 1);
+        binding->automationName = isAutomation
+            ? duplicateBoundedString(automationName.c_str(), AUTOMATION_NAME_MAX - 1)
+            : nullptr;
         binding->title = duplicateBoundedString(title.c_str(), CONSOLE_BINDING_TITLE_MAX - 1);
         binding->unit = duplicateBoundedString(unit.c_str(), CONSOLE_UNIT_MAX - 1);
-        if (binding->ieeeText == nullptr || binding->title == nullptr || binding->unit == nullptr) {
+        if (binding->ieeeText == nullptr || binding->title == nullptr || binding->unit == nullptr
+            || (isAutomation && binding->automationName == nullptr)) {
             free(binding->ieeeText);
+            free(binding->automationName);
             free(binding->title);
             free(binding->unit);
             free(binding);
@@ -676,16 +704,25 @@ void ConsoleStore::appendConsoleFull(String &json, const ConsoleRecord *console)
                     json += ",";
                 }
                 firstBinding = false;
-                json += "{\"ieee\":\"";
-                appendJsonEscaped(json, binding->ieeeText != nullptr ? binding->ieeeText : "", IEEE_TEXT_MAX);
-                json += "\",\"channel\":";
-                json += String(binding->channel);
-                json += ",\"title\":\"";
-                appendJsonEscaped(json, binding->title != nullptr ? binding->title : "", CONSOLE_BINDING_TITLE_MAX);
-                json += "\",\"unit\":\"";
-                appendJsonEscaped(json, binding->unit != nullptr ? binding->unit : "", CONSOLE_UNIT_MAX);
-                json += "\",\"decimals\":";
-                json += String((int)binding->decimals);
+                json += "{";
+                if (binding->automationName != nullptr && binding->automationName[0] != '\0') {
+                    json += "\"automation\":\"";
+                    appendJsonEscaped(json, binding->automationName, AUTOMATION_NAME_MAX);
+                    json += "\",\"title\":\"";
+                    appendJsonEscaped(json, binding->title != nullptr ? binding->title : "", CONSOLE_BINDING_TITLE_MAX);
+                    json += "\"";
+                } else {
+                    json += "\"ieee\":\"";
+                    appendJsonEscaped(json, binding->ieeeText != nullptr ? binding->ieeeText : "", IEEE_TEXT_MAX);
+                    json += "\",\"channel\":";
+                    json += String(binding->channel);
+                    json += ",\"title\":\"";
+                    appendJsonEscaped(json, binding->title != nullptr ? binding->title : "", CONSOLE_BINDING_TITLE_MAX);
+                    json += "\",\"unit\":\"";
+                    appendJsonEscaped(json, binding->unit != nullptr ? binding->unit : "", CONSOLE_UNIT_MAX);
+                    json += "\",\"decimals\":";
+                    json += String((int)binding->decimals);
+                }
                 json += "}";
             }
         }

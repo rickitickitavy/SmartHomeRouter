@@ -64,6 +64,49 @@ bool AutomationStore::isNameSafe(const char *name) {
     return true;
 }
 
+bool AutomationStore::isCurrentTimeIeee(const char *ieeeText) {
+    return ieeeText != nullptr && strcmp(ieeeText, AUTOMATION_IEEE_CURRENT_TIME) == 0;
+}
+
+bool AutomationStore::isTimeOfDayValue(const char *value) {
+    if (value == nullptr || strlen(value) != 8) {
+        return false;
+    }
+    if (value[2] != ':' || value[5] != ':') {
+        return false;
+    }
+    for (int index = 0; index < 8; index++) {
+        if (index == 2 || index == 5) {
+            continue;
+        }
+        if (value[index] < '0' || value[index] > '9') {
+            return false;
+        }
+    }
+    const int hours = (value[0] - '0') * 10 + (value[1] - '0');
+    const int minutes = (value[3] - '0') * 10 + (value[4] - '0');
+    const int seconds = (value[6] - '0') * 10 + (value[7] - '0');
+    return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59 && seconds >= 0 && seconds <= 59;
+}
+
+bool AutomationStore::conditionUsesCurrentTime(const AutomationCondition *node) {
+    if (node == nullptr) {
+        return false;
+    }
+    for (const AutomationCondition *sibling = node; sibling != nullptr; sibling = sibling->nextSibling) {
+        if (sibling->kind == AutomationConditionComparison) {
+            if (isCurrentTimeIeee(sibling->ieeeText)) {
+                return true;
+            }
+            continue;
+        }
+        if (conditionUsesCurrentTime(sibling->children)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void AutomationStore::freeListenerList(AutomationListener *&listHead) {
     while (listHead != nullptr) {
         AutomationListener *next = listHead->next;
@@ -104,6 +147,7 @@ void AutomationStore::freeAutomation(AutomationRecord *automation) {
     }
     free(automation->name);
     free(automation->title);
+    free(automation->group);
     freeListenerList(automation->listen);
     freeConditionTree(automation->condition);
     freeActionList(automation->actions);
@@ -246,11 +290,43 @@ bool AutomationStore::conditionIsComplete(const AutomationCondition *node) {
     return false;
 }
 
+static bool validateConditionTree(const AutomationCondition *node) {
+    if (node == nullptr) {
+        return true;
+    }
+    for (const AutomationCondition *sibling = node; sibling != nullptr; sibling = sibling->nextSibling) {
+        if (sibling->kind == AutomationConditionComparison) {
+            if (AutomationStore::isCurrentTimeIeee(sibling->ieeeText)) {
+                if ((sibling->cmp != AutomationCmpGreater && sibling->cmp != AutomationCmpLess)
+                    || !AutomationStore::isTimeOfDayValue(sibling->value)) {
+                    return false;
+                }
+            }
+            continue;
+        }
+        if (!validateConditionTree(sibling->children)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool AutomationStore::validateAutomation(const AutomationRecord *automation) {
     if (automation == nullptr || !isNameSafe(automation->name)) {
         return false;
     }
+    if (!validateConditionTree(automation->condition)) {
+        return false;
+    }
+    if (automation->timer.use
+        && (automation->timer.autoRestart || automation->timer.startOnBoot)
+        && automation->timer.defaultTime == 0) {
+        return false;
+    }
     if (automation->timer.use) {
+        return true;
+    }
+    if (conditionIsComplete(automation->condition) && conditionUsesCurrentTime(automation->condition)) {
         return true;
     }
     if (automation->listen == nullptr) {
@@ -763,12 +839,17 @@ AutomationWriteResult AutomationStore::parseOneAutomation(
     *outAutomation = nullptr;
     String nameText;
     String titleText;
+    String groupText;
     const bool haveName = extractJsonString(objectJson, "name", nameText);
     extractJsonString(objectJson, "title", titleText);
+    extractJsonString(objectJson, "group", groupText);
     if (requireName && (!haveName || !isNameSafe(nameText.c_str()))) {
         return AutomationWriteBadName;
     }
     if (haveName && !isNameSafe(nameText.c_str())) {
+        return AutomationWriteBadName;
+    }
+    if (groupText.length() > 0 && !isNameSafe(groupText.c_str())) {
         return AutomationWriteBadName;
     }
     if (!heapAllowsAllocation(sizeof(AutomationRecord))) {
@@ -787,13 +868,20 @@ AutomationWriteResult AutomationStore::parseOneAutomation(
         }
     }
     automation->title = duplicateBoundedString(titleText.c_str(), AUTOMATION_TITLE_MAX - 1);
-    if (automation->title == nullptr) {
+    automation->group = duplicateBoundedString(groupText.c_str(), AUTOMATION_GROUP_MAX - 1);
+    if (automation->title == nullptr || automation->group == nullptr) {
         freeAutomation(automation);
         return AutomationWriteOutOfMemory;
     }
     bool active = false;
     extractJsonBool(objectJson, "active", active);
     automation->active = active;
+    int minTriggerIntervalSec = 0;
+    if (extractJsonInt(objectJson, "minTriggerIntervalSec", minTriggerIntervalSec) && minTriggerIntervalSec > 0) {
+        automation->minTriggerIntervalSec = (uint32_t)minTriggerIntervalSec;
+    } else {
+        automation->minTriggerIntervalSec = 0;
+    }
     if (!parseTimer(objectJson, automation->timer)
         || !parseListeners(objectJson, &automation->listen)
         || !parseActions(objectJson, &automation->actions)) {
@@ -911,7 +999,8 @@ AutomationWriteResult AutomationStore::createAutomation(
     memset(automation, 0, sizeof(*automation));
     automation->name = duplicateBoundedString(name, AUTOMATION_NAME_MAX - 1);
     automation->title = duplicateBoundedString(title != nullptr ? title : "", AUTOMATION_TITLE_MAX - 1);
-    if (automation->name == nullptr || automation->title == nullptr) {
+    automation->group = duplicateBoundedString("", AUTOMATION_GROUP_MAX - 1);
+    if (automation->name == nullptr || automation->title == nullptr || automation->group == nullptr) {
         freeAutomation(automation);
         return AutomationWriteOutOfMemory;
     }
@@ -975,12 +1064,15 @@ AutomationWriteResult AutomationStore::replaceFromJson(const char *name, const c
         const bool wasActive = existing->active;
         free(existing->name);
         free(existing->title);
+        free(existing->group);
         freeListenerList(existing->listen);
         freeConditionTree(existing->condition);
         freeActionList(existing->actions);
         existing->name = parsed->name;
         existing->title = parsed->title;
+        existing->group = parsed->group;
         existing->active = parsed->active;
+        existing->minTriggerIntervalSec = parsed->minTriggerIntervalSec;
         existing->timer.use = parsed->timer.use;
         existing->timer.autoRestart = parsed->timer.autoRestart;
         existing->timer.startOnBoot = parsed->timer.startOnBoot;
@@ -990,12 +1082,13 @@ AutomationWriteResult AutomationStore::replaceFromJson(const char *name, const c
         existing->actions = parsed->actions;
         parsed->name = nullptr;
         parsed->title = nullptr;
+        parsed->group = nullptr;
         parsed->listen = nullptr;
         parsed->condition = nullptr;
         parsed->actions = nullptr;
         freeAutomation(parsed);
-        if (!wasActive && existing->active && existing->timer.use && existing->timer.autoRestart
-            && existing->timer.defaultTime > 0) {
+        if (!wasActive && existing->active && existing->timer.use && existing->timer.defaultTime > 0
+            && (existing->timer.autoRestart || existing->timer.startOnBoot)) {
             existing->timer.timeLeft = existing->timer.defaultTime;
             existing->timer.counting = true;
         }
@@ -1026,7 +1119,8 @@ AutomationWriteResult AutomationStore::replaceFromJson(const char *name, const c
         tail->next = parsed;
     }
     storedCount++;
-    if (parsed->active && parsed->timer.use && parsed->timer.autoRestart && parsed->timer.defaultTime > 0) {
+    if (parsed->active && parsed->timer.use && parsed->timer.defaultTime > 0
+        && (parsed->timer.autoRestart || parsed->timer.startOnBoot)) {
         parsed->timer.timeLeft = parsed->timer.defaultTime;
         parsed->timer.counting = true;
     }
@@ -1076,13 +1170,16 @@ bool AutomationStore::setActive(const char *name, bool active, bool *becameActiv
         if (becameActiveOut != nullptr) {
             *becameActiveOut = true;
         }
-        if (automation->timer.use && automation->timer.autoRestart && automation->timer.defaultTime > 0) {
+        automation->lastConditionTrue = false;
+        if (automation->timer.use && automation->timer.defaultTime > 0
+            && (automation->timer.autoRestart || automation->timer.startOnBoot)) {
             automation->timer.timeLeft = automation->timer.defaultTime;
             automation->timer.counting = true;
         }
     }
     if (!active) {
         stopTimer(automation);
+        automation->lastConditionTrue = false;
     }
     if (persistEnabled) {
         requestPersist();
@@ -1192,8 +1289,12 @@ void AutomationStore::appendAutomationFull(String &json, const AutomationRecord 
     appendJsonEscaped(json, automation->name, AUTOMATION_NAME_MAX);
     json += "\",\"title\":\"";
     appendJsonEscaped(json, automation->title, AUTOMATION_TITLE_MAX);
+    json += "\",\"group\":\"";
+    appendJsonEscaped(json, automation->group != nullptr ? automation->group : "", AUTOMATION_GROUP_MAX);
     json += "\",\"active\":";
     json += automation->active ? "true" : "false";
+    json += ",\"minTriggerIntervalSec\":";
+    json += String((unsigned long)automation->minTriggerIntervalSec);
     json += ",\"timer\":{\"use\":";
     json += automation->timer.use ? "true" : "false";
     json += ",\"autoRestart\":";
@@ -1270,8 +1371,12 @@ String AutomationStore::listSummaryJson() const {
         appendJsonEscaped(json, automation->name, AUTOMATION_NAME_MAX);
         json += "\",\"title\":\"";
         appendJsonEscaped(json, automation->title, AUTOMATION_TITLE_MAX);
+        json += "\",\"group\":\"";
+        appendJsonEscaped(json, automation->group != nullptr ? automation->group : "", AUTOMATION_GROUP_MAX);
         json += "\",\"active\":";
         json += automation->active ? "true" : "false";
+        json += ",\"minTriggerIntervalSec\":";
+        json += String((unsigned long)automation->minTriggerIntervalSec);
         json += ",\"timer\":{\"use\":";
         json += automation->timer.use ? "true" : "false";
         json += ",\"startOnBoot\":";

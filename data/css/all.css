@@ -4,6 +4,7 @@ html[data-theme="light"] {
     --accent-soft: #ede8f8;
     --bg: #e8e8e8;
     --surface: #ffffff;
+    --surface12: #d0d0d0;
     --border: #c8c8c8;
     --text: #1a1a1a;
     --muted: #5a5a5a;
@@ -17,6 +18,7 @@ html[data-theme="light"] {
     --row-hover: #d8d0ef;
     --row-selected: #d4cce8;
     --row-selected-bar: #8f7bb8;
+    --table-header: #d5d0e4;
     --radius: 8px;
     --gap: 0.75rem;
     --sidebar-width: 7.125rem;
@@ -28,6 +30,7 @@ html[data-theme="dark"] {
     --accent-soft: #1A2838;
     --bg: #0E141B;
     --surface: #18222D;
+    --surface12: #1e2a38;
     --border: #2C3A48;
     --text: #E4EAF0;
     --muted: #8A97A6;
@@ -41,6 +44,7 @@ html[data-theme="dark"] {
     --row-hover: #1E2C3A;
     --row-selected: #243648;
     --row-selected-bar: #6A9FD8;
+    --table-header: #243448;
 }
 
 *,
@@ -183,16 +187,20 @@ html, body {
 }
 
 .section-panel {
-    display: none;
+    display: none !important;
     flex-direction: column;
     gap: var(--gap);
 }
 
 .section-panel.active {
-    display: flex;
+    display: flex !important;
     flex: 1;
     min-height: 0;
     overflow: auto;
+}
+
+.main-panel > .section-panel:not(.active) {
+    display: none !important;
 }
 
 .settings-card.section-panel.active {
@@ -359,14 +367,39 @@ html, body {
     overflow: hidden;
 }
 
-#section-system.section-panel.active {
+#section-system.section-panel.active,
+#section-network.section-panel.active {
     overflow: hidden;
 }
 
-#system-tab-update.tab-panel.active {
+#section-network .network-tab-panel.tab-panel.active {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#section-network .network-tab-panel.tab-panel.active > .settings-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+#section-network .network-tab-panel.tab-panel.active > .page-footer {
+    flex: 0 0 auto;
+}
+
+#system-tab-update.tab-panel.active,
+#system-tab-maintenance.tab-panel.active {
     flex: 1;
     min-height: 0;
     overflow: auto;
+}
+
+#maintenanceAdminContent {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
 }
 
 #system-tab-log.tab-panel.active {
@@ -728,8 +761,13 @@ html, body {
     }
 }
 
-.field select {
+.field select,
+.dialog-panel select,
+#automationEditDialog select,
+#consoleDeviceDialog select,
+#consoleEditDialog select {
     width: 100%;
+    max-width: 100%;
     min-height: 44px;
     padding: 0.5rem 0.75rem;
     font-size: 1rem;
@@ -738,6 +776,9 @@ html, body {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 6px;
+    box-sizing: border-box;
+    appearance: menulist;
+    -webkit-appearance: menulist;
 }
 
 .field input:read-only,
@@ -783,6 +824,12 @@ html, body {
     padding: 0.5rem 0.6rem;
     border-bottom: 1px solid var(--border);
     word-break: break-all;
+}
+
+.data-table th {
+    background: var(--table-header);
+    color: var(--text);
+    font-weight: 700;
 }
 
 .data-table tbody tr {
@@ -1497,7 +1544,23 @@ html, body {
 }
 
 #automationEditDialog .console-edit-panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+#automationEditDialog .automation-edit-body {
+    flex: 1 1 auto;
+    min-height: 0;
     overflow: auto;
+}
+
+#automationEditDialog .automation-edit-actions {
+    flex: 0 0 auto;
+    margin-top: 0.5rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
 }
 
 #automationEditDialog .automation-timer-box {
@@ -1546,9 +1609,197 @@ html, body {
 
 #automationEditDialog .automation-add-btn {
     margin-top: 0.65rem;
-    background: color-mix(in srgb, var(--surface) 48%, white);
-    border-color: color-mix(in srgb, var(--border) 55%, white);
+    background: var(--surface12);
+    border-color: var(--border);
     color: var(--text);
+}
+
+#automationEditDialog .automation-add-btn:hover {
+    background: var(--surface12);
+}
+
+#automationEditDialog select,
+#automationEditDialog input[type="text"],
+#automationEditDialog input[type="number"],
+#automationEditDialog .automation-value-combo,
+#automationEditDialog .automation-value-combo select,
+#automationEditDialog .automation-value-combo input,
+#automationEditDialog .combo-field {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+#automationEditDialog .automation-value-combo {
+    display: block;
+}
+
+.combo-field {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    width: 100%;
+    min-height: 44px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-sizing: border-box;
+}
+
+.combo-field:focus-within {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-color: var(--accent);
+}
+
+.combo-field input[type="text"] {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 42px;
+    margin: 0;
+    padding: 0.5rem 0.75rem;
+    border: none;
+    border-radius: 6px 0 0 6px;
+    background: transparent;
+    color: var(--text);
+    font-size: 1rem;
+    font-family: inherit;
+    box-sizing: border-box;
+}
+
+.combo-field input[type="text"]:focus {
+    outline: none;
+}
+
+.combo-field-toggle {
+    flex: 0 0 2.5rem;
+    width: 2.5rem;
+    min-height: 42px;
+    margin: 0;
+    padding: 0;
+    border: none;
+    border-left: 1px solid var(--border);
+    border-radius: 0 6px 6px 0;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    position: relative;
+}
+
+.combo-field-toggle::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0.55rem;
+    height: 0.55rem;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: translate(-50%, -70%) rotate(45deg);
+}
+
+.combo-field.is-open .combo-field-toggle::before {
+    transform: translate(-50%, -30%) rotate(225deg);
+}
+
+.combo-field-list {
+    position: fixed;
+    z-index: 100;
+    margin: 0;
+    padding: 0.25rem 0;
+    list-style: none;
+    max-height: 12rem;
+    overflow: auto;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+    box-sizing: border-box;
+}
+
+.combo-field-list[hidden] {
+    display: none !important;
+}
+
+.combo-field-list:not([hidden]) {
+    display: block;
+}
+
+.combo-field-option {
+    padding: 0.55rem 0.75rem;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 1rem;
+}
+
+.combo-field-option:hover {
+    background: var(--row-hover);
+}
+
+.combo-field-option.is-empty {
+    color: var(--muted);
+    cursor: default;
+}
+
+.combo-field-option.is-empty:hover {
+    background: transparent;
+}
+
+#automationEditDialog .field input[type="text"].combo-field,
+#automationEditDialog .combo-field input[type="text"] {
+    width: auto;
+}
+
+#automationEditDialog #automationListenEditor > .field,
+#automationEditDialog #automationConditionEditor .field,
+#automationEditDialog #automationActionsEditor > .field {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.45rem;
+}
+
+#section-automation.section-panel.active {
+    overflow: hidden;
+}
+
+.settings-scroll.automation-section-layout {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 0;
+    min-height: 0;
+}
+
+.automation-group-panel {
+    flex: 0 0 15.75rem;
+    width: 15.75rem;
+    max-width: 15.75rem;
+    min-width: 15.75rem;
+    overflow: auto;
+    padding-right: 0.75rem;
+    border-right: 1px solid var(--border);
+}
+
+.automation-table-panel {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: auto;
+    padding-left: 0.75rem;
+}
+
+.automation-group-table {
+    width: 100%;
+}
+
+.automation-group-table td {
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.automation-group-table tr.is-selected td {
+    background: color-mix(in srgb, var(--accent, #6c5ce7) 28%, var(--surface));
 }
 
 @media (max-width: 900px) {
@@ -1631,3 +1882,4 @@ html, body {
 .formHeader2 {
     margin: 0.25rem 0 0;
     font-size: 1rem;
+}

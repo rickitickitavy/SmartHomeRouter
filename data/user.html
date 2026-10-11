@@ -22,6 +22,7 @@
         var assignedConsoles = [];
         var activeConsoleIndex = 0;
         var registeredDeviceRows = [];
+        var automationStatusByName = {};
         var LIVE_WS_PING_MS = 15000;
         var LIVE_WS_PONG_MS = 5000;
 
@@ -242,15 +243,18 @@
         }
 
         function loadUserConsoles() {
-            fetch("/api/consoles/mine", { cache: "no-store" }).then(function (response) {
-                return response.text().then(function (text) {
-                    if (!response.ok) {
-                        throw new Error(text || ("HTTP " + response.status));
-                    }
-                    return JSON.parse(text || "[]");
-                });
-            }).then(function (rows) {
-                assignedConsoles = Array.isArray(rows) ? rows : [];
+            Promise.all([
+                fetch("/api/consoles/mine", { cache: "no-store" }).then(function (response) {
+                    return response.text().then(function (text) {
+                        if (!response.ok) {
+                            throw new Error(text || ("HTTP " + response.status));
+                        }
+                        return JSON.parse(text || "[]");
+                    });
+                }),
+                loadAutomationStatuses()
+            ]).then(function (parts) {
+                assignedConsoles = Array.isArray(parts[0]) ? parts[0] : [];
                 if (activeConsoleIndex >= assignedConsoles.length) {
                     activeConsoleIndex = 0;
                 }
@@ -305,6 +309,40 @@
             panel.className = "tab-content user-console-tab";
             renderConsoleGrid(panel, assignedConsoles[activeConsoleIndex]);
             panelsHost.appendChild(panel);
+        }
+
+        function loadAutomationStatuses() {
+            return fetch("/api/automations", { cache: "no-store" }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error("automations unavailable");
+                }
+                return response.json();
+            }).then(function (rows) {
+                var map = {};
+                var list = Array.isArray(rows) ? rows : [];
+                var index;
+                for (index = 0; index < list.length; index++) {
+                    if (list[index] && list[index].name) {
+                        map[list[index].name] = !!list[index].active;
+                    }
+                }
+                automationStatusByName = map;
+            }).catch(function () {
+                automationStatusByName = {};
+            });
+        }
+
+        function setAutomationActive(name, active) {
+            return fetch("/api/automations/active", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: name, active: !!active })
+            }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error("active update failed");
+                }
+                automationStatusByName[name] = !!active;
+            });
         }
 
         function findRegisteredDevice(ieee) {
@@ -572,7 +610,9 @@
         }
 
         function refreshConsoleControls() {
-            renderConsoleTabs();
+            loadAutomationStatuses().finally(function () {
+                renderConsoleTabs();
+            });
         }
 
         function renderConsoleGrid(host, consoleLayout) {
@@ -663,10 +703,37 @@
             row.className = "console-device-row";
             var title = document.createElement("span");
             title.className = "console-device-row-title";
-            title.textContent = binding.title || binding.ieee || "Device";
+            title.textContent = binding.title || binding.automation || binding.ieee || "Device";
             row.appendChild(title);
             var controls = document.createElement("div");
             controls.className = "console-device-row-controls";
+            if (binding && binding.automation) {
+                var automationName = binding.automation;
+                var known = Object.prototype.hasOwnProperty.call(automationStatusByName, automationName);
+                var automationOn = known && !!automationStatusByName[automationName];
+                var automationSwitch = document.createElement("button");
+                automationSwitch.type = "button";
+                automationSwitch.className = "console-switch"
+                    + (automationOn ? " is-on" : "")
+                    + (known ? "" : " is-disabled");
+                automationSwitch.setAttribute("aria-label", "Automation on off");
+                if (!known) {
+                    automationSwitch.disabled = true;
+                } else {
+                    automationSwitch.onclick = (function (name, currentlyOn) {
+                        return function () {
+                            setAutomationActive(name, !currentlyOn).then(function () {
+                                refreshConsoleControls();
+                            }).catch(function () {
+                                refreshConsoleControls();
+                            });
+                        };
+                    })(automationName, automationOn);
+                }
+                controls.appendChild(automationSwitch);
+                row.appendChild(controls);
+                return row;
+            }
             var device = findRegisteredDevice(binding.ieee);
             if (!device) {
                 var unavailable = document.createElement("span");

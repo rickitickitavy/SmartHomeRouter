@@ -142,6 +142,7 @@ private:
     void handleAutomationsRestorePost(AsyncWebServerRequest *request);
     void handleAutomationGet(AsyncWebServerRequest *request);
     void handleAutomationPut(AsyncWebServerRequest *request);
+    void handleAutomationActivePost(AsyncWebServerRequest *request);
     void handleAutomationDelete(AsyncWebServerRequest *request);
     void fillUserFromJson(const char *json, UserRecord *user);
     void sendUserWriteResult(AsyncWebServerRequest *request, UserWriteResult result);

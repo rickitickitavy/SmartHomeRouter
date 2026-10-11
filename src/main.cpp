@@ -789,21 +789,19 @@ static String hostGatewayStatusJson() {
     }
     const size_t heapTotal = ESP.getHeapSize();
     const size_t heapFree = ESP.getFreeHeap();
-    const size_t heapUsed = heapTotal > heapFree ? heapTotal - heapFree : 0;
-    json += ",\"heapUsedKb\":";
-    json += String((unsigned long)((heapUsed + 512) / 1024));
-    json += ",\"heapUsedPercent\":";
-    json += heapTotal > 0 ? String((unsigned long)((heapUsed * 100UL) / heapTotal)) : String("0");
+    json += ",\"heapFreeKb\":";
+    json += String((unsigned long)((heapFree + 512) / 1024));
+    json += ",\"heapFreePercent\":";
+    json += heapTotal > 0 ? String((unsigned long)((heapFree * 100UL) / heapTotal)) : String("0");
     const bool havePsram = psramFound();
     const size_t psramTotal = havePsram ? ESP.getPsramSize() : 0;
     const size_t psramFree = havePsram ? ESP.getFreePsram() : 0;
-    const size_t psramUsed = psramTotal > psramFree ? psramTotal - psramFree : 0;
     json += ",\"psramPresent\":";
     json += havePsram ? "true" : "false";
-    json += ",\"psramUsedKb\":";
-    json += String((unsigned long)((psramUsed + 512) / 1024));
-    json += ",\"psramUsedPercent\":";
-    json += psramTotal > 0 ? String((unsigned long)((psramUsed * 100UL) / psramTotal)) : String("0");
+    json += ",\"psramFreeKb\":";
+    json += String((unsigned long)((psramFree + 512) / 1024));
+    json += ",\"psramFreePercent\":";
+    json += psramTotal > 0 ? String((unsigned long)((psramFree * 100UL) / psramTotal)) : String("0");
     json += "}";
     return json;
 }

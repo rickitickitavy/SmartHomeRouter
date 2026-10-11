@@ -89,19 +89,27 @@ bool AutomationEngine::compareValues(AutomationCompareOp op, const char *left, c
     const double rightNumber = strtod(right, &rightEnd);
     const bool bothNumeric =
         leftEnd != left && rightEnd != right && *leftEnd == '\0' && *rightEnd == '\0';
+    const bool bothTimeOfDay =
+        AutomationStore::isTimeOfDayValue(left) && AutomationStore::isTimeOfDayValue(right);
     switch (op) {
         case AutomationCmpEqual:
             return strcmp(left, right) == 0;
         case AutomationCmpGreater:
-            if (!bothNumeric) {
-                return false;
+            if (bothNumeric) {
+                return leftNumber > rightNumber;
             }
-            return leftNumber > rightNumber;
+            if (bothTimeOfDay) {
+                return strcmp(left, right) > 0;
+            }
+            return false;
         case AutomationCmpLess:
-            if (!bothNumeric) {
-                return false;
+            if (bothNumeric) {
+                return leftNumber < rightNumber;
             }
-            return leftNumber < rightNumber;
+            if (bothTimeOfDay) {
+                return strcmp(left, right) < 0;
+            }
+            return false;
         case AutomationCmpContains:
             return strstr(left, right) != nullptr;
         case AutomationCmpStarts:
@@ -148,11 +156,44 @@ bool AutomationEngine::resolveStatus(
     return out[0] != '\0';
 }
 
+bool AutomationEngine::formatCurrentTimeOfDay(char *out, size_t outLen) const {
+    if (out == nullptr || outLen < 9) {
+        return false;
+    }
+    const time_t wallClock = time(nullptr);
+    if (wallClock < 1700000000) {
+        out[0] = '\0';
+        return false;
+    }
+    struct tm timeInfo;
+    if (localtime_r(&wallClock, &timeInfo) == nullptr) {
+        out[0] = '\0';
+        return false;
+    }
+    snprintf(
+        out,
+        outLen,
+        "%02d:%02d:%02d",
+        timeInfo.tm_hour,
+        timeInfo.tm_min,
+        timeInfo.tm_sec
+    );
+    return true;
+}
+
 bool AutomationEngine::evaluateComparison(const AutomationCondition *condition) const {
     if (condition == nullptr) {
         return false;
     }
     char statusText[SPI_DEVICE_MESSAGE_MAX];
+    if (AutomationStore::isCurrentTimeIeee(condition->ieeeText)) {
+        if ((condition->cmp != AutomationCmpGreater && condition->cmp != AutomationCmpLess)
+            || !AutomationStore::isTimeOfDayValue(condition->value)
+            || !formatCurrentTimeOfDay(statusText, sizeof(statusText))) {
+            return false;
+        }
+        return compareValues(condition->cmp, statusText, condition->value);
+    }
     if (!resolveStatus(
             condition->ieeeText,
             condition->channel,
@@ -263,8 +304,26 @@ void AutomationEngine::runActions(AutomationRecord *automation) {
     actionDepth--;
 }
 
+bool AutomationEngine::isMinTriggerIntervalBlocking(const AutomationRecord *automation) const {
+    if (automation == nullptr || automation->minTriggerIntervalSec == 0) {
+        return false;
+    }
+    if (automation->lastActivationMs <= 1700000000UL) {
+        return false;
+    }
+    const time_t now = time(nullptr);
+    if (now <= 1700000000) {
+        return false;
+    }
+    const unsigned long elapsed = (unsigned long)now - automation->lastActivationMs;
+    return elapsed < (unsigned long)automation->minTriggerIntervalSec;
+}
+
 void AutomationEngine::evaluateAndMaybeRun(AutomationRecord *automation) {
     if (automation == nullptr || !automation->active || store == nullptr) {
+        return;
+    }
+    if (isMinTriggerIntervalBlocking(automation)) {
         return;
     }
     const bool hasCompleteCondition = AutomationStore::conditionIsComplete(automation->condition);
@@ -274,14 +333,45 @@ void AutomationEngine::evaluateAndMaybeRun(AutomationRecord *automation) {
     // Timer with no complete condition tree: treat conditions as TRUE (timer-only automations).
     if (automation->timer.use && !hasCompleteCondition) {
         LOGGER.info(String("Automation ran (timer): ") + (automation->name != nullptr ? automation->name : "?"));
+        automation->lastConditionTrue = true;
         runActions(automation);
         return;
     }
-    if (!evaluateCondition(automation->condition)) {
+    const bool conditionTrue = evaluateCondition(automation->condition);
+    automation->lastConditionTrue = conditionTrue;
+    if (!conditionTrue) {
         return;
     }
     LOGGER.info(String("Automation ran: ") + (automation->name != nullptr ? automation->name : "?"));
     runActions(automation);
+}
+
+void AutomationEngine::evaluateCurrentTimeAutomations() {
+    if (store == nullptr) {
+        return;
+    }
+    for (AutomationRecord *automation = store->first(); automation != nullptr; automation = automation->next) {
+        if (!automation->active || !AutomationStore::conditionUsesCurrentTime(automation->condition)) {
+            continue;
+        }
+        if (isMinTriggerIntervalBlocking(automation)) {
+            continue;
+        }
+        if (!AutomationStore::conditionIsComplete(automation->condition)) {
+            continue;
+        }
+        const bool conditionTrue = evaluateCondition(automation->condition);
+        const bool risingEdge = conditionTrue && !automation->lastConditionTrue;
+        automation->lastConditionTrue = conditionTrue;
+        if (!risingEdge) {
+            continue;
+        }
+        LOGGER.info(
+            String("Automation ran (time): ")
+            + (automation->name != nullptr ? automation->name : "?")
+        );
+        runActions(automation);
+    }
 }
 
 void AutomationEngine::evaluateMatching(
@@ -377,4 +467,5 @@ void AutomationEngine::tick() {
             automation->timer.counting = true;
         }
     }
+    evaluateCurrentTimeAutomations();
 }
