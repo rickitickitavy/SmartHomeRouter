@@ -5,6 +5,8 @@
 #include "Defines.h"
 #include "ZigbeeDeviceType.h"
 
+#include <esp_mac.h>
+#include <stdio.h>
 #include <string.h>
 
 MqttClient::MqttClient(SettingsManager *settingsManager, DeviceTopicMap *topicMap)
@@ -252,14 +254,29 @@ void MqttClient::finishRemoteSessionAttach() {
     publishStatus("online");
 }
 
+void MqttClient::fillUniqueClientId(char *outClientId, size_t outLen) const {
+    if (outClientId == nullptr || outLen == 0) {
+        return;
+    }
+    outClientId[0] = '\0';
+    String macSuffix = WiFi.macAddress();
+    macSuffix.replace(':', '-');
+    snprintf(outClientId, outLen, "Z2M-router-%s", macSuffix.c_str());
+}
+
 void MqttClient::runRemoteConnect() {
     GlobalSettings *settings = settingsManager->getSettings();
     applyRemoteBrokerTarget();
-    LOGGER.info("MQTT connecting to " + String(settings->mqtt.server) + ":" + String(settings->mqtt.port));
+    char uniqueClientId[48];
+    fillUniqueClientId(uniqueClientId, sizeof(uniqueClientId));
+    LOGGER.info(
+        "MQTT connecting to " + String(settings->mqtt.server) + ":" + String(settings->mqtt.port)
+        + " as " + String(uniqueClientId)
+    );
 
     const char *user = settings->mqtt.username[0] != '\0' ? settings->mqtt.username : nullptr;
     const char *password = user != nullptr ? settings->mqtt.password : nullptr;
-    const bool ok = client->connect(settings->mqtt.clientId, user, password);
+    const bool ok = client->connect(uniqueClientId, user, password);
     if (!ok) {
         LOGGER.warning("MQTT connect failed, state " + String(client->state()));
         reconnectBackoffMs = reconnectBackoffMs == 0 ? 2000 : min(reconnectBackoffMs * 2, (unsigned long)30000);

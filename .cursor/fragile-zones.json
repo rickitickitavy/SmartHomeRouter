@@ -28,9 +28,6 @@
         "scripts/firmware_split.py"
       ],
       "influencePaths": [
-        "src/WebConsole.cpp",
-        "include/WebConsole.h",
-        "data/index.html",
         "docs/adr/0008-ota-slave-before-host.md",
         "docs/adr/0003-two-chips-two-images-joined-zip.md"
       ]

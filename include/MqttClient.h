@@ -70,6 +70,7 @@ private:
     void applyRemoteBrokerTarget();
     void reconnect();
     void runRemoteConnect();
+    void fillUniqueClientId(char *outClientId, size_t outLen) const;
     void finishRemoteSessionAttach();
     static void connectTaskEntry(void *arg);
     void subscribeBridge();

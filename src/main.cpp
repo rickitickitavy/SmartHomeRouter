@@ -17,10 +17,12 @@
 #include "WebConsole.h"
 #include "UserStore.h"
 #include "ConsoleStore.h"
-#include "JsonField.h"
 #if defined(BOARD_ROLE_HOST)
+#include "AutomationStore.h"
+#include "AutomationEngine.h"
 #include "InterChipHost.h"
 #endif
+#include "JsonField.h"
 #if defined(BOARD_ROLE_SLAVE)
 #include "InterChipSlave.h"
 #endif
@@ -37,6 +39,9 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(BOARD_ROLE_HOST)
+#include <esp32-hal-psram.h>
+#endif
 
 #if defined(BOARD_ROLE_SLAVE) && !defined(ZIGBEE_MODE_ZCZR)
 #error "Zigbee coordinator mode is not selected (ZIGBEE_MODE_ZCZR)"
@@ -56,6 +61,10 @@ static ZigbeeCoordinator *zigbeeCoordinator = nullptr;
 static WebConsole *webConsole = nullptr;
 static UserStore *userStore = nullptr;
 static ConsoleStore *consoleStore = nullptr;
+#if defined(BOARD_ROLE_HOST)
+static AutomationStore *automationStore = nullptr;
+static AutomationEngine *automationEngine = nullptr;
+#endif
 static FoundDeviceList *foundDevices = nullptr;
 static DeviceStore *deviceStore = nullptr;
 static bool ntpStarted = false;
@@ -97,6 +106,11 @@ static void pumpHostDeferredStoreWork() {
     if (consoleStore != nullptr) {
         consoleStore->persistIfDue();
     }
+#if defined(BOARD_ROLE_HOST)
+    if (automationStore != nullptr) {
+        automationStore->persistIfDue();
+    }
+#endif
 }
 static void applyRegisteredDeviceCommand(
     DeviceTopicEntry *entry,
@@ -773,6 +787,23 @@ static String hostGatewayStatusJson() {
     } else {
         json += "null";
     }
+    const size_t heapTotal = ESP.getHeapSize();
+    const size_t heapFree = ESP.getFreeHeap();
+    const size_t heapUsed = heapTotal > heapFree ? heapTotal - heapFree : 0;
+    json += ",\"heapUsedKb\":";
+    json += String((unsigned long)((heapUsed + 512) / 1024));
+    json += ",\"heapUsedPercent\":";
+    json += heapTotal > 0 ? String((unsigned long)((heapUsed * 100UL) / heapTotal)) : String("0");
+    const bool havePsram = psramFound();
+    const size_t psramTotal = havePsram ? ESP.getPsramSize() : 0;
+    const size_t psramFree = havePsram ? ESP.getFreePsram() : 0;
+    const size_t psramUsed = psramTotal > psramFree ? psramTotal - psramFree : 0;
+    json += ",\"psramPresent\":";
+    json += havePsram ? "true" : "false";
+    json += ",\"psramUsedKb\":";
+    json += String((unsigned long)((psramUsed + 512) / 1024));
+    json += ",\"psramUsedPercent\":";
+    json += psramTotal > 0 ? String((unsigned long)((psramUsed * 100UL) / psramTotal)) : String("0");
     json += "}";
     return json;
 }
@@ -1512,12 +1543,15 @@ static void setupHost() {
     userStore->setChangedHandler(onHostUserChanged);
     consoleStore = new ConsoleStore();
     consoleStore->begin(true);
+    automationStore = new AutomationStore();
+    automationStore->begin(true);
+    automationEngine = new AutomationEngine();
     topicMap = settingsManager->deviceMap();
     foundDevices = new FoundDeviceList();
     wifiController = new WiFiController(settingsManager, forceAp);
     mqttClient = new MqttClient(settingsManager, topicMap);
     mqttBroker = new MqttBroker(settingsManager);
-    webConsole = new WebConsole(settingsManager, userStore, consoleStore);
+    webConsole = new WebConsole(settingsManager, userStore, consoleStore, automationStore);
     webConsole->setDeviceServices(
         foundDevices,
         startDeviceSearch,
@@ -1544,12 +1578,20 @@ static void setupHost() {
     webConsole->setDevicesFileHandler([]() {
         return settingsManager != nullptr ? settingsManager->devicesJsonFile() : String("[]");
     });
+    automationEngine->begin(automationStore, &ZIGBEE_SPI_PROXY, topicMap, applyManualDeviceCommand);
     webConsole->begin();
     ZIGBEE_SPI_PROXY.setDeviceLiveChangedHandler([](const uint8_t ieee[8]) {
         if (webConsole != nullptr) {
             webConsole->notifyDeviceLiveChanged(ieee);
         }
     });
+    ZIGBEE_SPI_PROXY.setStatusValueChangedHandler(
+        [](const uint8_t ieee[8], uint8_t endpoint, uint16_t clusterOr0, const char *newState) {
+            if (automationEngine != nullptr) {
+                automationEngine->onStatusChanged(ieee, endpoint, clusterOr0, newState);
+            }
+        }
+    );
     wifiController->setInterfaceReadyHandler([]() {
         if (webConsole != nullptr) {
             webConsole->rebind();
@@ -1661,6 +1703,9 @@ void loop() {
     mqttClient->dispatch(wifiController->isStaConnected());
     pumpWifiDeviceCommands();
     ZIGBEE_SPI_PROXY.pumpRegistrySync();
+    if (automationEngine != nullptr) {
+        automationEngine->tick();
+    }
     if (webConsole != nullptr) {
         webConsole->loop();
     }

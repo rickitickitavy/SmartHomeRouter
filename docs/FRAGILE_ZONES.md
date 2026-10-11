@@ -58,11 +58,11 @@ Anything that changes SPI OTA behavior without editing the files above, includin
 
 ### Influence surface (ask human; may not be hook-blocked)
 
-- `src/WebConsole.cpp` / `include/WebConsole.h` — `/update`, `/api/update/status`, staging handlers
-- `data/index.html` — System → Update tab, progress polling, reboot wait dialog
 - Joined package layout / member names (`slave.bin`, `host.bin`) and OTA LittleFS staging paths
 - Partition / Update API usage that changes how host or slave commits the inactive slot
 - ADR 0008 order (slave first, then host) — do not invert without a new ADR **and** human approval of this zone
+
+Web console HTTP/UI (`WebConsole`, `data/index.html`) is **not** part of this influence surface; shared hosting of update routes does not freeze the whole console.
 
 ---
 

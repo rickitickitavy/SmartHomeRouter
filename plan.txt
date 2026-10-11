@@ -1,3 +1,28 @@
-create triggers
 create schedules
-rename device source WIFI to MQTT
+
+
+I want to add Automations in projects. It two words - the automation is and condition and actions must be performed it the conditions, based on events will true.
+Create a new main tab "Automation" and place it after "DEVICES" for managing automation.
+Automation consists from condition, actions, listening devices, active status, name, title, for runtime the date and time of last activation;
+Actions is a list of commands to devices.
+listening devices is a list of devices that can trigger check of condition of automation. Not all devices, contains in condition may trigger automation. Optionally for each device in list may be cluster specified. if So then only this cluster may trigger the condition check.
+IMPORTANT!!! triggers check of condition not the new value, received by router, but it's CHANGING.
+Condition is combination of rules to check. Condition may be simple and represents the comparisons and combined and represents a container including other condition. so Conditions divides to comparisons and containers.
+Container condition contains other conditions, comparisons or containers, concatenated by OR, AND, XOR (same for all conditions).
+Also condition have "NOT" flag.
+"Container" condition has concatenation type (OR, AND, XOR), NOT flag and list of subconditions.
+"Comparison" condition have DEVICE, CHANNEL (if multichannel), optionally cluster (if specified then value of this cluster only will be used else will be used default main status of the device), type of compare (EQUAL, GRATER, LESS, CONTAINS, STARTS, ENDS), value to compare.
+
+On card "Automation" must be list with automations (name, active, date/time of last performed), and buttons Add, Export all, import all.
+On edit automation dialog must be also buttons export and import. Import is available only on empty card. Import with name. Import to file named by automation name.
+
+come up with some design of edit automation dialog.
+
+Ask questions if needed. Try economy tokens but not to downside of quality
+
+Also move main tab APPEARANCE after CONSOLES
+
+add to automation complex attribute TIMER. Timer is one more trigger to evaluate conditions. If "use: set to TRUE then finish countdown is obligatory condition to evaluate conditions. Timer has attributes "use", "counting", "time left" (in seconds), "auto restart", "default time".
+attribute "counting" tells that countdown as in process. "Auto restart" tels is it needed to restart timer after countdown finished. If automation "active" status changing from FALSE to TRUE and "auto restart" is true and "default time" specified then timer loads with "default time" and start countdown.
+automation may have no conditions and no listening devices if it uses timer. In this case conditions accounting as TRUE and automation always works on timer finishes. If timer is not using then must be at least one condition and at least one device to listen.
+in available action additional to devices add automations. Action for this automation only are ""ENABLE", "DISABLE". If automation uses timer then additional to noticed action add "STOP TIMER", "START TIMER", "RESTART TIMER". START TIMER optionally, if not set "default time", may have time to countdown.

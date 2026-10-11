@@ -223,10 +223,20 @@ html, body {
 }
 
 .status-stack {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
+    display: grid;
+    grid-template-columns: minmax(0, 24rem) minmax(0, 24rem);
+    align-items: start;
+    justify-content: start;
     gap: var(--gap);
+}
+
+.status-online-time {
+    grid-column: 1;
+}
+
+.status-memory-group {
+    grid-column: 2;
+    grid-row: 1 / span 2;
 }
 
 .status-online-time,
@@ -1465,7 +1475,8 @@ html, body {
     user-select: none;
 }
 
-#consoleEditDialog.console-edit-overlay {
+#consoleEditDialog.console-edit-overlay,
+#automationEditDialog.console-edit-overlay {
     display: flex;
     align-items: stretch;
     justify-content: flex-start;
@@ -1473,7 +1484,8 @@ html, body {
     box-sizing: border-box;
 }
 
-#consoleEditDialog .console-edit-panel {
+#consoleEditDialog .console-edit-panel,
+#automationEditDialog .console-edit-panel {
     width: 100%;
     height: 100%;
     max-width: none;
@@ -1482,6 +1494,72 @@ html, body {
     min-height: 0;
     box-sizing: border-box;
     overflow: hidden;
+}
+
+#automationEditDialog .console-edit-panel {
+    overflow: auto;
+}
+
+#automationEditDialog .automation-timer-box {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.5rem 0.85rem;
+    margin: 0.35rem 0 0.75rem;
+}
+
+#automationEditDialog .automation-timer-box .field {
+    padding: 0.5rem 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    gap: 0.23rem;
+}
+
+#automationEditDialog .automation-timer-box .field-check {
+    margin: 0;
+    padding: 0.15rem 0;
+}
+
+#automationEditDialog .automation-timer-box .field-hint {
+    margin: 0.15rem 0 0;
+}
+
+#automationEditDialog .automation-action-toolbar {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.35rem;
+    margin-top: 0.35rem;
+}
+
+#automationEditDialog .automation-action-toolbar .btn {
+    padding: 0.25rem 0.55rem;
+    min-height: 0;
+    line-height: 1.2;
+    font-size: 0.8rem;
+}
+
+#automationEditDialog .automation-add-btn {
+    margin-top: 0.65rem;
+    background: color-mix(in srgb, var(--surface) 48%, white);
+    border-color: color-mix(in srgb, var(--border) 55%, white);
+    color: var(--text);
+}
+
+@media (max-width: 900px) {
+    .status-stack {
+        grid-template-columns: minmax(0, 24rem);
+    }
+
+    .status-memory-group {
+        grid-column: 1;
+        grid-row: auto;
+    }
 }
 
 #consoleEditDialog .console-edit-grid-wrap {
