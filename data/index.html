@@ -4423,17 +4423,37 @@
         }
 
         function cloneAutomationDraft(source) {
-            return JSON.parse(JSON.stringify(source || {
+            var draft = JSON.parse(JSON.stringify(source || {
                 name: "",
                 title: "",
                 active: true,
                 group: "",
+                useCondition: true,
+                debug: false,
                 minTriggerIntervalSec: 0,
                 timer: { use: false, autoRestart: false, startOnBoot: false, defaultTime: 0, counting: false, timeLeft: 0 },
                 listen: [],
                 condition: emptyAutomationCondition(),
                 actions: []
             }));
+            if (typeof draft.useCondition !== "boolean") {
+                draft.useCondition = true;
+            }
+            if (typeof draft.debug !== "boolean") {
+                draft.debug = false;
+            }
+            draft.title = "";
+            return draft;
+        }
+
+        function updateAutomationConditionVisibility() {
+            var useCondition = document.getElementById("automationUseCondition");
+            var editor = document.getElementById("automationConditionEditor");
+            if (!editor) {
+                return;
+            }
+            var enabled = !useCondition || !!useCondition.checked;
+            editor.hidden = !enabled;
         }
 
         function startAutomationsLive() {
@@ -5110,8 +5130,12 @@
             automationEditorDraft.name = (document.getElementById("automationEditName").value || "").trim();
             var groupInput = document.getElementById("automationEditGroup");
             automationEditorDraft.group = groupInput ? (groupInput.value || "").trim() : "";
-            automationEditorDraft.title = (document.getElementById("automationEditTitle").value || "").trim();
+            automationEditorDraft.title = "";
             automationEditorDraft.active = !!document.getElementById("automationEditActive").checked;
+            var useConditionInput = document.getElementById("automationUseCondition");
+            automationEditorDraft.useCondition = !useConditionInput || !!useConditionInput.checked;
+            var debugInput = document.getElementById("automationEditDebug");
+            automationEditorDraft.debug = !!(debugInput && debugInput.checked);
             var minTriggerIntervalSec = parseInt(
                 document.getElementById("automationMinTriggerIntervalSec").value,
                 10
@@ -5137,10 +5161,10 @@
             var listenEmpty = !automationEditorDraft.listen || automationEditorDraft.listen.length === 0;
             var actionsEmpty = !automationEditorDraft.actions || automationEditorDraft.actions.length === 0;
             var condition = automationEditorDraft.condition;
-            var conditionEmpty = !condition;
-            if (condition && condition.kind === "container") {
+            var conditionEmpty = !automationEditorDraft.useCondition || !condition;
+            if (automationEditorDraft.useCondition && condition && condition.kind === "container") {
                 conditionEmpty = !condition.children || condition.children.length === 0;
-            } else if (condition) {
+            } else if (automationEditorDraft.useCondition && condition) {
                 conditionEmpty = !(condition.ieee || "").trim() && !(condition.value || "").trim();
             }
             var timerUnused = !(automationEditorDraft.timer && automationEditorDraft.timer.use);
@@ -5218,8 +5242,10 @@
                 collectAutomationGroupNames(automationListCache || []),
                 automationEditorDraft.group || ""
             );
-            document.getElementById("automationEditTitle").value = automationEditorDraft.title || "";
             document.getElementById("automationEditActive").checked = !!automationEditorDraft.active;
+            document.getElementById("automationEditDebug").checked = !!automationEditorDraft.debug;
+            document.getElementById("automationUseCondition").checked =
+                automationEditorDraft.useCondition !== false;
             document.getElementById("automationMinTriggerIntervalSec").value =
                 automationEditorDraft.minTriggerIntervalSec > 0
                     ? String(automationEditorDraft.minTriggerIntervalSec)
@@ -5235,6 +5261,7 @@
                     ? ("Counting: " + String(timer.timeLeft || 0) + " s left")
                     : "Not counting";
             updateAutomationTimerVisibility();
+            updateAutomationConditionVisibility();
             renderAutomationListenEditor();
             renderAutomationConditionEditor();
             renderAutomationActionsEditor();
@@ -7529,33 +7556,35 @@
                 <div id="system-tab-hardware" class="system-tab-panel tab-panel" role="tabpanel">
                     <p id="hardwareSaveError" class="save-error" hidden></p>
                     <p id="hardwareSaveSuccess" class="save-success" hidden></p>
-                    <div class="field">
-                        <label for="spiSpeedHz">SPI SPEED</label>
-                        <select id="spiSpeedHz">
-                            <option value="100000">100 kHz</option>
-                            <option value="250000">250 kHz</option>
-                            <option value="500000">500 kHz</option>
-                            <option value="1000000">1 MHz</option>
-                            <option value="2000000">2 MHz</option>
-                            <option value="4000000">4 MHz</option>
-                            <option value="8000000">8 MHz</option>
-                            <option value="10000000">10 MHz</option>
-                            <option value="20000000">20 MHz</option>
-                            <option value="40000000">40 MHz</option>
-                        </select>
-                        <p class="field-hint">Host SPI clock to the Zigbee slave. Maximum 40 MHz. Applied on Save without restart. Default 500 kHz.</p>
+                    <div class="hardware-tab-body">
+                        <div class="field">
+                            <label for="spiSpeedHz">SPI SPEED</label>
+                            <select id="spiSpeedHz">
+                                <option value="100000">100 kHz</option>
+                                <option value="250000">250 kHz</option>
+                                <option value="500000">500 kHz</option>
+                                <option value="1000000">1 MHz</option>
+                                <option value="2000000">2 MHz</option>
+                                <option value="4000000">4 MHz</option>
+                                <option value="8000000">8 MHz</option>
+                                <option value="10000000">10 MHz</option>
+                                <option value="20000000">20 MHz</option>
+                                <option value="40000000">40 MHz</option>
+                            </select>
+                            <p class="field-hint">Host SPI clock to the Zigbee slave. Maximum 40 MHz. Applied on Save without restart. Default 500 kHz.</p>
+                        </div>
+                        <div class="field">
+                            <label for="blueLedBrightness">BLUE LED brightness</label>
+                            <input id="blueLedBrightness" type="number" min="1" max="100" step="1" value="100">
+                            <p class="field-hint">PWM brightness for blue status LEDs on host and slave (1–100%). Default 100.</p>
+                        </div>
+                        <div class="field">
+                            <label for="greenLedBrightness">GREEN LED brightness</label>
+                            <input id="greenLedBrightness" type="number" min="1" max="100" step="1" value="100">
+                            <p class="field-hint">PWM brightness for green status LEDs on host and slave (1–100%). Default 100. Red LEDs stay digital full on/off.</p>
+                        </div>
                     </div>
-                    <div class="field">
-                        <label for="blueLedBrightness">BLUE LED brightness</label>
-                        <input id="blueLedBrightness" type="number" min="1" max="100" step="1" value="100">
-                        <p class="field-hint">PWM brightness for blue status LEDs on host and slave (1–100%). Default 100.</p>
-                    </div>
-                    <div class="field">
-                        <label for="greenLedBrightness">GREEN LED brightness</label>
-                        <input id="greenLedBrightness" type="number" min="1" max="100" step="1" value="100">
-                        <p class="field-hint">PWM brightness for green status LEDs on host and slave (1–100%). Default 100. Red LEDs stay digital full on/off.</p>
-                    </div>
-                    <div class="dialog-actions">
+                    <div class="dialog-actions hardware-tab-actions">
                         <button type="button" class="btn btn-primary" onclick="saveHardware()">Save</button>
                         <button type="button" class="btn btn-secondary" onclick="loadHardware()">Reset</button>
                     </div>
@@ -7925,32 +7954,35 @@
         <h3 class="upload-title">Edit automation</h3>
         <p id="automationEditError" class="save-error" hidden></p>
         <div class="automation-edit-body">
-            <div class="field">
-                <label for="automationEditName">Name</label>
-                <input id="automationEditName" type="text" autocomplete="off">
-            </div>
-            <div class="field">
-                <label for="automationEditGroup">Group</label>
-                <div class="combo-field" id="automationEditGroupCombo">
-                    <input id="automationEditGroup" type="text" autocomplete="off" placeholder="Group name">
-                    <button type="button" class="combo-field-toggle" id="automationEditGroupToggle" aria-label="Show groups" tabindex="-1"></button>
-                    <ul class="combo-field-list" id="automationEditGroupList" hidden></ul>
+            <div class="automation-general-box automation-edit-section">
+                <h4 class="upload-title">General</h4>
+                <label class="field-check">
+                    <input id="automationEditActive" type="checkbox" onchange="updateAutomationImportEnabled()">
+                    Active
+                </label>
+                <div class="field">
+                    <label for="automationEditName">Name</label>
+                    <input id="automationEditName" type="text" autocomplete="off">
                 </div>
+                <div class="field">
+                    <label for="automationEditGroup">Group</label>
+                    <div class="combo-field" id="automationEditGroupCombo">
+                        <input id="automationEditGroup" type="text" autocomplete="off" placeholder="Group name">
+                        <button type="button" class="combo-field-toggle" id="automationEditGroupToggle" aria-label="Show groups" tabindex="-1"></button>
+                        <ul class="combo-field-list" id="automationEditGroupList" hidden></ul>
+                    </div>
+                </div>
+                <div class="field">
+                    <label for="automationMinTriggerIntervalSec">Min trigger interval (sec)</label>
+                    <input id="automationMinTriggerIntervalSec" type="number" min="0" step="1" placeholder="Optional">
+                    <p class="field-hint">If set, this automation is skipped until that many seconds have passed since the last activation. Leave empty for no limit.</p>
+                </div>
+                <label class="field-check">
+                    <input id="automationEditDebug" type="checkbox">
+                    Debug
+                </label>
             </div>
-            <div class="field">
-                <label for="automationEditTitle">Title</label>
-                <input id="automationEditTitle" type="text" autocomplete="off">
-            </div>
-            <label class="field-check">
-                <input id="automationEditActive" type="checkbox" onchange="updateAutomationImportEnabled()">
-                Active
-            </label>
-            <div class="field">
-                <label for="automationMinTriggerIntervalSec">Min trigger interval (sec)</label>
-                <input id="automationMinTriggerIntervalSec" type="number" min="0" step="1" placeholder="Optional">
-                <p class="field-hint">If set, this automation is skipped until that many seconds have passed since the last activation. Leave empty for no limit.</p>
-            </div>
-            <div class="automation-timer-box">
+            <div class="automation-timer-box automation-edit-section">
                 <label class="field-check">
                     <input id="automationTimerUse" type="checkbox" onchange="updateAutomationTimerVisibility(); updateAutomationImportEnabled();">
                     Use timer
@@ -7972,12 +8004,22 @@
                     <p id="automationTimerRuntime" class="field-hint">Not counting</p>
                 </div>
             </div>
-            <h4 class="upload-title">Triggered by devices</h4>
-            <div id="automationListenEditor"></div>
-            <h4 class="upload-title">Condition</h4>
-            <div id="automationConditionEditor"></div>
-            <h4 class="upload-title">Actions</h4>
-            <div id="automationActionsEditor"></div>
+            <div class="automation-edit-section">
+                <h4 class="upload-title">Triggered by devices</h4>
+                <div id="automationListenEditor"></div>
+            </div>
+            <div class="automation-condition-box automation-edit-section">
+                <h4 class="upload-title">Condition</h4>
+                <label class="field-check">
+                    <input id="automationUseCondition" type="checkbox" checked onchange="updateAutomationConditionVisibility(); updateAutomationImportEnabled();">
+                    Use condition
+                </label>
+                <div id="automationConditionEditor"></div>
+            </div>
+            <div class="automation-edit-section">
+                <h4 class="upload-title">Actions</h4>
+                <div id="automationActionsEditor"></div>
+            </div>
             <input id="automationImportFile" type="file" accept="application/json,.json" hidden onchange="onAutomationImportFileSelected(event)">
         </div>
         <div class="dialog-actions automation-edit-actions">

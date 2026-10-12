@@ -326,6 +326,9 @@ bool AutomationStore::validateAutomation(const AutomationRecord *automation) {
     if (automation->timer.use) {
         return true;
     }
+    if (!automation->useCondition) {
+        return automation->listen != nullptr;
+    }
     if (conditionIsComplete(automation->condition) && conditionUsesCurrentTime(automation->condition)) {
         return true;
     }
@@ -876,6 +879,16 @@ AutomationWriteResult AutomationStore::parseOneAutomation(
     bool active = false;
     extractJsonBool(objectJson, "active", active);
     automation->active = active;
+    bool useCondition = true;
+    if (!extractJsonBool(objectJson, "useCondition", useCondition)) {
+        useCondition = true;
+    }
+    automation->useCondition = useCondition;
+    bool debugEnabled = false;
+    if (!extractJsonBool(objectJson, "debug", debugEnabled)) {
+        debugEnabled = false;
+    }
+    automation->debug = debugEnabled;
     int minTriggerIntervalSec = 0;
     if (extractJsonInt(objectJson, "minTriggerIntervalSec", minTriggerIntervalSec) && minTriggerIntervalSec > 0) {
         automation->minTriggerIntervalSec = (uint32_t)minTriggerIntervalSec;
@@ -1005,6 +1018,8 @@ AutomationWriteResult AutomationStore::createAutomation(
         return AutomationWriteOutOfMemory;
     }
     automation->active = active;
+    automation->useCondition = true;
+    automation->debug = false;
     automation->timer.use = false;
     automation->timer.startOnBoot = false;
     automation->next = nullptr;
@@ -1072,6 +1087,8 @@ AutomationWriteResult AutomationStore::replaceFromJson(const char *name, const c
         existing->title = parsed->title;
         existing->group = parsed->group;
         existing->active = parsed->active;
+        existing->useCondition = parsed->useCondition;
+        existing->debug = parsed->debug;
         existing->minTriggerIntervalSec = parsed->minTriggerIntervalSec;
         existing->timer.use = parsed->timer.use;
         existing->timer.autoRestart = parsed->timer.autoRestart;
@@ -1293,6 +1310,10 @@ void AutomationStore::appendAutomationFull(String &json, const AutomationRecord 
     appendJsonEscaped(json, automation->group != nullptr ? automation->group : "", AUTOMATION_GROUP_MAX);
     json += "\",\"active\":";
     json += automation->active ? "true" : "false";
+    json += ",\"useCondition\":";
+    json += automation->useCondition ? "true" : "false";
+    json += ",\"debug\":";
+    json += automation->debug ? "true" : "false";
     json += ",\"minTriggerIntervalSec\":";
     json += String((unsigned long)automation->minTriggerIntervalSec);
     json += ",\"timer\":{\"use\":";

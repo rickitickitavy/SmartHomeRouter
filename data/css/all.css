@@ -397,6 +397,29 @@ html, body {
     overflow: auto;
 }
 
+#system-tab-hardware.tab-panel.active {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#system-tab-hardware .hardware-tab-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
+}
+
+#system-tab-hardware .hardware-tab-actions {
+    flex: 0 0 auto;
+    margin-top: 0.5rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+}
+
 #maintenanceAdminContent {
     display: flex;
     flex-direction: column;
@@ -1612,6 +1635,9 @@ html, body {
     flex: 1 1 auto;
     min-height: 0;
     overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1em;
 }
 
 #automationEditDialog .automation-edit-actions {
@@ -1622,7 +1648,17 @@ html, body {
     background: var(--surface);
 }
 
-#automationEditDialog .automation-timer-box {
+#automationEditDialog .automation-edit-section {
+    margin: 0;
+}
+
+#automationEditDialog .automation-edit-section > .upload-title {
+    margin: 0 0 0.35rem;
+}
+
+#automationEditDialog .automation-general-box,
+#automationEditDialog .automation-timer-box,
+#automationEditDialog .automation-condition-box {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
@@ -1630,10 +1666,16 @@ html, body {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 0.5rem 0.85rem;
-    margin: 0.35rem 0 0.75rem;
 }
 
-#automationEditDialog .automation-timer-box .field {
+#automationEditDialog .automation-general-box .upload-title,
+#automationEditDialog .automation-condition-box .upload-title {
+    margin: 0 0 0.25rem;
+}
+
+#automationEditDialog .automation-general-box .field,
+#automationEditDialog .automation-timer-box .field,
+#automationEditDialog .automation-condition-box .field {
     padding: 0.5rem 0;
     border: none;
     border-radius: 0;
@@ -1641,12 +1683,16 @@ html, body {
     gap: 0.23rem;
 }
 
-#automationEditDialog .automation-timer-box .field-check {
+#automationEditDialog .automation-general-box .field-check,
+#automationEditDialog .automation-timer-box .field-check,
+#automationEditDialog .automation-condition-box .field-check {
     margin: 0;
     padding: 0.15rem 0;
 }
 
-#automationEditDialog .automation-timer-box .field-hint {
+#automationEditDialog .automation-general-box .field-hint,
+#automationEditDialog .automation-timer-box .field-hint,
+#automationEditDialog .automation-condition-box .field-hint {
     margin: 0.15rem 0 0;
 }
 

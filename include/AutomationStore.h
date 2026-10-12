@@ -85,6 +85,8 @@ struct AutomationRecord {
     char *title;
     char *group;
     bool active;
+    bool useCondition;
+    bool debug;
     uint32_t minTriggerIntervalSec;
     AutomationTimer timer;
     AutomationListener *listen;
@@ -142,6 +144,7 @@ public:
     static bool conditionUsesCurrentTime(const AutomationCondition *node);
     static int countConditionNodes(const AutomationCondition *node);
     static bool conditionIsComplete(const AutomationCondition *node);
+    static const char *compareOpToText(AutomationCompareOp op);
 
 private:
     AutomationRecord *head;
@@ -161,7 +164,6 @@ private:
     static void appendAutomationFull(String &json, const AutomationRecord *automation, bool includeRuntime);
     static void appendConditionJson(String &json, const AutomationCondition *condition);
     static void appendActionJson(String &json, const AutomationAction *action);
-    static const char *compareOpToText(AutomationCompareOp op);
     static bool compareOpFromText(const char *text, AutomationCompareOp &op);
     static const char *containerOpToText(AutomationContainerOp op);
     static bool containerOpFromText(const char *text, AutomationContainerOp &op);
