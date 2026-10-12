@@ -56,6 +56,7 @@ html[data-theme="dark"] {
 html, body {
     width: 100%;
     height: 100%;
+    height: 100dvh;
     margin: 0;
     padding: 0;
     overflow: hidden;
@@ -1131,11 +1132,17 @@ html, body {
     flex-direction: column;
     width: 100%;
     height: 100%;
-    max-width: 56rem;
-    margin: 0 auto;
-    padding: 2cm 1rem 1rem;
+    max-width: none;
+    margin: 0;
+    padding: 0.75rem 0.75rem 0.5rem;
     box-sizing: border-box;
     overflow: hidden;
+}
+
+@media (min-width: 13cm) {
+    .user-console-shell {
+        padding: 1rem 1rem 0.75rem;
+    }
 }
 
 .user-console-toolbar {
@@ -1193,6 +1200,12 @@ html, body {
     overflow: auto;
 }
 
+.user-console-panels > .tab-content,
+.place-console-panels > .tab-content {
+    container-type: inline-size;
+    container-name: console-view;
+}
+
 .user-console-panels > .tab-content {
     padding-top: 0;
     gap: 0;
@@ -1208,6 +1221,34 @@ html, body {
     gap: var(--gap);
     padding: 0.25rem 0 1rem;
     align-items: start;
+}
+
+.console-grid-view {
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    box-sizing: border-box;
+}
+
+@container console-view (min-width: 13cm) {
+    .console-grid-view {
+        grid-template-columns: repeat(2, minmax(0, min(50%, 10cm)));
+        justify-content: start;
+    }
+}
+
+@supports not (container-type: inline-size) {
+    @media (max-width: 12.99cm) {
+        .console-grid-view {
+            grid-template-columns: minmax(0, 1fr);
+        }
+    }
+
+    @media (min-width: 13cm) {
+        .console-grid-view {
+            grid-template-columns: repeat(2, minmax(0, min(50%, 10cm)));
+            justify-content: start;
+        }
+    }
 }
 
 .console-widget {
@@ -1235,6 +1276,28 @@ html, body {
     font-size: 1rem;
     font-weight: 700;
     color: var(--accent);
+}
+
+.console-grid-view .console-widget-title {
+    font-size: 1.125rem;
+}
+
+.console-grid-view .console-device-row-title {
+    font-size: 1rem;
+}
+
+.console-grid-view .console-sensor-value,
+.console-grid-view .console-cover-position {
+    font-size: 1.05rem;
+}
+
+.console-grid-view .console-device-row {
+    min-height: 44px;
+}
+
+.console-grid-view .console-cover-btn,
+.console-grid-view .btn-inline {
+    min-height: 44px;
 }
 
 .console-widget-group {
@@ -1421,11 +1484,7 @@ html, body {
 }
 
 .console-widget-spacer-view {
-    min-height: 6rem;
-    border: none;
-    padding: 0.75rem;
-    pointer-events: none;
-    visibility: hidden;
+    display: none;
 }
 
 .console-widget-drag-handle {
@@ -1865,6 +1924,27 @@ html, body {
     user-select: none;
     cursor: grab;
     padding: 0 0.15rem;
+}
+
+#userDialog .user-dialog-panel {
+    overflow: hidden;
+}
+
+#userDialog .user-dialog-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
+}
+
+#userDialog .user-dialog-actions {
+    flex: 0 0 auto;
+    margin-top: 0.5rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
 }
 
 .user-dialog-roles {
