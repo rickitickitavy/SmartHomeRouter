@@ -21,11 +21,14 @@ public:
 
     static constexpr const char *kPackagePath = "/ota/package.zip";
     static constexpr uint8_t kMaxSlaveFrameFails = 5;
-    static constexpr uint8_t kSlaveVerifyMaxAttempts = 3;
-    static constexpr unsigned long kSlaveVerifyWaitMs = 15000UL;
+    /** No-response → reset retries before the joined update fails. */
+    static constexpr uint8_t kSlaveVerifyMaxResets = 5;
+    /** Wait for slave version (or ready) before each reset or success. */
+    static constexpr unsigned long kSlaveVerifyWaitMs = 20000UL;
 
     bool busy() const;
     bool isUpdatingSlave() const;
+    bool isVerifyingSlave() const;
     bool isApplyingImage() const;
     bool slaveBeginAcked() const;
     bool isLastSlaveFrameEnd() const;
@@ -96,10 +99,9 @@ private:
     bool spiClockOverrideActive = false;
     char expectedSlaveVersion[SPI_STATUS_VERSION_MAX + 1]{};
     char preOtaSlaveVersion[SPI_STATUS_VERSION_MAX + 1]{};
-    uint8_t slaveVerifyAttempt = 0;
+    uint8_t slaveNoRespondResets = 0;
     unsigned long slaveVerifyDeadlineMs = 0;
     bool slaveVerifyResetPending = false;
-    bool slaveAwaitingLinkForReupload = false;
 
     void fail(const char *message);
     void clearStagingFiles();
@@ -114,6 +116,8 @@ private:
     void startSlaveUploadCycle();
     void beginSlaveVersionVerify();
     void pumpSlaveVersionVerify();
+    bool slaveVersionSampleAvailable() const;
+    bool slaveVersionIsPreOta() const;
     bool slaveVersionMatchesExpected() const;
     bool startHostApply();
     void finishSlaveOnlySuccess();

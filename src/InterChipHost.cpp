@@ -1,5 +1,6 @@
 #include "InterChipHost.h"
 #include "FirmwareOta.h"
+#include "StatusRgb.h"
 #include "pins.h"
 #include "Logger.h"
 
@@ -151,6 +152,11 @@ void InterChipHost::pushLedBrightness(uint8_t bluePercent, uint8_t greenPercent)
 
 const char *InterChipHost::slaveFirmwareVersion() const {
     return slaveVersionText;
+}
+
+void InterChipHost::clearSlaveFirmwareVersion() {
+    slaveVersionText[0] = '\0';
+    lastStatusMs = 0;
 }
 
 void InterChipHost::setEventHandler(EventFn handler) {
@@ -425,13 +431,19 @@ void InterChipHost::handleInbound(const SpiFrame &frame) {
         LOGGER.info("SLAVE_READY");
         if (state == HostBringupWaitReady) {
             maybePushSettings();
-        } else if (state == HostBringupNormal && lastSettingsOkMs != 0
-            && (millis() - lastSettingsOkMs) >= 8000UL
-            && !FIRMWARE_OTA.isUpdatingSlave()) {
-            LOGGER.warning("Slave ready after drop; re-pushing settings");
-            settingsQueued = false;
-            hasPending = false;
-            maybePushSettings();
+        } else if (state == HostBringupNormal && !FIRMWARE_OTA.isUpdatingSlave()) {
+            const bool forceDuringVerify = FIRMWARE_OTA.isVerifyingSlave();
+            const bool overdueSettings = lastSettingsOkMs != 0
+                && (millis() - lastSettingsOkMs) >= 8000UL;
+            if (forceDuringVerify || overdueSettings) {
+                LOGGER.warning(
+                    forceDuringVerify ? "Slave ready during OTA verify; re-pushing settings"
+                                      : "Slave ready after drop; re-pushing settings"
+                );
+                settingsQueued = false;
+                hasPending = false;
+                maybePushSettings();
+            }
         }
     }
     if (frame.cmd == SpiEvtSettingsOk) {
@@ -501,7 +513,9 @@ void InterChipHost::emitLocalTimeout() {
     } else {
         // Silent during exclusive OTA — first-try timeouts are expected under flash load.
     }
-    if (FIRMWARE_OTA.busy() && timedOutCmd != SpiCmdFirmwareOta) {
+    // Exclusive slave stream: ignore non-OTA timeouts. During VerifyingSlave, allow
+    // bringup (settings/ready) timeout handling so post-OTA reset can reach Normal.
+    if (FIRMWARE_OTA.isUpdatingSlave() && timedOutCmd != SpiCmdFirmwareOta) {
         return;
     }
     if (eventHandler != nullptr) {
@@ -560,6 +574,9 @@ void InterChipHost::transferOnce(const SpiFrame *hostFrame) {
     SPI.endTransaction();
     const unsigned long transferGapUs = FIRMWARE_OTA.isUpdatingSlave() ? 50UL : kMinTransferGapUs;
     delayMicroseconds(transferGapUs);
+    if (FIRMWARE_OTA.isUpdatingSlave()) {
+        STATUS_RGB.serviceManualUpdateLed6();
+    }
 
     SpiFrame inbound;
     if (spiDecodeFrame(hostSpiRx, SPI_MAX_FRAME, inbound)) {
@@ -581,14 +598,17 @@ void InterChipHost::pump() {
         emitLocalTimeout();
     }
 
-    if (state == HostBringupNormal && !FIRMWARE_OTA.busy()) {
+    // Status/ping while verifying slave OTA (busy but not streaming); exclusive stream still gates.
+    if (state == HostBringupNormal && !FIRMWARE_OTA.isUpdatingSlave()) {
         if (zigbeeStartDeadlineMs != 0
             && !slaveZigbeeStarted
-            && (int32_t)(millis() - zigbeeStartDeadlineMs) >= 0) {
+            && (int32_t)(millis() - zigbeeStartDeadlineMs) >= 0
+            && !FIRMWARE_OTA.isVerifyingSlave()) {
             LOGGER.warning("Slave Zigbee did not start within 30s; resetting slave");
             zigbeeStartDeadlineMs = 0;
             enterReset();
-        } else if (lastKeepaliveOkMs != 0 && (millis() - lastKeepaliveOkMs) >= kLinkDeadMs) {
+        } else if (lastKeepaliveOkMs != 0 && (millis() - lastKeepaliveOkMs) >= kLinkDeadMs
+            && !FIRMWARE_OTA.isVerifyingSlave()) {
             LOGGER.warning("SPI keepalive silent too long, resetting slave");
             noteLinkLostAndReset();
         } else {
@@ -601,9 +621,11 @@ void InterChipHost::pump() {
                 requestTimeSync();
             }
             const unsigned long statusPeriodMs =
-                (zigbeeStartDeadlineMs != 0 && !slaveZigbeeStarted)
+                FIRMWARE_OTA.isVerifyingSlave()
                     ? kZigbeeStartStatusPeriodMs
-                    : kStatusPeriodMs;
+                    : ((zigbeeStartDeadlineMs != 0 && !slaveZigbeeStarted)
+                           ? kZigbeeStartStatusPeriodMs
+                           : kStatusPeriodMs);
             if (lastStatusMs == 0 || (millis() - lastStatusMs) >= statusPeriodMs) {
                 lastStatusMs = millis();
                 enqueueInternal(SpiCmdGetStatus, nullptr, 0, true, 0);
