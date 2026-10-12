@@ -1170,9 +1170,8 @@ html, body {
 
 .user-console-toolbar {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: flex-end;
-    gap: 0.5rem;
     flex-shrink: 0;
 }
 
@@ -1186,6 +1185,18 @@ html, body {
 
 .user-console-toolbar .user-console-tabs {
     flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+}
+
+.user-console-toolbar .user-console-tabs .tab-btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.user-console-signout-tab {
+    margin-left: 0.35rem;
 }
 
 .place-console-shell > .tabs,
@@ -1200,11 +1211,6 @@ html, body {
     height: auto;
     min-height: 44px;
     max-height: 44px;
-}
-
-.user-console-signout {
-    flex: 0 0 auto;
-    margin-bottom: 1px;
 }
 
 .user-console-header {

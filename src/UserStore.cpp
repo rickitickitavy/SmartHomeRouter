@@ -1072,6 +1072,19 @@ UserStore::SessionSlot *UserStore::findSession(const uint8_t token[AUTH_SESSION_
     return nullptr;
 }
 
+bool UserStore::userGetsLongIdleSession(const UserRecord *user) {
+    if (user == nullptr || user->isAdmin) {
+        return false;
+    }
+    // Privileged operator roles keep the short idle unless Remember me is set.
+    if (user->editDevices || user->addDevices || user->removeDevices
+        || user->editUsers || user->editConsoles || user->controlDevices) {
+        return false;
+    }
+    // Simple user (no roles) or monitor-only.
+    return true;
+}
+
 bool UserStore::startSession(
     const UserRecord *user,
     bool rememberMe,
@@ -1103,7 +1116,7 @@ bool UserStore::startSession(
         if (maxAgeSec != nullptr) {
             *maxAgeSec = 0;
         }
-    } else if (rememberMe) {
+    } else if (rememberMe || userGetsLongIdleSession(user)) {
         slot->maxIdleMs = AUTH_REMEMBER_MS;
         if (maxAgeSec != nullptr) {
             *maxAgeSec = AUTH_REMEMBER_MS / 1000UL;

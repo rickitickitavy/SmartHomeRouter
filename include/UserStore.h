@@ -148,5 +148,6 @@ private:
     static bool actorMayEditUsers(const UserRecord *actor);
     static void copyRolesAndFlags(UserRecord *destination, const UserRecord *source, bool replaceConsoles);
     static void appendConsolesJson(String &json, const UserRecord *user);
+    static bool userGetsLongIdleSession(const UserRecord *user);
     SessionSlot *findSession(const uint8_t token[AUTH_SESSION_TOKEN_LEN]);
 };
