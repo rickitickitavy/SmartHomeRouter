@@ -27,6 +27,7 @@ public:
     void noteKeepaliveQuiet();
     void holdForFirmwareOta();
     const char *slaveFirmwareVersion() const;
+    void clearSlaveFirmwareVersion();
     bool isSlaveResetPaused() const;
     uint32_t slaveResetPauseRemainingMs() const;
     void startSlaveResetPause();

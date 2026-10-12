@@ -14,6 +14,8 @@ public:
     void setCritical(bool enabled);
     void setBootHeld(bool enabled);
     void setUpdateHeld(bool enabled);
+    void setUpdateBlinkManual(bool enabled);
+    void serviceManualUpdateLed6();
     void setPairingHeld(bool enabled);
     void setMqttConnected(bool enabled);
     void setMqttBrokerListening(bool enabled);
@@ -63,6 +65,9 @@ private:
     unsigned long faultBlinkToggleMs = 0;
     bool updateBlinkOn = true;
     unsigned long updateBlinkToggleMs = 0;
+    bool updateBlinkManual = false;
+    bool manualUpdateLed6On = false;
+    unsigned long manualUpdateLed6ToggleMs = 0;
 
     bool allowsActivityPulse() const;
     bool slaveFaultBlinkHeld() const;

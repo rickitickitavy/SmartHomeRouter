@@ -4,6 +4,7 @@
 #include "InterChipHost.h"
 #include "InterChipSlave.h"
 #include "Logger.h"
+#include "StatusRgb.h"
 
 #include <Update.h>
 #include <esp_heap_caps.h>
@@ -46,6 +47,10 @@ bool FirmwareOta::busy() const {
 
 bool FirmwareOta::isUpdatingSlave() const {
     return currentPhase == Phase::Slave;
+}
+
+bool FirmwareOta::isVerifyingSlave() const {
+    return currentPhase == Phase::VerifyingSlave;
 }
 
 bool FirmwareOta::isApplyingImage() const {
@@ -223,8 +228,8 @@ void FirmwareOta::beginSlaveSpiClockOverride() {
         return;
     }
     spiClockOverrideActive = true;
-    INTER_CHIP_HOST.setClockHz(SPI_SPEED_HZ_4M);
-    LOGGER.info("SPI clock temporarily 4 MHz for slave firmware OTA");
+    INTER_CHIP_HOST.setClockHz(SPI_SPEED_HZ_1M);
+    LOGGER.info("SPI clock temporarily 1 MHz for slave firmware OTA");
 }
 
 void FirmwareOta::endSlaveSpiClockOverride() {
@@ -269,11 +274,11 @@ void FirmwareOta::fail(const char *message) {
     streamPos = 0;
     slaveFrameFails = 0;
     slavePackClaimed = false;
-    slaveVerifyAttempt = 0;
+    slaveNoRespondResets = 0;
     slaveVerifyDeadlineMs = 0;
     slaveVerifyResetPending = false;
-    slaveAwaitingLinkForReupload = false;
     endSlaveSpiClockOverride();
+    STATUS_RGB.setUpdateBlinkManual(false);
     clearStagingFiles();
     LOGGER.error(errorText);
 }
@@ -643,14 +648,26 @@ void FirmwareOta::onSpiFrame(const SpiFrame &frame) {
     enqueueNextSlaveChunk();
 }
 
-bool FirmwareOta::slaveVersionMatchesExpected() const {
+bool FirmwareOta::slaveVersionSampleAvailable() const {
     if (!INTER_CHIP_HOST.isNormal()) {
         return false;
     }
     const char *seen = INTER_CHIP_HOST.slaveFirmwareVersion();
-    if (seen == nullptr || seen[0] == '\0') {
+    return seen != nullptr && seen[0] != '\0';
+}
+
+bool FirmwareOta::slaveVersionIsPreOta() const {
+    if (!slaveVersionSampleAvailable() || preOtaSlaveVersion[0] == '\0') {
         return false;
     }
+    return strcmp(INTER_CHIP_HOST.slaveFirmwareVersion(), preOtaSlaveVersion) == 0;
+}
+
+bool FirmwareOta::slaveVersionMatchesExpected() const {
+    if (!slaveVersionSampleAvailable()) {
+        return false;
+    }
+    const char *seen = INTER_CHIP_HOST.slaveFirmwareVersion();
     if (expectedSlaveVersion[0] != '\0') {
         return strcmp(seen, expectedSlaveVersion) == 0;
     }
@@ -673,31 +690,29 @@ void FirmwareOta::startSlaveUploadCycle() {
     slaveFrameFails = 0;
     slavePackClaimed = false;
     slaveVerifyResetPending = false;
-    slaveAwaitingLinkForReupload = false;
     currentPhase = Phase::Slave;
     beginSlaveSpiClockOverride();
+    STATUS_RGB.setUpdateBlinkManual(true);
     INTER_CHIP_HOST.holdForFirmwareOta();
     INTER_CHIP_HOST.noteKeepaliveQuiet();
 }
 
 void FirmwareOta::beginSlaveVersionVerify() {
     endSlaveSpiClockOverride();
+    STATUS_RGB.setUpdateBlinkManual(false);
     waitingForSlaveResult = false;
     lastSlavePayloadLength = 0;
     lastSlaveDataBytes = 0;
     slaveVerifyResetPending = false;
-    slaveAwaitingLinkForReupload = false;
-    if (slaveVerifyAttempt == 0) {
-        slaveVerifyAttempt = 1;
-    }
+    slaveNoRespondResets = 0;
+    INTER_CHIP_HOST.clearSlaveFirmwareVersion();
     slaveVerifyDeadlineMs = millis() + kSlaveVerifyWaitMs;
     currentPhase = Phase::VerifyingSlave;
     INTER_CHIP_HOST.noteKeepaliveQuiet();
     LOGGER.info(
-        "Slave image transferred; waiting up to 15s for version "
+        "Slave image transferred; waiting up to 20s for version "
         + String(expectedSlaveVersion[0] != '\0' ? expectedSlaveVersion : "(changed)")
-        + " (attempt " + String((int)slaveVerifyAttempt) + "/"
-        + String((int)kSlaveVerifyMaxAttempts) + ")"
+        + " (no-respond resets 0/" + String((int)kSlaveVerifyMaxResets) + ")"
     );
 }
 
@@ -707,40 +722,13 @@ void FirmwareOta::pumpSlaveVersionVerify() {
     }
     if (slaveVerifyResetPending) {
         slaveVerifyResetPending = false;
+        INTER_CHIP_HOST.clearSlaveFirmwareVersion();
         INTER_CHIP_HOST.resetSlaveSynchronous();
-        slaveAwaitingLinkForReupload = true;
         slaveVerifyDeadlineMs = millis() + kSlaveVerifyWaitMs;
         LOGGER.info(
-            "Slave reset before re-upload attempt "
-            + String((int)slaveVerifyAttempt) + "/" + String((int)kSlaveVerifyMaxAttempts)
+            "Slave reset (no version response); waiting ready and version "
+            + String((int)slaveNoRespondResets) + "/" + String((int)kSlaveVerifyMaxResets)
         );
-        return;
-    }
-    if (slaveAwaitingLinkForReupload) {
-        if (slaveVersionMatchesExpected()) {
-            slaveAwaitingLinkForReupload = false;
-            LOGGER.info(
-                "Slave version verified: " + String(INTER_CHIP_HOST.slaveFirmwareVersion())
-            );
-            if (hasHostImage) {
-                startHostApply();
-            } else {
-                finishSlaveOnlySuccess();
-            }
-            return;
-        }
-        if (INTER_CHIP_HOST.isNormal()) {
-            LOGGER.info(
-                "Re-uploading slave firmware attempt "
-                + String((int)slaveVerifyAttempt) + "/" + String((int)kSlaveVerifyMaxAttempts)
-            );
-            startSlaveUploadCycle();
-            return;
-        }
-        if ((long)(millis() - slaveVerifyDeadlineMs) < 0) {
-            return;
-        }
-        fail("Slave link not ready for firmware re-upload");
         return;
     }
     if (slaveVersionMatchesExpected()) {
@@ -754,24 +742,43 @@ void FirmwareOta::pumpSlaveVersionVerify() {
         }
         return;
     }
+    // Pre-OTA version means the slave has not rebooted into the new image yet — keep waiting.
+    // Never treat that as a mismatch resend (that caused multi-minute double SPI uploads).
     if ((long)(millis() - slaveVerifyDeadlineMs) < 0) {
         return;
     }
-    if (slaveVerifyAttempt >= kSlaveVerifyMaxAttempts) {
-        fail("Slave did not report expected firmware version after transfer");
+    // Deadline: decide from the sample we have (must have a version before any SPI resend).
+    if (!slaveVersionSampleAvailable() || slaveVersionIsPreOta()) {
+        if (slaveNoRespondResets >= kSlaveVerifyMaxResets) {
+            fail("Slave did not report expected firmware version after transfer");
+            return;
+        }
+        slaveNoRespondResets++;
+        slaveVerifyResetPending = true;
+        LOGGER.warning(
+            !slaveVersionSampleAvailable()
+                ? ("Slave did not respond with version within 20s; will reset "
+                   + String((int)slaveNoRespondResets) + "/"
+                   + String((int)kSlaveVerifyMaxResets))
+                : ("Slave still reports pre-OTA version \""
+                   + String(INTER_CHIP_HOST.slaveFirmwareVersion())
+                   + "\" after 20s; will reset "
+                   + String((int)slaveNoRespondResets) + "/"
+                   + String((int)kSlaveVerifyMaxResets))
+        );
         return;
     }
-    slaveVerifyAttempt++;
-    slaveVerifyResetPending = true;
     LOGGER.warning(
-        "Slave version not ready (seen=\""
+        "Slave version mismatch after wait (seen=\""
         + String(INTER_CHIP_HOST.slaveFirmwareVersion())
-        + "\"); will reset and re-upload"
+        + "\"); re-uploading SPI image"
     );
+    startSlaveUploadCycle();
 }
 
 void FirmwareOta::finishSlaveOnlySuccess() {
     endSlaveSpiClockOverride();
+    STATUS_RGB.setUpdateBlinkManual(false);
     freeSlaveImageRam();
     closePackageStream();
     clearStagingFiles();
@@ -781,6 +788,7 @@ void FirmwareOta::finishSlaveOnlySuccess() {
 
 bool FirmwareOta::startHostApply() {
     endSlaveSpiClockOverride();
+    STATUS_RGB.setUpdateBlinkManual(false);
     freeSlaveImageRam();
     if (!hasHostImage) {
         fail("Joined package has no host.bin");
@@ -912,7 +920,7 @@ void FirmwareOta::pumpPackagePrepare() {
     }
     strncpy(preOtaSlaveVersion, INTER_CHIP_HOST.slaveFirmwareVersion(), sizeof(preOtaSlaveVersion) - 1);
     preOtaSlaveVersion[sizeof(preOtaSlaveVersion) - 1] = '\0';
-    slaveVerifyAttempt = 1;
+    slaveNoRespondResets = 0;
     startSlaveUploadCycle();
     LOGGER.info(
         hasHostImage ? "Joined package stream ready, updating slave then host"

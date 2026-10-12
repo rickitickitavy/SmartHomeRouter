@@ -942,7 +942,7 @@ On the login form, when the operator presses Enter and the password field is emp
 
 ### Requirement: Error and success plates hide after ten seconds
 
-Whenever the web console shows an error plate (`save-error`) or success plate (`save-success`), including login errors, that plate MUST become hidden automatically after 10 seconds unless a newer message replaces it sooner. Hiding MUST NOT clear unrelated form fields.
+Whenever the web console shows an error plate (`save-error`) or success plate (`save-success`), including login errors, that plate MUST become hidden automatically after 10 seconds unless a newer message replaces it sooner. Hiding MUST NOT clear unrelated form fields. Plates inside the firmware Update dialog that report the reboot-wait request result are exempt and MUST follow the firmware Update dialog result-plate requirement instead.
 
 #### Scenario: Success auto-hides
 
@@ -958,6 +958,30 @@ Whenever the web console shows an error plate (`save-error`) or success plate (`
 
 - **WHEN** an error plate is visible and a later Save shows a success plate before 10 seconds
 - **THEN** the success plate is shown and the previous error is not left visible after the new plate’s own 10-second window
+
+#### Scenario: Firmware Update dialog plates exempt
+
+- **WHEN** the firmware Update dialog shows its reboot-wait success or error plate
+- **THEN** that plate is not auto-hidden after ten seconds
+
+### Requirement: Firmware Update dialog result plates stay visible
+
+Success and error plates inside the firmware Update dialog (`firmwareRebootSuccess` and `firmwareRebootError`) MUST remain visible until the operator closes that dialog or starts a new firmware update. Those plates MUST NOT be hidden by the global ten-second auto-hide used for other `save-error` / `save-success` plates.
+
+#### Scenario: Reboot success plate stays
+
+- **WHEN** the Update dialog shows the reboot-wait success plate after the router comes back
+- **THEN** that plate stays visible past ten seconds until the operator closes the dialog
+
+#### Scenario: Reboot error plate stays
+
+- **WHEN** the Update dialog shows the reboot-wait error plate after the wait times out
+- **THEN** that plate stays visible past ten seconds until the operator closes the dialog
+
+#### Scenario: Other plates still auto-hide
+
+- **WHEN** a settings Save shows a success or error plate outside the firmware Update dialog
+- **THEN** that plate still hides after about ten seconds as today
 
 ### Requirement: HTTP POST bodies are bounded and request-isolated
 The host web console MUST collect each authenticated JSON POST body with a fixed maximum size. Bodies larger than that limit MUST be rejected with an HTTP error and MUST NOT be applied. Concurrent or overlapping body uploads MUST NOT corrupt another request’s body. Chunk append MUST NOT grow storage one character at a time.

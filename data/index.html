@@ -353,7 +353,11 @@
             var plates = document.querySelectorAll(".save-error, .save-success");
             var plateIndex;
             for (plateIndex = 0; plateIndex < plates.length; plateIndex++) {
-                armFeedbackPlateAutoHide(plates[plateIndex]);
+                var plate = plates[plateIndex];
+                if (plate.id === "firmwareRebootSuccess" || plate.id === "firmwareRebootError") {
+                    continue;
+                }
+                armFeedbackPlateAutoHide(plate);
             }
         }
 

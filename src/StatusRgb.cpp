@@ -148,6 +148,28 @@ void StatusRgb::setUpdateHeld(bool enabled) {
     apply();
 }
 
+void StatusRgb::setUpdateBlinkManual(bool enabled) {
+    updateBlinkManual = enabled;
+    if (enabled) {
+        manualUpdateLed6On = false;
+        manualUpdateLed6ToggleMs = millis();
+    }
+    apply();
+}
+
+void StatusRgb::serviceManualUpdateLed6() {
+    if (!hostRole || !updateBlinkManual || criticalHeld) {
+        return;
+    }
+    const unsigned long nowMs = millis();
+    if ((long)(nowMs - manualUpdateLed6ToggleMs) < (long)kUpdateBlinkHalfMs) {
+        return;
+    }
+    manualUpdateLed6ToggleMs = nowMs;
+    manualUpdateLed6On = !manualUpdateLed6On;
+    apply();
+}
+
 void StatusRgb::setPairingHeld(bool enabled) {
     pairingHeld = enabled;
     if (!enabled) {
@@ -225,12 +247,12 @@ void StatusRgb::service() {
         faultBlinkOn = true;
         faultBlinkToggleMs = nowMs;
     }
-    if (hostRole && updateHeld && !criticalHeld) {
+    if (hostRole && updateHeld && !criticalHeld && !updateBlinkManual) {
         if ((long)(nowMs - updateBlinkToggleMs) >= (long)kUpdateBlinkHalfMs) {
             updateBlinkToggleMs = nowMs;
             updateBlinkOn = !updateBlinkOn;
         }
-    } else {
+    } else if (!updateBlinkManual) {
         updateBlinkOn = true;
         updateBlinkToggleMs = nowMs;
     }
@@ -260,6 +282,8 @@ void StatusRgb::apply() {
         }
         if (criticalHeld) {
             levelOn[kLed6Index] = true;
+        } else if (updateBlinkManual) {
+            levelOn[kLed6Index] = manualUpdateLed6On;
         } else if (updateHeld) {
             levelOn[kLed6Index] = updateBlinkOn;
         }
