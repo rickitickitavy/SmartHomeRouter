@@ -417,6 +417,37 @@
             return "";
         }
 
+        function bindingParamId(binding) {
+            return binding && binding.param ? String(binding.param) : "status";
+        }
+
+        function deviceBatteryText(device) {
+            if (!device || device.battery === undefined || device.battery === null || device.battery === "") {
+                return "";
+            }
+            return String(device.battery);
+        }
+
+        function bindingResolvedState(device, binding) {
+            var param = bindingParamId(binding);
+            if (param === "battery") {
+                return deviceBatteryText(device);
+            }
+            if (param === "position") {
+                var coveringEntry = findStatusEntry(
+                    statusEntriesForDevice(device),
+                    bindingChannel(binding)
+                );
+                if (coveringEntry && coveringEntry.position) {
+                    return String(coveringEntry.position);
+                }
+            }
+            if (isMeasurementDeviceType(device && device.type ? device.type : "")) {
+                return measurementStateForBinding(device, binding);
+            }
+            return findStatusState(statusEntriesForDevice(device), bindingChannel(binding));
+        }
+
         function isMeasurementDeviceType(typeId) {
             return typeId == "illuminanceMeasurement"
                 || typeId == "illuminanceLevelSensing"
@@ -698,7 +729,7 @@
             }
             card.appendChild(header);
             var list = document.createElement("div");
-            list.className = "console-device-list";
+            applyWidgetViewportListClass(list, widget);
             var bindings = widget.devices || [];
             var bindingIndex;
             for (bindingIndex = 0; bindingIndex < bindings.length; bindingIndex++) {
@@ -708,8 +739,180 @@
             return card;
         }
 
+        function applyWidgetViewportListClass(listElement, widget) {
+            if (!listElement) {
+                return;
+            }
+            var viewport = widget && widget.viewport === "horizontal"
+                ? "horizontal"
+                : (widget && widget.viewport === "grid" ? "grid" : "vertical");
+            listElement.className = "console-device-list console-device-list--" + viewport;
+            if (viewport === "grid") {
+                var columns = parseInt(widget && widget.gridColumns, 10);
+                if (!(columns > 0)) {
+                    columns = 2;
+                }
+                listElement.style.gridTemplateColumns = "repeat(" + columns + ", minmax(0, 1fr))";
+            } else {
+                listElement.style.gridTemplateColumns = "";
+            }
+        }
+
+        function parseBindingNumericValue(rawText) {
+            if (rawText === undefined || rawText === null || rawText === "") {
+                return NaN;
+            }
+            var match = String(rawText).match(/-?\d+(\.\d+)?/);
+            return match ? parseFloat(match[0]) : NaN;
+        }
+
+        function buildConsoleGaugeElement(binding, numericValue, displayText) {
+            var gauge = binding && binding.gauge ? binding.gauge : {};
+            var minValue = gauge.min != null ? Number(gauge.min) : 0;
+            var maxValue = gauge.max != null ? Number(gauge.max) : 100;
+            if (!(maxValue > minValue)) {
+                maxValue = minValue + 1;
+            }
+            var clamped = numericValue;
+            if (isNaN(clamped)) {
+                clamped = minValue;
+            } else if (clamped < minValue) {
+                clamped = minValue;
+            } else if (clamped > maxValue) {
+                clamped = maxValue;
+            }
+            var ratio = (clamped - minValue) / (maxValue - minValue);
+            var ranges = Array.isArray(gauge.ranges) ? gauge.ranges.slice() : [];
+            ranges.sort(function (left, right) {
+                return Number(left.top) - Number(right.top);
+            });
+            var wrap = document.createElement("div");
+            wrap.className = "console-gauge console-gauge--" + (gauge.type === "linear" ? "linear" : "arc");
+            if (gauge.type === "linear") {
+                var track = document.createElement("div");
+                track.className = "console-gauge-linear-track";
+                var fill = document.createElement("div");
+                fill.className = "console-gauge-linear-fill";
+                fill.style.width = String(Math.round(ratio * 1000) / 10) + "%";
+                var fillColor = "#3b82f6";
+                var rangeIndex;
+                for (rangeIndex = 0; rangeIndex < ranges.length; rangeIndex++) {
+                    if (clamped <= Number(ranges[rangeIndex].top)) {
+                        fillColor = ranges[rangeIndex].color || fillColor;
+                        break;
+                    }
+                }
+                fill.style.background = fillColor;
+                track.appendChild(fill);
+                wrap.appendChild(track);
+            } else {
+                // Home Assistant ha-gauge geometry: origin center, upper semicircle, sweep=1.
+                var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                svg.setAttribute("viewBox", "-52 -52 104 58");
+                svg.setAttribute("class", "console-gauge-arc-svg");
+                var arcRadius = 40;
+                var arcStroke = 14;
+                // Needle sits on the band: tip ~1mm past outer edge, base ~6mm inside inner edge.
+                var needleTipRadius = arcRadius + arcStroke / 2 + 2;
+                var needleBaseRadius = arcRadius - arcStroke / 2 - 10;
+                function gaugeAngleDeg(value) {
+                    var pct = (value - minValue) / (maxValue - minValue);
+                    if (pct < 0) {
+                        pct = 0;
+                    }
+                    if (pct > 1) {
+                        pct = 1;
+                    }
+                    return pct * 180;
+                }
+                function gaugePolar(angleDeg) {
+                    var angleRad = (angleDeg * Math.PI) / 180;
+                    return {
+                        x: -arcRadius * Math.cos(angleRad),
+                        y: -arcRadius * Math.sin(angleRad)
+                    };
+                }
+                function appendGaugeArc(fromDeg, toDeg, color, width) {
+                    if (!(toDeg > fromDeg + 0.01)) {
+                        return;
+                    }
+                    var fromPoint = gaugePolar(fromDeg);
+                    var toPoint = gaugePolar(toDeg);
+                    var largeArc = toDeg - fromDeg > 180 ? 1 : 0;
+                    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                    path.setAttribute(
+                        "d",
+                        "M " + fromPoint.x + " " + fromPoint.y
+                            + " A " + arcRadius + " " + arcRadius + " 0 " + largeArc + " 1 "
+                            + toPoint.x + " " + toPoint.y
+                    );
+                    path.setAttribute("fill", "none");
+                    path.setAttribute("stroke", color);
+                    path.setAttribute("stroke-width", String(width || arcStroke));
+                    path.setAttribute("stroke-linecap", "butt");
+                    svg.appendChild(path);
+                }
+                appendGaugeArc(0, 180, "#334155", arcStroke);
+                var previous = minValue;
+                var colorIndex;
+                for (colorIndex = 0; colorIndex < ranges.length; colorIndex++) {
+                    var top = Number(ranges[colorIndex].top);
+                    if (!(top > previous)) {
+                        continue;
+                    }
+                    appendGaugeArc(
+                        gaugeAngleDeg(previous),
+                        gaugeAngleDeg(Math.min(top, maxValue)),
+                        ranges[colorIndex].color || "#3b82f6",
+                        arcStroke
+                    );
+                    previous = top;
+                }
+                if (!ranges.length) {
+                    appendGaugeArc(0, gaugeAngleDeg(clamped), "#3b82f6", arcStroke);
+                }
+                var needleGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+                needleGroup.setAttribute(
+                    "transform",
+                    "rotate(" + gaugeAngleDeg(clamped) + ")"
+                );
+                var needlePath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                needlePath.setAttribute(
+                    "d",
+                    "M -" + needleBaseRadius + ",-2.2 L -" + needleTipRadius + ",-0.55"
+                        + " A 0.7,0.7,0,0,0,-" + needleTipRadius + ",0.55"
+                        + " L -" + needleBaseRadius + ",2.2"
+                        + " A 1.8,1.8,0,0,0,-" + needleBaseRadius + ",-2.2 Z"
+                );
+                needlePath.setAttribute("fill", "currentColor");
+                needleGroup.appendChild(needlePath);
+                svg.appendChild(needleGroup);
+                var valueText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                valueText.setAttribute("x", "0");
+                valueText.setAttribute("y", "-2");
+                valueText.setAttribute("text-anchor", "middle");
+                valueText.setAttribute("dominant-baseline", "middle");
+                valueText.setAttribute("class", "console-gauge-value-svg");
+                valueText.textContent = displayText
+                    || (isNaN(numericValue) ? "—" : String(numericValue));
+                svg.appendChild(valueText);
+                wrap.appendChild(svg);
+                return wrap;
+            }
+            var valueEl = document.createElement("div");
+            valueEl.className = "console-gauge-value";
+            valueEl.textContent = displayText || (isNaN(numericValue) ? "—" : String(numericValue));
+            wrap.appendChild(valueEl);
+            return wrap;
+        }
+
         function buildBindingRow(binding) {
             var row = document.createElement("div");
+            if (binding && binding.spacer) {
+                row.className = "console-device-row console-device-row--empty";
+                row.setAttribute("aria-hidden", "true");
+                return row;
+            }
             row.className = "console-device-row";
             var title = document.createElement("span");
             title.className = "console-device-row-title";
@@ -755,7 +958,11 @@
             }
             var typeId = device.type || "";
             var channel = bindingChannel(binding);
-            if (typeId === "onOff") {
+            var param = bindingParamId(binding);
+            var showTypeControls = param === "status"
+                || param === ""
+                || (typeId === "windowCovering" && param === "position");
+            if (showTypeControls && typeId === "onOff") {
                 var onOffSwitch = document.createElement("button");
                 onOffSwitch.type = "button";
                 var onState = onOffStateForBinding(device, binding);
@@ -767,7 +974,7 @@
                     };
                 })(device.ieee, channel, String(onState).toUpperCase() === "ON");
                 controls.appendChild(onOffSwitch);
-            } else if (typeId === "windowCovering") {
+            } else if (showTypeControls && typeId === "windowCovering") {
                 var openButton = document.createElement("button");
                 openButton.type = "button";
                 openButton.className = "btn btn-secondary btn-inline console-cover-btn";
@@ -806,7 +1013,23 @@
                 controls.appendChild(closeButton);
                 controls.appendChild(stopButton);
                 controls.appendChild(position);
-            } else if (isMeasurementDeviceType(typeId)) {
+            } else if (binding.viewStyle === "gauge") {
+                row.classList.add("console-device-row--gauge");
+                var rawState = bindingResolvedState(device, binding);
+                var displayText = isMeasurementDeviceType(typeId) && param !== "battery"
+                    ? formatMeasurementDisplay(
+                        typeId,
+                        rawState,
+                        binding.unit,
+                        bindingDecimals(binding, typeId)
+                    )
+                    : (rawState || "—");
+                controls.appendChild(buildConsoleGaugeElement(
+                    binding,
+                    parseBindingNumericValue(rawState),
+                    displayText
+                ));
+            } else if (isMeasurementDeviceType(typeId) && param !== "battery") {
                 var valueLabel = document.createElement("span");
                 valueLabel.className = "console-sensor-value";
                 valueLabel.textContent = formatMeasurementDisplay(
@@ -819,8 +1042,7 @@
             } else {
                 var generic = document.createElement("span");
                 generic.className = "console-sensor-value";
-                var entries = statusEntriesForDevice(device);
-                generic.textContent = findStatusState(entries, channel) || "—";
+                generic.textContent = bindingResolvedState(device, binding) || "—";
                 controls.appendChild(generic);
             }
             row.appendChild(controls);

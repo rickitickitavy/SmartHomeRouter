@@ -971,7 +971,8 @@ void WebConsole::handleConsolesPost(AsyncWebServerRequest *request) {
     extractJsonString(body.c_str(), "name", name);
     extractJsonBool(body.c_str(), "active", active);
     if (name.length() == 0) {
-        name = "Console";
+        request->send(400, "text/plain", "Need console name");
+        return;
     }
     ConsoleRecord *created = nullptr;
     const ConsoleWriteResult result = consoleStore->createConsole(name.c_str(), active, &created);
@@ -1031,7 +1032,11 @@ void WebConsole::handleConsolePut(AsyncWebServerRequest *request) {
     String consoleId;
     extractJsonString(body.c_str(), "id", consoleId);
     if (consoleId.length() == 0) {
-        request->send(400, "text/plain", "Need console id");
+        // Create on first Save: full JSON insert, no prior POST /api/consoles.
+        sendConsoleWriteResult(
+            request,
+            consoleStore->replaceConsoleFromJson(nullptr, body.c_str(), false)
+        );
         return;
     }
     sendConsoleWriteResult(
