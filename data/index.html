@@ -5368,6 +5368,33 @@
             return null;
         }
 
+        // Zigbee cluster/attr/command ids: hex (500 or 0x0500 → 0x0500).
+        function parseZigbeeIdToken(text) {
+            var raw = String(text || "").trim();
+            if (!raw) {
+                return null;
+            }
+            if (!/^(0x)?[0-9a-fA-F]+$/i.test(raw)) {
+                return null;
+            }
+            var parsed = parseInt(raw, 16);
+            if (!isFinite(parsed) || parsed < 0) {
+                return null;
+            }
+            return parsed;
+        }
+
+        function formatZigbeeIdToken(value) {
+            if (value == null || value === "") {
+                return "";
+            }
+            var number = Number(value);
+            if (!isFinite(number) || number < 0) {
+                return "";
+            }
+            return "0x" + Math.floor(number).toString(16).toUpperCase().padStart(4, "0");
+        }
+
         function automationKnownParamsForDevice(device) {
             var typeId = device && device.type ? String(device.type) : "unknown";
             var params = [];
@@ -5736,15 +5763,16 @@
                     var channelSelect = document.createElement("select");
                     var paramSelect = document.createElement("select");
                     var clusterInput = document.createElement("input");
-                    clusterInput.type = "number";
-                    clusterInput.min = "0";
-                    clusterInput.placeholder = "cluster";
-                    clusterInput.value = binding.cluster != null ? String(binding.cluster) : "";
+                    clusterInput.type = "text";
+                    clusterInput.placeholder = "cluster (hex)";
+                    clusterInput.value = formatZigbeeIdToken(binding.cluster);
                     var attrInput = document.createElement("input");
-                    attrInput.type = "number";
-                    attrInput.min = "0";
-                    attrInput.placeholder = "attrId";
-                    attrInput.value = binding.attrId != null ? String(binding.attrId) : "";
+                    attrInput.type = "text";
+                    attrInput.placeholder = "attrId (hex)";
+                    attrInput.value =
+                        binding.attrId != null && binding.attrId !== ""
+                            ? formatZigbeeIdToken(binding.attrId)
+                            : "";
                     function refreshCustomVisibility() {
                         var isCustom = paramSelect.value === "custom";
                         clusterInput.hidden = !isCustom;
@@ -5787,11 +5815,13 @@
                         updateAutomationImportEnabled();
                     };
                     clusterInput.onchange = function () {
-                        var clusterValue = parseInt(clusterInput.value, 10);
-                        if (clusterValue > 0) {
+                        var clusterValue = parseZigbeeIdToken(clusterInput.value);
+                        if (clusterValue != null && clusterValue > 0) {
                             binding.cluster = clusterValue;
+                            clusterInput.value = formatZigbeeIdToken(clusterValue);
                         } else {
                             delete binding.cluster;
+                            clusterInput.value = "";
                         }
                         updateAutomationImportEnabled();
                     };
@@ -5799,7 +5829,14 @@
                         if (attrInput.value === "") {
                             delete binding.attrId;
                         } else {
-                            binding.attrId = parseInt(attrInput.value, 10) || 0;
+                            var attrValue = parseZigbeeIdToken(attrInput.value);
+                            if (attrValue == null) {
+                                delete binding.attrId;
+                                attrInput.value = "";
+                            } else {
+                                binding.attrId = attrValue;
+                                attrInput.value = formatZigbeeIdToken(attrValue);
+                            }
                         }
                         updateAutomationImportEnabled();
                     };
@@ -5935,14 +5972,16 @@
             var paramSelect = document.createElement("select");
             var cmpSelect = document.createElement("select");
             var clusterInput = document.createElement("input");
-            clusterInput.type = "number";
-            clusterInput.placeholder = "cluster";
-            clusterInput.value = node.cluster != null ? String(node.cluster) : "";
+            clusterInput.type = "text";
+            clusterInput.placeholder = "cluster (hex)";
+            clusterInput.value = formatZigbeeIdToken(node.cluster);
             var attrInput = document.createElement("input");
-            attrInput.type = "number";
-            attrInput.min = "0";
-            attrInput.placeholder = "attrId";
-            attrInput.value = node.attrId != null ? String(node.attrId) : "";
+            attrInput.type = "text";
+            attrInput.placeholder = "attrId (hex)";
+            attrInput.value =
+                node.attrId != null && node.attrId !== ""
+                    ? formatZigbeeIdToken(node.attrId)
+                    : "";
             var valueHost = document.createElement("div");
             function refreshCompareOpControl() {
                 var currentTime = isAutomationCurrentTimeIeee(node.ieee);
@@ -6064,11 +6103,13 @@
                 updateAutomationImportEnabled();
             };
             clusterInput.onchange = function () {
-                var clusterValue = parseInt(clusterInput.value, 10);
-                if (clusterValue > 0) {
+                var clusterValue = parseZigbeeIdToken(clusterInput.value);
+                if (clusterValue != null && clusterValue > 0) {
                     node.cluster = clusterValue;
+                    clusterInput.value = formatZigbeeIdToken(clusterValue);
                 } else {
                     delete node.cluster;
+                    clusterInput.value = "";
                 }
                 refreshCompareValueControl();
             };
@@ -6076,7 +6117,14 @@
                 if (attrInput.value === "") {
                     delete node.attrId;
                 } else {
-                    node.attrId = parseInt(attrInput.value, 10) || 0;
+                    var attrValue = parseZigbeeIdToken(attrInput.value);
+                    if (attrValue == null) {
+                        delete node.attrId;
+                        attrInput.value = "";
+                    } else {
+                        node.attrId = attrValue;
+                        attrInput.value = formatZigbeeIdToken(attrValue);
+                    }
                 }
             };
             refreshDeviceDependent();
@@ -6163,13 +6211,16 @@
                         var commandHost = document.createElement("div");
                         var payloadHost = document.createElement("div");
                         var clusterInput = document.createElement("input");
-                        clusterInput.type = "number";
-                        clusterInput.placeholder = "cluster";
-                        clusterInput.value = action.cluster != null ? String(action.cluster) : "";
+                        clusterInput.type = "text";
+                        clusterInput.placeholder = "cluster (hex)";
+                        clusterInput.value = formatZigbeeIdToken(action.cluster);
                         var commandInput = document.createElement("input");
-                        commandInput.type = "number";
-                        commandInput.placeholder = "command";
-                        commandInput.value = action.command != null ? String(action.command) : "";
+                        commandInput.type = "text";
+                        commandInput.placeholder = "command (hex)";
+                        commandInput.value =
+                            action.command != null && action.command !== ""
+                                ? formatZigbeeIdToken(action.command)
+                                : "";
                         var valueInput = document.createElement("input");
                         valueInput.type = "text";
                         valueInput.placeholder = "value";
@@ -6187,8 +6238,8 @@
                             if (stored.value == null) {
                                 stored.value = "";
                             }
-                            clusterInput.value = String(stored.cluster || "");
-                            commandInput.value = String(stored.command != null ? stored.command : "");
+                            clusterInput.value = formatZigbeeIdToken(stored.cluster);
+                            commandInput.value = formatZigbeeIdToken(stored.command);
                             valueInput.value = String(stored.value || "");
                         }
                         function applyActionCommand(commandId, valueText) {
@@ -6321,19 +6372,27 @@
                                 parseInt(channelSelect.value, 10) || 1;
                         };
                         clusterInput.onchange = function () {
-                            var clusterValue = parseInt(clusterInput.value, 10);
-                            if (clusterValue > 0) {
+                            var clusterValue = parseZigbeeIdToken(clusterInput.value);
+                            if (clusterValue != null && clusterValue > 0) {
                                 automationEditorDraft.actions[actionIndex].cluster = clusterValue;
+                                clusterInput.value = formatZigbeeIdToken(clusterValue);
                             } else {
                                 delete automationEditorDraft.actions[actionIndex].cluster;
+                                clusterInput.value = "";
                             }
                         };
                         commandInput.onchange = function () {
                             if (commandInput.value === "") {
                                 delete automationEditorDraft.actions[actionIndex].command;
                             } else {
-                                automationEditorDraft.actions[actionIndex].command =
-                                    parseInt(commandInput.value, 10) || 0;
+                                var commandValue = parseZigbeeIdToken(commandInput.value);
+                                if (commandValue == null) {
+                                    delete automationEditorDraft.actions[actionIndex].command;
+                                    commandInput.value = "";
+                                } else {
+                                    automationEditorDraft.actions[actionIndex].command = commandValue;
+                                    commandInput.value = formatZigbeeIdToken(commandValue);
+                                }
                             }
                         };
                         valueInput.onchange = function () {

@@ -235,8 +235,16 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
                 clusterOr0 = (uint16_t)strtoul(clusterMark + 3, nullptr, 0);
             }
         }
-        if (isPosition && clusterOr0 == 0) {
-            clusterOr0 = kZigbeeClusterWindowCovering;
+        if (clusterOr0 == 0) {
+            if (isOnOffOrZone) {
+                if (strcmp(message, "LEAK") == 0 || strcmp(message, "DRY") == 0) {
+                    clusterOr0 = kZigbeeClusterIasZone;
+                } else {
+                    clusterOr0 = kZigbeeClusterOnOff;
+                }
+            } else if (isMove || isPosition) {
+                clusterOr0 = kZigbeeClusterWindowCovering;
+            }
         }
         statusValueChanged(slot->ieee, endpoint, clusterOr0, statusSlot->state);
     }

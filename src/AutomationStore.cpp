@@ -375,9 +375,15 @@ static bool validateTypedConditionNode(const AutomationCondition *node) {
                         && sibling->cmp != AutomationCmpLess) {
                         return false;
                     }
-                    double unused = 0;
-                    if (!automationParseNumericVal(sibling->value, unused)) {
+                    if (sibling->value == nullptr || sibling->value[0] == '\0') {
                         return false;
+                    }
+                    // GREATER/LESS need numbers; EQUAL may be a status string (e.g. DRY).
+                    if (sibling->cmp == AutomationCmpGreater || sibling->cmp == AutomationCmpLess) {
+                        double unused = 0;
+                        if (!automationParseNumericVal(sibling->value, unused)) {
+                            return false;
+                        }
                     }
                 } else if (!automationParamIsKnownKey(sibling->param)) {
                     return false;

@@ -5,6 +5,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
@@ -170,6 +171,56 @@ inline uint16_t automationParseAttrIdFromState(const char *state) {
     mark = strstr(state, "attr=");
     if (mark != nullptr) {
         return (uint16_t)strtoul(mark + 5, nullptr, 0);
+    }
+    return 0;
+}
+
+// Old UI stored typed hex digits as decimal (e.g. "500" for IAS 0x0500 → stored 500).
+inline bool automationClusterIdMatches(uint16_t listenerCluster, uint16_t eventCluster) {
+    if (listenerCluster == eventCluster) {
+        return true;
+    }
+    char hexDigits[12];
+    snprintf(hexDigits, sizeof(hexDigits), "%x", (unsigned)eventCluster);
+    char *end = nullptr;
+    const unsigned long asDecimalDigits = strtoul(hexDigits, &end, 10);
+    return end != hexDigits && *end == '\0' && asDecimalDigits == (unsigned long)listenerCluster;
+}
+
+inline bool automationAttrIdMatches(uint16_t listenerAttrId, uint16_t eventAttrId) {
+    if (listenerAttrId == eventAttrId) {
+        return true;
+    }
+    char hexDigits[12];
+    snprintf(hexDigits, sizeof(hexDigits), "%x", (unsigned)eventAttrId);
+    char *end = nullptr;
+    const unsigned long asDecimalDigits = strtoul(hexDigits, &end, 10);
+    return end != hexDigits && *end == '\0' && asDecimalDigits == (unsigned long)listenerAttrId;
+}
+
+// Interpreted MQTT/status strings omit cl=/attr=; map them back for CUSTOM listen matching.
+inline uint16_t automationInferClusterFromInterpretedState(const char *state) {
+    if (state == nullptr || state[0] == '\0') {
+        return 0;
+    }
+    if (strcmp(state, "LEAK") == 0 || strcmp(state, "DRY") == 0) {
+        return kZigbeeClusterIasZone;
+    }
+    if (strcmp(state, "ON") == 0 || strcmp(state, "OFF") == 0) {
+        return kZigbeeClusterOnOff;
+    }
+    if (strcmp(state, "UP") == 0 || strcmp(state, "DOWN") == 0 || strcmp(state, "STOPPED") == 0) {
+        return kZigbeeClusterWindowCovering;
+    }
+    return 0;
+}
+
+inline uint16_t automationInferAttrIdFromInterpretedState(const char *state) {
+    if (state == nullptr || state[0] == '\0') {
+        return 0;
+    }
+    if (strcmp(state, "LEAK") == 0 || strcmp(state, "DRY") == 0) {
+        return kZigbeeAttrIasZoneStatus;
     }
     return 0;
 }

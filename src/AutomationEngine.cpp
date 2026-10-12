@@ -213,13 +213,21 @@ bool AutomationEngine::evaluateComparison(
     if (resolved && automationParamIsCustom(condition->param)) {
         double liveVal = 0;
         double compareVal = 0;
-        if (automationParseNumericVal(statusText, liveVal)
-            && automationParseNumericVal(condition->value, compareVal)) {
+        const bool bothNumeric =
+            automationParseNumericVal(statusText, liveVal)
+            && automationParseNumericVal(condition->value, compareVal);
+        if (bothNumeric
+            && (condition->cmp == AutomationCmpGreater
+                || condition->cmp == AutomationCmpLess
+                || condition->cmp == AutomationCmpEqual)) {
             char liveNumber[32];
             char compareNumber[32];
             snprintf(liveNumber, sizeof(liveNumber), "%.6g", liveVal);
             snprintf(compareNumber, sizeof(compareNumber), "%.6g", compareVal);
             result = compareValues(condition->cmp, liveNumber, compareNumber);
+        } else {
+            // EQUAL (and string ops) against interpreted text such as DRY/LEAK/ON.
+            result = compareValues(condition->cmp, statusText, condition->value);
         }
     } else if (resolved) {
         result = compareValues(condition->cmp, statusText, condition->value);
@@ -485,25 +493,33 @@ bool AutomationEngine::listenerMatchesEvent(
     if (listener->channel > 0 && listener->channel != endpoint) {
         return false;
     }
-    if (listener->hasCluster && clusterOr0 != 0 && listener->cluster != clusterOr0) {
+    uint16_t effectiveCluster = clusterOr0;
+    if (effectiveCluster == 0) {
+        effectiveCluster = automationInferClusterFromInterpretedState(newState);
+    }
+    if (listener->hasCluster && effectiveCluster != 0
+        && !automationClusterIdMatches(listener->cluster, effectiveCluster)) {
         return false;
     }
-    if (listener->hasCluster && clusterOr0 == 0) {
+    if (listener->hasCluster && effectiveCluster == 0) {
         return false;
     }
     if (listener->hasAttrId) {
-        const uint16_t attrFromState = automationParseAttrIdFromState(newState);
-        if (attrFromState != 0 && attrFromState != listener->attrId) {
+        uint16_t attrFromState = automationParseAttrIdFromState(newState);
+        if (attrFromState == 0) {
+            attrFromState = automationInferAttrIdFromInterpretedState(newState);
+        }
+        if (attrFromState != 0 && !automationAttrIdMatches(listener->attrId, attrFromState)) {
             return false;
         }
         if (attrFromState == 0
             && listener->param != nullptr
-            && !automationStateMatchesParam(listener->param, clusterOr0, newState)) {
+            && !automationStateMatchesParam(listener->param, effectiveCluster, newState)) {
             return false;
         }
     } else if (listener->param != nullptr && listener->param[0] != '\0'
         && !automationParamIsCustom(listener->param)) {
-        if (!automationStateMatchesParam(listener->param, clusterOr0, newState)) {
+        if (!automationStateMatchesParam(listener->param, effectiveCluster, newState)) {
             return false;
         }
     }
