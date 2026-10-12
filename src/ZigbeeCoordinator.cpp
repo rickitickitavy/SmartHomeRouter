@@ -172,8 +172,15 @@ static void logDeviceEvent(
     const uint8_t ieee[8],
     uint16_t shortAddr,
     uint8_t endpoint,
-    const char *deviceName
+    const char *deviceName,
+    const DeviceTopicMap *registeredMap
 ) {
+    if (ieee != nullptr && registeredMap != nullptr) {
+        const DeviceTopicEntry *entry = registeredMap->findByIeee(ieee);
+        if (entry != nullptr && entry->debug == 0) {
+            return;
+        }
+    }
     String line = String("Device event ") + eventName;
     if (deviceName != nullptr && deviceName[0] != '\0') {
         line += " name=";
@@ -635,7 +642,7 @@ void ZigbeeCoordinator::storeBoundDevice(zb_device_params_t *device) {
     slot->occupied = true;
     addKnownEndpoint(slot, endpoint);
     if (isNewDevice || wasIncomplete) {
-        logDeviceEvent("join", slot->ieee, slot->shortAddr, slot->endpoint, registeredName(slot->ieee));
+        logDeviceEvent("join", slot->ieee, slot->shortAddr, slot->endpoint, registeredName(slot->ieee), registeredMap);
     }
     if (!applySavedDeviceClass(slot)
         && (slot->lastEmittedType == kZigbeeDeviceTypeNeverEmitted
@@ -664,7 +671,7 @@ void ZigbeeCoordinator::emitDeviceJoin(BoundZigbeeDevice *slot) {
         "pairing type=%s",
         zigbeeDeviceTypeJsonId(slot->zigbeeType)
     );
-    logDeviceEvent(pairingEvent, slot->ieee, slot->shortAddr, slot->endpoint, registeredName(slot->ieee));
+    logDeviceEvent(pairingEvent, slot->ieee, slot->shortAddr, slot->endpoint, registeredName(slot->ieee), registeredMap);
 }
 
 uint8_t ZigbeeCoordinator::registeredZigbeeType(const uint8_t ieee[8]) const {
@@ -1146,7 +1153,7 @@ void ZigbeeCoordinator::handleIasZoneStatus(
         ESP_ZB_ZCL_ATTR_IAS_ZONE_ZONESTATUS_ID,
         (uint32_t)message->zone_status
     );
-    logDeviceEvent(eventName, ieee, shortAddr, message->info.src_endpoint, registeredName(ieee));
+    logDeviceEvent(eventName, ieee, shortAddr, message->info.src_endpoint, registeredName(ieee), registeredMap);
     pulseInboundDevice(ieee);
     if (lightStateHandler != nullptr) {
         lightStateHandler(alarm ? "LEAK" : "DRY", ieee, message->info.src_endpoint, shortAddr, message->info.header.rssi);
@@ -1213,7 +1220,7 @@ void ZigbeeCoordinator::handleIasZoneEnroll(
         (unsigned int)message->zone_type,
         (unsigned int)zoneId
     );
-    logDeviceEvent(eventName, ieee, shortAddr, message->info.src_endpoint, registeredName(ieee));
+    logDeviceEvent(eventName, ieee, shortAddr, message->info.src_endpoint, registeredName(ieee), registeredMap);
     pulseInboundDevice(ieee);
     if (!isZeroIeee(ieee) && DeviceTopicMap::isUsableEndpoint(message->info.src_endpoint)) {
         zb_device_params_t enrollDevice{};
@@ -1256,7 +1263,7 @@ void ZigbeeCoordinator::handleAttributeReport(
     mergeBoundDeviceType(slot, zigbeeDeviceTypeFromCluster(clusterId));
     char eventName[96];
     formatAttrEventName(eventName, sizeof(eventName), clusterId, attribute->id, value);
-    logDeviceEvent(eventName, ieee, shortAddr, srcEndpoint, registeredName(ieee));
+    logDeviceEvent(eventName, ieee, shortAddr, srcEndpoint, registeredName(ieee), registeredMap);
     pulseInboundDevice(ieee);
     if (lightStateHandler == nullptr) {
         return;
@@ -1347,7 +1354,7 @@ void ZigbeeCoordinator::handleLightStateWithSource(bool on, uint8_t endpoint, es
         ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID,
         on ? 1u : 0u
     );
-    logDeviceEvent(eventName, ieee, shortAddr, endpoint, registeredName(ieee));
+    logDeviceEvent(eventName, ieee, shortAddr, endpoint, registeredName(ieee), registeredMap);
     pulseInboundDevice(ieee);
     if (lightStateHandler != nullptr && !suppressOnOff) {
         lightStateHandler(on ? "ON" : "OFF", ieee, endpoint, shortAddr, rssiForShortAddr(shortAddr));
@@ -1784,7 +1791,14 @@ bool ZigbeeCoordinator::suppressStatusReplacement(
             break;
         }
         hold->fromStatusRead = hold->fromStatusRead || statusReadActive;
-        LOGGER.info("Kept channel status ep=" + String(endpoint) + "; ignored a later reply");
+        if (registeredMap != nullptr) {
+            const DeviceTopicEntry *entry = registeredMap->findByIeee(ieee);
+            if (entry == nullptr || entry->debug != 0) {
+                LOGGER.info("Kept channel status ep=" + String(endpoint) + "; ignored a later reply");
+            }
+        } else {
+            LOGGER.info("Kept channel status ep=" + String(endpoint) + "; ignored a later reply");
+        }
         return true;
     }
     StatusAnswerHold *hold = allocateStatusAnswer();
@@ -1979,9 +1993,11 @@ void ZigbeeCoordinator::enqueueRegisteredStatusReads() {
             }
             endpointList += String(endpoints[i]);
         }
-        LOGGER.info(
-            "Status read queued ieee=" + formatIeeeText(entry->ieee) + " eps=" + endpointList
-        );
+        if (entry->debug != 0) {
+            LOGGER.info(
+                "Status read queued ieee=" + formatIeeeText(entry->ieee) + " eps=" + endpointList
+            );
+        }
     }
 }
 
@@ -2099,7 +2115,8 @@ bool ZigbeeCoordinator::transmitClusterCmd(
         device->ieee,
         device->shortAddr,
         slot->endpoint,
-        registeredName(device->ieee)
+        registeredName(device->ieee),
+        registeredMap
     );
     if (!sendZclToDevice(device, slot->endpoint, clusterId, true, commandId, payload, payloadLength)) {
         return false;
@@ -2162,7 +2179,8 @@ bool ZigbeeCoordinator::transmitOnOff(DestCommandSlot *slot, const char *command
         device->ieee,
         device->shortAddr,
         slot->endpoint,
-        registeredName(device->ieee)
+        registeredName(device->ieee),
+        registeredMap
     );
     if (actionLower == "on" || actionLower == "1" || actionLower == "true") {
         if (!sendZclToDevice(
@@ -2351,7 +2369,7 @@ bool ZigbeeCoordinator::transmitWriteAttr(
 
     char eventName[96];
     formatAttrEventName(eventName, sizeof(eventName), clusterId, attributeId, attributeValue);
-    logDeviceEvent(eventName, device->ieee, device->shortAddr, slot->endpoint, registeredName(device->ieee));
+    logDeviceEvent(eventName, device->ieee, device->shortAddr, slot->endpoint, registeredName(device->ieee), registeredMap);
     if (!sendZclToDevice(
             device,
             slot->endpoint,

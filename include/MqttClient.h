@@ -21,6 +21,7 @@ public:
     void begin(void (*rawCallback)(char *topic, byte *payload, unsigned int length));
     void onMessage(char *topic, byte *payload, unsigned int length);
     void dispatch(bool staConnected);
+    void reloadFromSettings();
     bool isConnected() const;
     void publishStatus(const char *payload);
     void publishDevices(const String &json);
@@ -77,5 +78,5 @@ private:
     void clearTopicSubscriptions();
     TopicSubscription *findTopicSubscription(const char *topic) const;
     void keepOrSubscribe(const String &subscribeTopic);
-    bool publishMessage(const char *topic, const char *payload, bool retained);
+    bool publishMessage(const char *topic, const char *payload, bool retained, bool logInfo = true);
 };

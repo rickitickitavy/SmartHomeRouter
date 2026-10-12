@@ -13,6 +13,7 @@ struct DeviceTopicEntry {
     char *availabilityTopic;
     uint8_t channelCount;
     uint8_t fullControl;
+    uint8_t debug;
     uint8_t zigbeeType;
     uint8_t transport;
     uint8_t used;

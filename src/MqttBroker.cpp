@@ -72,6 +72,16 @@ bool MqttBroker::publishFromHost(const char *topic, const char *payload, bool re
     return server->publish(topic, data, (uint8_t)0, retained);
 }
 
+void MqttBroker::reloadFromSettings() {
+    if (server == nullptr) {
+        return;
+    }
+    delete server;
+    server = nullptr;
+    STATUS_RGB.setMqttBrokerListening(false);
+    LOGGER.info("MQTT broker stopped for settings reload");
+}
+
 void MqttBroker::dispatch(bool wifiHasAddress) {
     GlobalSettings *settings = settingsManager->getSettings();
     const bool shouldListen = settings->mqtt.serverType == MqttServerTypeLocal && wifiHasAddress;

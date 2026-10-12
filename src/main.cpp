@@ -83,6 +83,8 @@ static void onSlaveUserSync(uint8_t flags, const UserRecord *user);
 static bool hostPreparationLatched = false;
 static volatile bool hostDeviceListPersistPending = false;
 static volatile bool hostMqttCommandResubscribePending = false;
+static volatile bool hostMqttReloadPending = false;
+static volatile bool hostZigbeeApplyPending = false;
 static void requestHostDeviceListPersist() {
     hostDeviceListPersistPending = true;
 }
@@ -100,6 +102,28 @@ static void pumpHostDeferredStoreWork() {
             mqttClient->subscribeDeviceCommands();
         }
     }
+#if defined(BOARD_ROLE_HOST)
+    if (hostMqttReloadPending) {
+        hostMqttReloadPending = false;
+        if (mqttBroker != nullptr) {
+            mqttBroker->reloadFromSettings();
+        }
+        if (mqttClient != nullptr) {
+            mqttClient->reloadFromSettings();
+        }
+    }
+    if (hostZigbeeApplyPending) {
+        hostZigbeeApplyPending = false;
+        GlobalSettings *zigbeeSettings = settingsManager != nullptr ? settingsManager->getSettings() : nullptr;
+        if (zigbeeSettings != nullptr) {
+            INTER_CHIP_HOST.setSettingsSource(
+                zigbeeSettings->zigbee.channel,
+                zigbeeSettings->zigbee.permitJoinOnBootSec
+            );
+            INTER_CHIP_HOST.resetSlaveSynchronous();
+        }
+    }
+#endif
     if (userStore != nullptr) {
         userStore->persistIfDue();
     }
@@ -164,6 +188,10 @@ static void applyDeviceConfigPayload(const char *payload) {
     bool parsedFullControl = false;
     if (extractJsonBool(payload, "fullControl", parsedFullControl)) {
         entry->fullControl = parsedFullControl ? 1 : 0;
+    }
+    bool parsedDebug = false;
+    if (extractJsonBool(payload, "debug", parsedDebug)) {
+        entry->debug = parsedDebug ? 1 : 0;
     }
     mqttClient->subscribeDeviceCommands();
     persistHostDeviceList();
@@ -260,7 +288,9 @@ static void applyRegisteredDeviceCommand(
     } else if (DeviceTopicMap::usesTopicSuffix(entry->channelCount) && commandEndpoint == 0) {
         commandEndpoint = 1;
     }
-    LOGGER.info(String("MQTT recv data=") + (payload != nullptr ? payload : ""));
+    if (entry->debug) {
+        LOGGER.info(String("MQTT recv data=") + (payload != nullptr ? payload : ""));
+    }
     if (entry->fullControl) {
         DeviceTopicMap::ZclWriteFields writeFields;
         if (DeviceTopicMap::parseFullControlBody(action.c_str(), commandEndpoint, &writeFields)
@@ -491,7 +521,9 @@ static void applyWifiMqttState(const char *topic, const char *payload) {
     if (body.length() == 0) {
         return;
     }
-    LOGGER.info("WiFi state " + String(topic) + " = " + body);
+    if (entry->debug) {
+        LOGGER.info("WiFi state " + String(topic) + " = " + body);
+    }
     ZIGBEE_SPI_PROXY.noteMqttState(entry->ieee, statusEndpoint, body.c_str());
     ZIGBEE_SPI_PROXY.notePacketReceived();
 }
@@ -518,12 +550,16 @@ static void applyWifiMqttAvailability(const char *topic, const char *payload) {
     }
     const String body = trimmedMqttText(payload);
     if (wifiAvailabilityIsOffline(body)) {
-        LOGGER.info("WiFi availability " + String(topic) + " = " + body);
+        if (entry->debug) {
+            LOGGER.info("WiFi availability " + String(topic) + " = " + body);
+        }
         ZIGBEE_SPI_PROXY.noteMqttOffline(entry->ieee);
         return;
     }
     if (wifiAvailabilityIsOnline(body) || body.length() > 0) {
-        LOGGER.info("WiFi availability " + String(topic) + " = " + body);
+        if (entry->debug) {
+            LOGGER.info("WiFi availability " + String(topic) + " = " + body);
+        }
         ZIGBEE_SPI_PROXY.noteSeen(entry->ieee);
         ZIGBEE_SPI_PROXY.notePacketReceived();
     }
@@ -548,7 +584,9 @@ static void applyMeasurementMqttState(const char *topic, const char *payload) {
     if (!DeviceTopicMap::isUsableEndpoint(statusEndpoint)) {
         statusEndpoint = 1;
     }
-    LOGGER.info("Measurement state " + String(topic) + " = " + body);
+    if (entry->debug) {
+        LOGGER.info("Measurement state " + String(topic) + " = " + body);
+    }
     ZIGBEE_SPI_PROXY.noteMqttState(entry->ieee, statusEndpoint, body.c_str());
 }
 
@@ -1574,6 +1612,12 @@ static void setupHost() {
         INTER_CHIP_HOST.setClockHz(speedHz);
         STATUS_RGB.setColorBrightness(bluePercent, greenPercent);
         INTER_CHIP_HOST.pushLedBrightness(bluePercent, greenPercent);
+    });
+    webConsole->setMqttReloadHandler([]() {
+        hostMqttReloadPending = true;
+    });
+    webConsole->setZigbeeApplyHandler([]() {
+        hostZigbeeApplyPending = true;
     });
     webConsole->setDeviceOnlineHandler([](const uint8_t ieee[8]) {
         return ZIGBEE_SPI_PROXY.isOnline(ieee);

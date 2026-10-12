@@ -192,7 +192,7 @@ Add device SHALL open a search dialog that contains a table of found-but-unregis
 
 ### Requirement: ZigBee tab edits the Zigbee group
 
-The ZigBee tab MUST show and allow saving CHANNEL and PERMIT_JOIN_ON_BOOT_SEC from the Zigbee group record. CHANNEL MUST be 11–26. PERMIT_JOIN_ON_BOOT_SEC MUST be 0–254. The page MUST load those values from `GET /api/zigbee` when the tab opens and on first page load, and MUST persist them with `POST /api/zigbee`. Saving MUST write EEPROM and restart so the host pushes settings to the radio slave. Reset MUST reload stored values and MUST NOT write settings.
+The ZigBee tab MUST show and allow saving CHANNEL and PERMIT_JOIN_ON_BOOT_SEC from the Zigbee group record. CHANNEL MUST be 11–26. PERMIT_JOIN_ON_BOOT_SEC MUST be 0–254. The page MUST load those values from `GET /api/zigbee` when the tab opens and on first page load, and MUST persist them with `POST /api/zigbee`. Saving MUST write EEPROM and apply the radio settings without restarting the router. Reset MUST reload stored values and MUST NOT write settings.
 
 #### Scenario: Load Zigbee settings
 
@@ -202,7 +202,7 @@ The ZigBee tab MUST show and allow saving CHANNEL and PERMIT_JOIN_ON_BOOT_SEC fr
 #### Scenario: Save Zigbee settings
 
 - **WHEN** the operator sets a valid channel and permit-join duration and saves
-- **THEN** the Zigbee group is persisted and the device restarts to apply the radio settings
+- **THEN** the Zigbee group is persisted and the radio settings are applied without a router restart
 
 ### Requirement: Settings are stored in groups
 
@@ -286,31 +286,31 @@ The Update tab MUST show the running firmware version and accept a **joined firm
 
 ### Requirement: Firmware Update shows slave-then-host progress
 
-After the browser finishes sending the firmware file, the Update tab SHALL show that the gateway is updating the slave, then the host, until success or failure. The HTTP file-upload progress bar alone SHALL NOT be treated as a completed firmware update.
+After the browser finishes sending the firmware file, the Update card SHALL show that the gateway is updating the slave (phase label **RF firmware update**), then the host, until success or failure. The HTTP file-upload progress bar alone SHALL NOT be treated as a completed firmware update. The slave-progress phase label MUST be **RF firmware update** and MUST NOT be **Master to slave**.
 
 #### Scenario: Status after file lands
 
 - **WHEN** the firmware file has finished uploading over HTTP and the slave is still being programmed
-- **THEN** the Update tab shows that the slave update is in progress and does not claim the device has already restarted
+- **THEN** the Update card shows that the RF firmware update is in progress and does not claim the device has already restarted
 
 #### Scenario: Phase percents
 
 - **WHEN** firmware update is in progress
-- **THEN** the Update tab shows upload-to-master percent, master-to-slave percent, and host-apply percent together with the current phase
+- **THEN** the Update card shows upload-to-master percent, RF firmware update percent, and host-apply percent together with the current phase
 
 ### Requirement: Firmware Update warns before host reboot
 
-When the host is about to restart after a successful firmware write, the web UI SHALL show a modal warning that the router will reboot, SHALL count down a 30 second wait, and SHALL ping the router in the background until it responds or the wait expires.
+When the host is about to restart after a successful firmware write, the Update card SHALL show a warning that the router will reboot, SHALL count down a 30 second wait, and SHALL ping the router in the background until it responds or the wait expires.
 
 #### Scenario: Router returns within wait
 
 - **WHEN** the host restarts after firmware apply and `/api/version` succeeds within 30 seconds
-- **THEN** the dialog reports that the update finished successfully
+- **THEN** the Update card reports that the update finished successfully
 
 #### Scenario: Router wait times out
 
 - **WHEN** the host does not answer `/api/version` within 30 seconds after the reboot warning
-- **THEN** the dialog reports a wait timeout error
+- **THEN** the Update card reports a wait timeout error
 
 ### Requirement: Console HTML and CSS ship inside the firmware image
 
@@ -942,7 +942,7 @@ On the login form, when the operator presses Enter and the password field is emp
 
 ### Requirement: Error and success plates hide after ten seconds
 
-Whenever the web console shows an error plate (`save-error`) or success plate (`save-success`), including login errors, that plate MUST become hidden automatically after 10 seconds unless a newer message replaces it sooner. Hiding MUST NOT clear unrelated form fields. Plates inside the firmware Update dialog that report the reboot-wait request result are exempt and MUST follow the firmware Update dialog result-plate requirement instead.
+Whenever the web console shows an error plate (`save-error`) or success plate (`save-success`), including login errors, that plate MUST become hidden automatically after 10 seconds unless a newer message replaces it sooner. Hiding MUST NOT clear unrelated form fields. Plates on the Update card that report the reboot-wait request result are exempt and MUST follow the firmware Update result-plate requirement instead.
 
 #### Scenario: Success auto-hides
 
@@ -961,26 +961,25 @@ Whenever the web console shows an error plate (`save-error`) or success plate (`
 
 #### Scenario: Firmware Update dialog plates exempt
 
-- **WHEN** the firmware Update dialog shows its reboot-wait success or error plate
+- **WHEN** the Update card shows its reboot-wait success or error plate
 - **THEN** that plate is not auto-hidden after ten seconds
-
 ### Requirement: Firmware Update dialog result plates stay visible
 
-Success and error plates inside the firmware Update dialog (`firmwareRebootSuccess` and `firmwareRebootError`) MUST remain visible until the operator closes that dialog or starts a new firmware update. Those plates MUST NOT be hidden by the global ten-second auto-hide used for other `save-error` / `save-success` plates.
+Success and error plates for the firmware reboot-wait result on the Update card (`firmwareRebootSuccess` and `firmwareRebootError`) MUST remain visible until the operator clears the update progress UI or starts a new firmware update. Those plates MUST NOT be hidden by the global ten-second auto-hide used for other `save-error` / `save-success` plates.
 
 #### Scenario: Reboot success plate stays
 
-- **WHEN** the Update dialog shows the reboot-wait success plate after the router comes back
-- **THEN** that plate stays visible past ten seconds until the operator closes the dialog
+- **WHEN** the Update card shows the reboot-wait success plate after the router comes back
+- **THEN** that plate stays visible past ten seconds until the operator clears the update progress UI
 
 #### Scenario: Reboot error plate stays
 
-- **WHEN** the Update dialog shows the reboot-wait error plate after the wait times out
-- **THEN** that plate stays visible past ten seconds until the operator closes the dialog
+- **WHEN** the Update card shows the reboot-wait error plate after the wait times out
+- **THEN** that plate stays visible past ten seconds until the operator clears the update progress UI
 
 #### Scenario: Other plates still auto-hide
 
-- **WHEN** a settings Save shows a success or error plate outside the firmware Update dialog
+- **WHEN** a settings Save shows a success or error plate outside the firmware Update progress UI
 - **THEN** that plate still hides after about ten seconds as today
 
 ### Requirement: HTTP POST bodies are bounded and request-isolated
@@ -1152,3 +1151,72 @@ The simple-user control page and Place view-mode MUST lay out each widget’s bi
 #### Scenario: Place matches user viewport
 - **WHEN** an operator opens the same console in Place view mode
 - **THEN** viewport and gauge presentation match the simple-user page for that layout
+### Requirement: Update card hosts firmware progress inline
+
+System → Update SHALL show firmware upload and joined-update progress on the Update card itself. The card SHALL include the three phase labels and percent bars (upload to master, RF firmware update, write on master), live status text, the post-host-write reboot wait (30 second countdown and background ping), and a way to clear the progress UI when the update is closeable. The console MUST NOT require a separate modal dialog overlay for these controls.
+
+#### Scenario: Progress on the card
+
+- **WHEN** the operator starts a firmware update from System → Update
+- **THEN** phase percents and status text appear on the Update card without opening a modal overlay
+
+#### Scenario: Reboot wait on the card
+
+- **WHEN** the host is about to restart after a successful firmware write
+- **THEN** the Update card shows the reboot warning, countdown, and ping result on the card
+
+### Requirement: Update card disables start when update already active
+
+When the operator opens System → Update, the console SHALL query the current firmware update status. If an update is already active (any non-idle in-progress phase), controls that start a new firmware update MUST be disabled until the active update finishes or fails. Opening the card while idle MUST leave those controls enabled.
+
+#### Scenario: Active update on enter
+
+- **WHEN** the operator opens System → Update while a firmware update is already active
+- **THEN** the Update button (and equivalent start controls) are disabled
+
+#### Scenario: Idle on enter
+
+- **WHEN** the operator opens System → Update while no update is active
+- **THEN** the Update button remains enabled for a new joined package
+
+### Requirement: Maintenance reboot with two approvals
+
+System → Maintenance SHALL show a **REBOOT** control for `isAdmin`. Activating it SHALL require two sequential confirmations before the host reboots. Canceling either confirmation MUST NOT reboot. After both approvals, the host SHALL reboot.
+
+#### Scenario: Double confirm then reboot
+
+- **WHEN** an admin clicks REBOOT and confirms twice
+- **THEN** the router reboots
+
+#### Scenario: First confirm canceled
+
+- **WHEN** an admin clicks REBOOT and cancels the first confirmation
+- **THEN** the router does not reboot and no second confirmation is shown
+
+#### Scenario: Second confirm canceled
+
+- **WHEN** an admin confirms the first reboot prompt and cancels the second
+- **THEN** the router does not reboot
+
+### Requirement: Login focuses username by default
+
+When the login form is shown (initial load without a session, after logout, or after session end), the browser focus MUST move to the user name field when that field is empty, otherwise to the password field.
+
+#### Scenario: Open login with empty username
+
+- **WHEN** a browser opens the console URL with no session and the login form appears with an empty user name field
+- **THEN** the user name field has keyboard focus
+
+#### Scenario: Open login with remembered username
+
+- **WHEN** the login form appears and the user name field is already filled
+- **THEN** the password field has keyboard focus
+
+### Requirement: MQTT save applies without router restart
+
+`POST /api/mqtt` MUST persist MQTT settings and apply them on the running host without restarting the router. The success response MUST NOT claim that the device will restart. Wi-Fi save MAY still restart.
+
+#### Scenario: Save MQTT remote settings
+
+- **WHEN** an admin saves valid MQTT settings
+- **THEN** the settings are stored, MQTT client/broker behavior follows the new settings without a router restart, and the response does not announce a restart
