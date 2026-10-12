@@ -8,6 +8,31 @@
 #include <string.h>
 #include <time.h>
 
+namespace {
+
+const char *automationWriteResultText(AutomationWriteResult result) {
+    switch (result) {
+        case AutomationWriteOk:
+            return "ok";
+        case AutomationWriteNotFound:
+            return "not found";
+        case AutomationWriteFull:
+            return "store full";
+        case AutomationWriteBadName:
+            return "bad name";
+        case AutomationWriteOutOfMemory:
+            return "out of memory";
+        case AutomationWriteParseError:
+            return "parse error";
+        case AutomationWriteValidation:
+            return "validation failed";
+        default:
+            return "unknown error";
+    }
+}
+
+}  // namespace
+
 AutomationStore::AutomationStore()
     : head(nullptr), storedCount(0), persistEnabled(false), persistPending(false) {
 }
@@ -251,9 +276,14 @@ bool AutomationStore::loadFromFile() {
     file.close();
     json.trim();
     if (json.length() == 0 || json.charAt(0) != '[') {
+        LOGGER.error("Automations file invalid (empty or not a JSON array)");
         return false;
     }
-    return replaceAllFromJson(json);
+    if (!replaceAllFromJson(json)) {
+        LOGGER.error("Automations file load/import rejected");
+        return false;
+    }
+    return true;
 }
 
 int AutomationStore::countConditionNodes(const AutomationCondition *node) {
@@ -325,6 +355,9 @@ bool AutomationStore::validateAutomation(const AutomationRecord *automation) {
     }
     if (automation->timer.use) {
         return true;
+    }
+    if (!automation->useCondition) {
+        return automation->listen != nullptr;
     }
     if (conditionIsComplete(automation->condition) && conditionUsesCurrentTime(automation->condition)) {
         return true;
@@ -876,6 +909,16 @@ AutomationWriteResult AutomationStore::parseOneAutomation(
     bool active = false;
     extractJsonBool(objectJson, "active", active);
     automation->active = active;
+    bool useCondition = true;
+    if (!extractJsonBool(objectJson, "useCondition", useCondition)) {
+        useCondition = true;
+    }
+    automation->useCondition = useCondition;
+    bool debugEnabled = false;
+    if (!extractJsonBool(objectJson, "debug", debugEnabled)) {
+        debugEnabled = false;
+    }
+    automation->debug = debugEnabled;
     int minTriggerIntervalSec = 0;
     if (extractJsonInt(objectJson, "minTriggerIntervalSec", minTriggerIntervalSec) && minTriggerIntervalSec > 0) {
         automation->minTriggerIntervalSec = (uint32_t)minTriggerIntervalSec;
@@ -950,12 +993,26 @@ bool AutomationStore::replaceAllFromJson(const String &json) {
             }
         }
         if (objectEnd == nullptr) {
+            LOGGER.error(
+                "Automation import failed: truncated JSON object at index " + String(count)
+            );
             freeAutomationList(newHead);
             return false;
         }
         String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
         AutomationRecord *automation = nullptr;
-        if (parseOneAutomation(object.c_str(), &automation, true) != AutomationWriteOk || automation == nullptr) {
+        const AutomationWriteResult parseResult = parseOneAutomation(object.c_str(), &automation, true);
+        if (parseResult != AutomationWriteOk || automation == nullptr) {
+            String nameHint;
+            extractJsonString(object.c_str(), "name", nameHint);
+            String message = "Automation import failed at index " + String(count);
+            if (nameHint.length() > 0) {
+                message += " name=";
+                message += nameHint;
+            }
+            message += ": ";
+            message += automationWriteResultText(parseResult);
+            LOGGER.error(message);
             freeAutomationList(newHead);
             return false;
         }
@@ -1005,6 +1062,8 @@ AutomationWriteResult AutomationStore::createAutomation(
         return AutomationWriteOutOfMemory;
     }
     automation->active = active;
+    automation->useCondition = true;
+    automation->debug = false;
     automation->timer.use = false;
     automation->timer.startOnBoot = false;
     automation->next = nullptr;
@@ -1072,6 +1131,8 @@ AutomationWriteResult AutomationStore::replaceFromJson(const char *name, const c
         existing->title = parsed->title;
         existing->group = parsed->group;
         existing->active = parsed->active;
+        existing->useCondition = parsed->useCondition;
+        existing->debug = parsed->debug;
         existing->minTriggerIntervalSec = parsed->minTriggerIntervalSec;
         existing->timer.use = parsed->timer.use;
         existing->timer.autoRestart = parsed->timer.autoRestart;
@@ -1293,6 +1354,10 @@ void AutomationStore::appendAutomationFull(String &json, const AutomationRecord 
     appendJsonEscaped(json, automation->group != nullptr ? automation->group : "", AUTOMATION_GROUP_MAX);
     json += "\",\"active\":";
     json += automation->active ? "true" : "false";
+    json += ",\"useCondition\":";
+    json += automation->useCondition ? "true" : "false";
+    json += ",\"debug\":";
+    json += automation->debug ? "true" : "false";
     json += ",\"minTriggerIntervalSec\":";
     json += String((unsigned long)automation->minTriggerIntervalSec);
     json += ",\"timer\":{\"use\":";

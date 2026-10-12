@@ -31,8 +31,8 @@ private:
     void evaluateMatching(const char *ieeeText, uint8_t endpoint, uint16_t clusterOr0, bool fromTimer, AutomationRecord *only);
     void evaluateAndMaybeRun(AutomationRecord *automation);
     bool isMinTriggerIntervalBlocking(const AutomationRecord *automation) const;
-    bool evaluateCondition(const AutomationCondition *condition) const;
-    bool evaluateComparison(const AutomationCondition *condition) const;
+    bool evaluateCondition(const AutomationCondition *condition, const AutomationRecord *automation) const;
+    bool evaluateComparison(const AutomationCondition *condition, const AutomationRecord *automation) const;
     bool resolveStatus(const char *ieeeText, uint8_t channel, bool hasCluster, uint16_t cluster, char *out, size_t outLen) const;
     bool formatCurrentTimeOfDay(char *out, size_t outLen) const;
     void runActions(AutomationRecord *automation);

@@ -181,20 +181,23 @@ bool AutomationEngine::formatCurrentTimeOfDay(char *out, size_t outLen) const {
     return true;
 }
 
-bool AutomationEngine::evaluateComparison(const AutomationCondition *condition) const {
+bool AutomationEngine::evaluateComparison(
+    const AutomationCondition *condition,
+    const AutomationRecord *automation
+) const {
     if (condition == nullptr) {
         return false;
     }
     char statusText[SPI_DEVICE_MESSAGE_MAX];
+    statusText[0] = '\0';
+    bool resolved = false;
     if (AutomationStore::isCurrentTimeIeee(condition->ieeeText)) {
-        if ((condition->cmp != AutomationCmpGreater && condition->cmp != AutomationCmpLess)
-            || !AutomationStore::isTimeOfDayValue(condition->value)
-            || !formatCurrentTimeOfDay(statusText, sizeof(statusText))) {
-            return false;
+        if ((condition->cmp == AutomationCmpGreater || condition->cmp == AutomationCmpLess)
+            && AutomationStore::isTimeOfDayValue(condition->value)
+            && formatCurrentTimeOfDay(statusText, sizeof(statusText))) {
+            resolved = true;
         }
-        return compareValues(condition->cmp, statusText, condition->value);
-    }
-    if (!resolveStatus(
+    } else if (resolveStatus(
             condition->ieeeText,
             condition->channel,
             condition->hasCluster,
@@ -202,24 +205,47 @@ bool AutomationEngine::evaluateComparison(const AutomationCondition *condition) 
             statusText,
             sizeof(statusText)
         )) {
-        return false;
+        resolved = true;
     }
-    return compareValues(condition->cmp, statusText, condition->value);
+    const bool result = resolved
+        && compareValues(condition->cmp, statusText, condition->value);
+    if (automation != nullptr && automation->debug) {
+        LOGGER.info(
+            String("Automation debug ")
+            + (automation->name != nullptr ? automation->name : "?")
+            + " compare "
+            + (condition->ieeeText != nullptr ? condition->ieeeText : "?")
+            + " ch"
+            + String((unsigned)condition->channel)
+            + " live="
+            + (resolved ? statusText : "(unresolved)")
+            + " "
+            + AutomationStore::compareOpToText(condition->cmp)
+            + " "
+            + (condition->value != nullptr ? condition->value : "")
+            + " -> "
+            + (result ? "true" : "false")
+        );
+    }
+    return result;
 }
 
-bool AutomationEngine::evaluateCondition(const AutomationCondition *condition) const {
+bool AutomationEngine::evaluateCondition(
+    const AutomationCondition *condition,
+    const AutomationRecord *automation
+) const {
     if (condition == nullptr) {
         return true;
     }
     bool result = false;
     if (condition->kind == AutomationConditionComparison) {
-        result = evaluateComparison(condition);
+        result = evaluateComparison(condition, automation);
     } else {
         int trueCount = 0;
         int childCount = 0;
         for (const AutomationCondition *child = condition->children; child != nullptr; child = child->nextSibling) {
             childCount++;
-            if (evaluateCondition(child)) {
+            if (evaluateCondition(child, automation)) {
                 trueCount++;
             }
         }
@@ -237,6 +263,18 @@ bool AutomationEngine::evaluateCondition(const AutomationCondition *condition) c
                     result = true;
                 }
                 break;
+        }
+        if (automation != nullptr && automation->debug) {
+            LOGGER.info(
+                String("Automation debug ")
+                + (automation->name != nullptr ? automation->name : "?")
+                + " container trueCount="
+                + String(trueCount)
+                + "/"
+                + String(childCount)
+                + " -> "
+                + (result ? "true" : "false")
+            );
         }
     }
     if (condition->notFlag) {
@@ -326,18 +364,43 @@ void AutomationEngine::evaluateAndMaybeRun(AutomationRecord *automation) {
     if (isMinTriggerIntervalBlocking(automation)) {
         return;
     }
+    if (!automation->useCondition) {
+        if (automation->debug) {
+            LOGGER.info(
+                String("Automation debug ")
+                + (automation->name != nullptr ? automation->name : "?")
+                + " useCondition=false -> true"
+            );
+        }
+        LOGGER.info(
+            String("Automation ran")
+            + (automation->timer.use ? String(" (timer)") : String(""))
+            + ": "
+            + (automation->name != nullptr ? automation->name : "?")
+        );
+        automation->lastConditionTrue = true;
+        runActions(automation);
+        return;
+    }
     const bool hasCompleteCondition = AutomationStore::conditionIsComplete(automation->condition);
     if (!automation->timer.use && !hasCompleteCondition) {
         return;
     }
     // Timer with no complete condition tree: treat conditions as TRUE (timer-only automations).
     if (automation->timer.use && !hasCompleteCondition) {
+        if (automation->debug) {
+            LOGGER.info(
+                String("Automation debug ")
+                + (automation->name != nullptr ? automation->name : "?")
+                + " empty condition on timer -> true"
+            );
+        }
         LOGGER.info(String("Automation ran (timer): ") + (automation->name != nullptr ? automation->name : "?"));
         automation->lastConditionTrue = true;
         runActions(automation);
         return;
     }
-    const bool conditionTrue = evaluateCondition(automation->condition);
+    const bool conditionTrue = evaluateCondition(automation->condition, automation);
     automation->lastConditionTrue = conditionTrue;
     if (!conditionTrue) {
         return;
@@ -357,10 +420,13 @@ void AutomationEngine::evaluateCurrentTimeAutomations() {
         if (isMinTriggerIntervalBlocking(automation)) {
             continue;
         }
+        if (!automation->useCondition) {
+            continue;
+        }
         if (!AutomationStore::conditionIsComplete(automation->condition)) {
             continue;
         }
-        const bool conditionTrue = evaluateCondition(automation->condition);
+        const bool conditionTrue = evaluateCondition(automation->condition, automation);
         const bool risingEdge = conditionTrue && !automation->lastConditionTrue;
         automation->lastConditionTrue = conditionTrue;
         if (!risingEdge) {
@@ -411,6 +477,18 @@ void AutomationEngine::evaluateMatching(
             }
             (void)endpoint;
             matched = true;
+            if (automation->debug) {
+                LOGGER.info(
+                    String("Automation debug ")
+                    + (automation->name != nullptr ? automation->name : "?")
+                    + " trigger match "
+                    + ieeeText
+                    + " ep"
+                    + String((unsigned)endpoint)
+                    + " cluster="
+                    + String((unsigned)clusterOr0)
+                );
+            }
             break;
         }
         if (matched) {
