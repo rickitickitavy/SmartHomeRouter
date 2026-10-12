@@ -97,6 +97,30 @@ inline bool extractJsonInt(const char *json, const char *key, int &out) {
     return true;
 }
 
+inline bool extractJsonDouble(const char *json, const char *key, double &out) {
+    String pattern = String("\"") + key + "\"";
+    const char *found = strstr(json, pattern.c_str());
+    if (found == nullptr) {
+        return false;
+    }
+    const char *colon = strchr(found + pattern.length(), ':');
+    if (colon == nullptr) {
+        return false;
+    }
+    colon++;
+    while (*colon == ' ' || *colon == '\t') {
+        colon++;
+    }
+    if (*colon == '"') {
+        colon++;
+    }
+    if (*colon != '-' && *colon != '.' && (*colon < '0' || *colon > '9')) {
+        return false;
+    }
+    out = atof(colon);
+    return true;
+}
+
 inline bool extractJsonKeyedSlice(const char *json, const char *key, char openBrace, String &out) {
     if (json == nullptr || key == nullptr) {
         return false;

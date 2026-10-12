@@ -5,6 +5,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct ConsoleGaugeRange {
+    float top;
+    char *color;
+    ConsoleGaugeRange *next;
+};
+
 struct ConsoleBinding {
     char *ieeeText;
     char *automationName;
@@ -12,6 +18,16 @@ struct ConsoleBinding {
     char *title;
     char *unit;
     int8_t decimals;
+    char *param;
+    uint16_t cluster;
+    int32_t attrId;
+    uint8_t viewStyle;
+    uint8_t gaugeType;
+    float gaugeMin;
+    float gaugeMax;
+    bool hasGauge;
+    bool isSpacer;
+    ConsoleGaugeRange *gaugeRanges;
     ConsoleBinding *next;
 };
 
@@ -19,6 +35,9 @@ struct ConsoleWidget {
     char *title;
     bool showGroupOnOff;
     bool isSpacer;
+    uint8_t viewport;
+    uint8_t gridColumns;
+    uint8_t gridRows;
     ConsoleBinding *bindings;
     ConsoleWidget *next;
 };
@@ -65,6 +84,7 @@ public:
     String mineJson(const class UserRecord *user) const;
     static bool heapAllowsAllocation(size_t bytes);
     static char *duplicateBoundedString(const char *source, size_t maxLength);
+    static void freeGaugeRanges(ConsoleGaugeRange *&head);
     static void freeBindingList(ConsoleBinding *&head);
     static void freeWidgetList(ConsoleWidget *&head);
     static void freeConsole(ConsoleRecord *console);
@@ -83,6 +103,15 @@ private:
     ConsoleWriteResult parseOneConsole(const char *objectJson, ConsoleRecord **outConsole, bool requireId);
     static bool parseWidgets(const char *objectJson, ConsoleWidget **outWidgets);
     static bool parseBindings(const char *widgetJson, ConsoleBinding **outBindings);
+    static bool parseGaugeConfig(const char *bindingJson, ConsoleBinding *binding);
     static void appendConsoleFull(String &json, const ConsoleRecord *console);
+    static void appendGaugeJson(String &json, const ConsoleBinding *binding);
     static void makeConsoleId(char *outId);
+    static const char *findJsonObjectEnd(const char *objectStart);
+    static uint8_t parseViewportId(const char *text);
+    static const char *viewportJsonId(uint8_t viewport);
+    static uint8_t parseViewStyleId(const char *text);
+    static const char *viewStyleJsonId(uint8_t viewStyle);
+    static uint8_t parseGaugeTypeId(const char *text);
+    static const char *gaugeTypeJsonId(uint8_t gaugeType);
 };
