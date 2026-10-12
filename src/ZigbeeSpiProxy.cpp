@@ -3,6 +3,8 @@
 #include "InterChipHost.h"
 #include "JsonField.h"
 #include "Logger.h"
+#include "ZigbeeCluster.h"
+#include "ZigbeeDeviceType.h"
 
 #include <new>
 #include <stdio.h>
@@ -101,6 +103,18 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
     if (sscanf(message, "BATTERY %u", &parsedPercent) == 1) {
         slot->hasBattery = true;
         slot->batteryPercent = parsedPercent;
+        // Battery often re-reports the same %; still notify automations (same as DRY/LEAK).
+        // Notify with a plain number so GREATER/LESS compares work (no "BATTERY " prefix).
+        if (statusValueChanged != nullptr && DeviceTopicMap::isUsableEndpoint(endpoint)) {
+            char batteryMessage[16];
+            snprintf(batteryMessage, sizeof(batteryMessage), "%u", parsedPercent);
+            statusValueChanged(
+                slot->ieee,
+                endpoint,
+                kZigbeeClusterPowerConfig,
+                batteryMessage
+            );
+        }
         return;
     }
     if (strstr(message, "cl=0x") != nullptr && strstr(message, "attr=") != nullptr) {
@@ -142,17 +156,43 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
     const bool isMove = strcmp(message, "UP") == 0
         || strcmp(message, "DOWN") == 0
         || strcmp(message, "STOPPED") == 0;
+    const bool isOnOffOrZone = strcmp(message, "ON") == 0
+        || strcmp(message, "OFF") == 0
+        || strcmp(message, "LEAK") == 0
+        || strcmp(message, "DRY") == 0;
+    const bool isDiscreteStatus = isMove || isOnOffOrZone;
+    bool isWindowCoveringDevice = false;
+    if (registryMap != nullptr) {
+        const DeviceTopicEntry *entry = registryMap->findByIeee(slot->ieee);
+        if (entry != nullptr && entry->zigbeeType == ZigbeeDeviceTypeWindowCovering) {
+            isWindowCoveringDevice = true;
+        }
+    }
     char *positionEnd = nullptr;
     const unsigned long positionParsed = strtoul(message, &positionEnd, 10);
-    (void)positionParsed;
-    const bool isPosition =
+    const bool legacyPositionPercent =
         positionEnd != message && *positionEnd == '%' && positionEnd[1] == '\0';
+    const bool plainPosition =
+        isWindowCoveringDevice
+        && positionEnd != message
+        && *positionEnd == '\0'
+        && positionParsed <= 100UL;
+    const bool isPosition = legacyPositionPercent || plainPosition;
     if (isMove) {
         strncpy(statusSlot->coveringMove, message, sizeof(statusSlot->coveringMove) - 1);
         statusSlot->coveringMove[sizeof(statusSlot->coveringMove) - 1] = '\0';
+    } else if (isOnOffOrZone) {
+        strncpy(statusSlot->discreteStatus, message, sizeof(statusSlot->discreteStatus) - 1);
+        statusSlot->discreteStatus[sizeof(statusSlot->discreteStatus) - 1] = '\0';
     } else if (isPosition) {
-        strncpy(statusSlot->coveringPosition, message, sizeof(statusSlot->coveringPosition) - 1);
-        statusSlot->coveringPosition[sizeof(statusSlot->coveringPosition) - 1] = '\0';
+        // Store plain integer only — strip legacy trailing '%' for GREATER/LESS compares.
+        snprintf(
+            statusSlot->coveringPosition,
+            sizeof(statusSlot->coveringPosition),
+            "%lu",
+            positionParsed
+        );
+        snprintf(statusSlot->state, sizeof(statusSlot->state), "%lu", positionParsed);
     } else {
         const char *space = strchr(message, ' ');
         if (space != nullptr) {
@@ -163,26 +203,28 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
                 moveToken[moveLen] = '\0';
                 char *legacyPosEnd = nullptr;
                 const unsigned long legacyPos = strtoul(space + 1, &legacyPosEnd, 10);
-                (void)legacyPos;
                 const bool legacyMove = strcmp(moveToken, "UP") == 0
                     || strcmp(moveToken, "DOWN") == 0
                     || strcmp(moveToken, "STOPPED") == 0;
                 const bool legacyPosOk =
-                    legacyPosEnd != (space + 1) && *legacyPosEnd == '%' && legacyPosEnd[1] == '\0';
+                    legacyPosEnd != (space + 1)
+                    && ((*legacyPosEnd == '%' && legacyPosEnd[1] == '\0')
+                        || *legacyPosEnd == '\0');
                 if (legacyMove && legacyPosOk) {
                     strncpy(statusSlot->coveringMove, moveToken, sizeof(statusSlot->coveringMove) - 1);
                     statusSlot->coveringMove[sizeof(statusSlot->coveringMove) - 1] = '\0';
-                    strncpy(
+                    snprintf(
                         statusSlot->coveringPosition,
-                        space + 1,
-                        sizeof(statusSlot->coveringPosition) - 1
+                        sizeof(statusSlot->coveringPosition),
+                        "%lu",
+                        legacyPos
                     );
-                    statusSlot->coveringPosition[sizeof(statusSlot->coveringPosition) - 1] = '\0';
                 }
             }
         }
     }
-    if (valueChanged && statusValueChanged != nullptr) {
+    // Discrete statuses (DRY/LEAK/ON/OFF/UP/…) re-report the same value often; still notify.
+    if ((valueChanged || isDiscreteStatus) && statusValueChanged != nullptr) {
         uint16_t clusterOr0 = 0;
         const char *clusterMark = strstr(message, "cl=0x");
         if (clusterMark != nullptr) {
@@ -192,6 +234,9 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
             if (clusterMark != nullptr) {
                 clusterOr0 = (uint16_t)strtoul(clusterMark + 3, nullptr, 0);
             }
+        }
+        if (isPosition && clusterOr0 == 0) {
+            clusterOr0 = kZigbeeClusterWindowCovering;
         }
         statusValueChanged(slot->ieee, endpoint, clusterOr0, statusSlot->state);
     }
@@ -442,7 +487,17 @@ bool ZigbeeSpiProxy::copyEndpointStateForParam(
     }
     out[0] = '\0';
     const CachedDevice *slot = findByIeee(ieee);
-    if (slot == nullptr || slot->channels == nullptr) {
+    if (slot == nullptr) {
+        return false;
+    }
+    if (param != nullptr && strcmp(param, "battery") == 0) {
+        if (!slot->hasBattery) {
+            return false;
+        }
+        snprintf(out, outLen, "%u", (unsigned)slot->batteryPercent);
+        return true;
+    }
+    if (slot->channels == nullptr) {
         return false;
     }
     const EndpointStatus *best = nullptr;
@@ -450,7 +505,8 @@ bool ZigbeeSpiProxy::copyEndpointStateForParam(
         const EndpointStatus *candidate = &slot->channels[index];
         if (candidate->state[0] == '\0'
             && candidate->coveringMove[0] == '\0'
-            && candidate->coveringPosition[0] == '\0') {
+            && candidate->coveringPosition[0] == '\0'
+            && candidate->discreteStatus[0] == '\0') {
             continue;
         }
         if (endpoint == 0) {
@@ -470,8 +526,12 @@ bool ZigbeeSpiProxy::copyEndpointStateForParam(
     const char *source = best->state;
     if (param != nullptr && strcmp(param, "position") == 0 && best->coveringPosition[0] != '\0') {
         source = best->coveringPosition;
-    } else if (param != nullptr && strcmp(param, "status") == 0 && best->coveringMove[0] != '\0') {
-        source = best->coveringMove;
+    } else if (param != nullptr && strcmp(param, "status") == 0) {
+        if (best->coveringMove[0] != '\0') {
+            source = best->coveringMove;
+        } else if (best->discreteStatus[0] != '\0') {
+            source = best->discreteStatus;
+        }
     }
     if (source[0] == '\0') {
         return false;
@@ -1053,7 +1113,22 @@ void ZigbeeSpiProxy::onSpiEvent(const SpiFrame &frame) {
         }
         packetsRx++;
         if (lightStateHandler != nullptr) {
-            lightStateHandler(message, ieee, endpoint, shortAddr);
+            // Publish plain comparable values (no "BATTERY " / trailing '%').
+            char normalizedMessage[SPI_DEVICE_MESSAGE_MAX];
+            const char *publishMessage = message;
+            unsigned batteryPercent = 0;
+            if (sscanf(message, "BATTERY %u", &batteryPercent) == 1) {
+                snprintf(normalizedMessage, sizeof(normalizedMessage), "%u", batteryPercent);
+                publishMessage = normalizedMessage;
+            } else {
+                char *percentEnd = nullptr;
+                const unsigned long positionPercent = strtoul(message, &percentEnd, 10);
+                if (percentEnd != message && *percentEnd == '%' && percentEnd[1] == '\0') {
+                    snprintf(normalizedMessage, sizeof(normalizedMessage), "%lu", positionPercent);
+                    publishMessage = normalizedMessage;
+                }
+            }
+            lightStateHandler(publishMessage, ieee, endpoint, shortAddr);
         }
         return;
     }
@@ -1154,7 +1229,8 @@ void ZigbeeSpiProxy::appendListTelemetry(const uint8_t ieee[8], String &json) co
     for (uint8_t i = 0; i < slot->channelCapacity; i++) {
         if (slot->channels[i].state[0] != '\0'
             || slot->channels[i].coveringMove[0] != '\0'
-            || slot->channels[i].coveringPosition[0] != '\0') {
+            || slot->channels[i].coveringPosition[0] != '\0'
+            || slot->channels[i].discreteStatus[0] != '\0') {
             anyStatus = true;
             break;
         }
@@ -1171,7 +1247,8 @@ void ZigbeeSpiProxy::appendListTelemetry(const uint8_t ieee[8], String &json) co
         for (uint8_t i = 0; i < slot->channelCapacity; i++) {
             if (slot->channels[i].state[0] == '\0'
                 && slot->channels[i].coveringMove[0] == '\0'
-                && slot->channels[i].coveringPosition[0] == '\0') {
+                && slot->channels[i].coveringPosition[0] == '\0'
+                && slot->channels[i].discreteStatus[0] == '\0') {
                 continue;
             }
             if (haveLastEndpoint && slot->channels[i].endpoint <= lastEndpoint) {

@@ -205,14 +205,28 @@ inline bool automationStateMatchesParam(const char *param, uint16_t clusterOr0, 
         return false;
     }
     if (strcmp(param, "battery") == 0) {
-        return strncmp(newState, "BATTERY", 7) == 0
-            || (clusterOr0 == kZigbeeClusterPowerConfig);
+        if (clusterOr0 == kZigbeeClusterPowerConfig) {
+            return true;
+        }
+        if (strncmp(newState, "BATTERY", 7) == 0) {
+            return true;
+        }
+        // Plain percent number (preferred comparable form).
+        char *batteryEnd = nullptr;
+        strtod(newState, &batteryEnd);
+        return batteryEnd != newState && *batteryEnd == '\0';
     }
     if (strcmp(param, "position") == 0) {
         if (clusterOr0 != 0 && clusterOr0 != kZigbeeClusterWindowCovering) {
             return false;
         }
-        return strchr(newState, '%') != nullptr;
+        if (strchr(newState, '%') != nullptr) {
+            return true;
+        }
+        double unused = 0;
+        return automationParseNumericVal(newState, unused)
+            && strcmp(newState, "ON") != 0
+            && strcmp(newState, "OFF") != 0;
     }
     if (strcmp(param, "lightLevel") == 0) {
         if (clusterOr0 != 0 && clusterOr0 != kZigbeeClusterLevelControl) {
@@ -240,6 +254,12 @@ inline bool automationStateMatchesParam(const char *param, uint16_t clusterOr0, 
             && strstr(newState, "UP") == nullptr
             && strstr(newState, "DOWN") == nullptr
             && strstr(newState, "STOPPED") == nullptr) {
+            return false;
+        }
+        // Reject plain numbers (battery / position / level) — status is discrete text.
+        char *statusEnd = nullptr;
+        strtod(newState, &statusEnd);
+        if (statusEnd != newState && *statusEnd == '\0') {
             return false;
         }
         return true;

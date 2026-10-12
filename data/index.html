@@ -2530,7 +2530,8 @@
             var move = entry.move || "";
             var position = entry.position || "";
             if (move || position) {
-                return [move, position].filter(Boolean).join(" ");
+                var positionLabel = position ? coveringPositionText(position) : "";
+                return [move, positionLabel].filter(Boolean).join(" ");
             }
             return coveringPositionText(entry.state || "");
         }
@@ -4268,9 +4269,11 @@
                 var position = document.createElement("span");
                 position.className = "console-cover-position";
                 var coveringEntry = findStatusEntry(statusEntriesForDevice(device), channel);
-                position.textContent = coveringEntry && coveringEntry.position
-                    ? coveringEntry.position
-                    : placeCoveringPosition(coveringEntry ? coveringEntry.state : "");
+                position.textContent = placeCoveringPosition(
+                    coveringEntry && coveringEntry.position
+                        ? coveringEntry.position
+                        : (coveringEntry ? coveringEntry.state : "")
+                );
                 controls.appendChild(position);
             } else if (isMeasurementDeviceType(typeId)) {
                 var valueLabel = document.createElement("span");
@@ -5406,13 +5409,13 @@
                 return [];
             }
             if (key === "position") {
-                return ["0%", "25%", "50%", "75%", "100%"];
+                return ["0", "25", "50", "75", "100"];
             }
             if (key === "lightLevel") {
                 return ["0", "64", "128", "192", "254"];
             }
             if (key === "battery") {
-                return ["BATTERY 10", "BATTERY 25", "BATTERY 50", "BATTERY 75", "BATTERY 100"];
+                return ["10", "25", "50", "75", "100"];
             }
             if (key === "sensorValue") {
                 return [];

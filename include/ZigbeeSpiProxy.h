@@ -92,6 +92,7 @@ private:
         char state[SPI_DEVICE_MESSAGE_MAX];
         char coveringMove[16];
         char coveringPosition[8];
+        char discreteStatus[16];
     };
 
     struct CachedDevice {

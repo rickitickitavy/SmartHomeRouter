@@ -963,7 +963,7 @@ static void runDeviceRegistryFixtures() {
                 return false;
             }
             zigbeeWindowCoveringFormatPosition(coveringStatus, sizeof(coveringStatus), 42);
-            return strcmp(coveringStatus, "42%") == 0;
+            return strcmp(coveringStatus, "42") == 0;
         }()
         || !zigbeeJoinShouldEmit(kZigbeeDeviceTypeNeverEmitted, ZigbeeDeviceTypeUnknown)
         || !zigbeeJoinShouldEmit(ZigbeeDeviceTypeUnknown, ZigbeeDeviceTypeOnOff)

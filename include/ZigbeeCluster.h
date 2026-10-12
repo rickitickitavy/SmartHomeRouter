@@ -177,5 +177,6 @@ inline void zigbeeWindowCoveringFormatPosition(char *out, size_t outSize, unsign
     if (out == nullptr || outSize == 0) {
         return;
     }
-    snprintf(out, outSize, "%u%%", positionPercent);
+    // Plain integer only — no '%' so GREATER/LESS automation compares work.
+    snprintf(out, outSize, "%u", positionPercent);
 }

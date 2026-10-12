@@ -84,12 +84,11 @@ bool AutomationEngine::compareValues(AutomationCompareOp op, const char *left, c
     if (right == nullptr) {
         right = "";
     }
-    char *leftEnd = nullptr;
-    char *rightEnd = nullptr;
-    const double leftNumber = strtod(left, &leftEnd);
-    const double rightNumber = strtod(right, &rightEnd);
+    double leftNumber = 0;
+    double rightNumber = 0;
+    // Parse embedded numbers so legacy "BATTERY 66" / "66%" still compare with GREATER/LESS.
     const bool bothNumeric =
-        leftEnd != left && rightEnd != right && *leftEnd == '\0' && *rightEnd == '\0';
+        automationParseNumericVal(left, leftNumber) && automationParseNumericVal(right, rightNumber);
     const bool bothTimeOfDay =
         AutomationStore::isTimeOfDayValue(left) && AutomationStore::isTimeOfDayValue(right);
     switch (op) {
