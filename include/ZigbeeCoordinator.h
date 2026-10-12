@@ -366,12 +366,6 @@ private:
     void enqueueRegisteredStatusReads();
     void enqueueTypeStatusRead(const DeviceTopicEntry *entry, uint8_t endpoint);
     BoundZigbeeDevice::CoveringStatus *coveringStatusFor(BoundZigbeeDevice *slot, uint8_t endpoint);
-    void emitWindowCoveringStatus(
-        BoundZigbeeDevice *slot,
-        uint8_t endpoint,
-        const uint8_t ieee[8],
-        uint16_t shortAddr
-    );
     void sendNextIfReady(DestCommandSlot *slot);
     void serviceCommandFlights();
     void markInFlight(DestCommandSlot *slot, uint16_t clusterId);

@@ -1,0 +1,32 @@
+---
+description: Never add a new entity to any list/store until first successful Save
+alwaysApply: true
+---
+
+# No pre-add of new entities
+
+ALWAYS add a **new** entity to a list, collection, store, dropdown, cache, table, or any other place **ONLY after the first successful Save**.
+
+## Why
+
+If Add/create persists (or injects) the entity before Save, Cancel is not enough: a page reload still shows the orphan, and the user cannot remove it via Cancel.
+
+## Required pattern
+
+1. **Add** opens an editor with local/in-memory state only (empty name/defaults as designed).
+2. **Cancel** discards that state. No create, no delete-of-placeholder, no list row.
+3. **Save** is the first API/store write that inserts the entity; then refresh lists from the server/store.
+4. Do **not** auto-generate placeholder names (`rule-1`, `Console`, etc.) just to create early.
+5. Do **not** inject the unsaved name into other pickers, caches, or sibling dropdowns.
+
+## Forbidden
+
+```text
+Add → POST/create in store → open editor → Cancel/reload leaves orphan in collection
+```
+
+## Required
+
+```text
+Add → open editor (memory only) → Save → then appear in lists/collections everywhere
+```

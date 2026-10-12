@@ -33,10 +33,24 @@ private:
     bool isMinTriggerIntervalBlocking(const AutomationRecord *automation) const;
     bool evaluateCondition(const AutomationCondition *condition, const AutomationRecord *automation) const;
     bool evaluateComparison(const AutomationCondition *condition, const AutomationRecord *automation) const;
-    bool resolveStatus(const char *ieeeText, uint8_t channel, bool hasCluster, uint16_t cluster, char *out, size_t outLen) const;
+    bool resolveStatus(
+        const char *ieeeText,
+        uint8_t channel,
+        bool hasCluster,
+        uint16_t cluster,
+        const char *param,
+        char *out,
+        size_t outLen
+    ) const;
     bool formatCurrentTimeOfDay(char *out, size_t outLen) const;
     void runActions(AutomationRecord *automation);
     void applyAction(const AutomationAction *action);
     static bool compareValues(AutomationCompareOp op, const char *left, const char *right);
     static uint16_t parseClusterFromState(const char *state);
+    static bool listenerMatchesEvent(
+        const AutomationListener *listener,
+        uint8_t endpoint,
+        uint16_t clusterOr0,
+        const char *newState
+    );
 };

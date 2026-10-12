@@ -1,4 +1,5 @@
 #include "AutomationStore.h"
+#include "AutomationParam.h"
 #include "JsonField.h"
 #include "Logger.h"
 
@@ -136,6 +137,7 @@ void AutomationStore::freeListenerList(AutomationListener *&listHead) {
     while (listHead != nullptr) {
         AutomationListener *next = listHead->next;
         free(listHead->ieeeText);
+        free(listHead->param);
         free(listHead);
         listHead = next;
     }
@@ -149,6 +151,7 @@ void AutomationStore::freeConditionTree(AutomationCondition *&root) {
     freeConditionTree(root->children);
     freeConditionTree(root->nextSibling);
     free(root->ieeeText);
+    free(root->param);
     free(root->value);
     free(root);
     root = nullptr;
@@ -158,7 +161,9 @@ void AutomationStore::freeActionList(AutomationAction *&listHead) {
     while (listHead != nullptr) {
         AutomationAction *next = listHead->next;
         free(listHead->ieeeText);
+        free(listHead->param);
         free(listHead->payload);
+        free(listHead->customValue);
         free(listHead->automationName);
         free(listHead);
         listHead = next;
@@ -341,11 +346,87 @@ static bool validateConditionTree(const AutomationCondition *node) {
     return true;
 }
 
+static bool validateTypedListener(const AutomationListener *listener) {
+    if (listener == nullptr) {
+        return false;
+    }
+    if (listener->param == nullptr || listener->param[0] == '\0') {
+        return true;
+    }
+    if (automationParamIsCustom(listener->param)) {
+        return listener->hasCluster && listener->hasAttrId;
+    }
+    return automationParamIsKnownKey(listener->param);
+}
+
+static bool validateTypedConditionNode(const AutomationCondition *node) {
+    if (node == nullptr) {
+        return true;
+    }
+    for (const AutomationCondition *sibling = node; sibling != nullptr; sibling = sibling->nextSibling) {
+        if (sibling->kind == AutomationConditionComparison) {
+            if (sibling->param != nullptr && sibling->param[0] != '\0') {
+                if (automationParamIsCustom(sibling->param)) {
+                    if (!sibling->hasCluster || !sibling->hasAttrId) {
+                        return false;
+                    }
+                    if (sibling->cmp != AutomationCmpEqual
+                        && sibling->cmp != AutomationCmpGreater
+                        && sibling->cmp != AutomationCmpLess) {
+                        return false;
+                    }
+                    double unused = 0;
+                    if (!automationParseNumericVal(sibling->value, unused)) {
+                        return false;
+                    }
+                } else if (!automationParamIsKnownKey(sibling->param)) {
+                    return false;
+                }
+            }
+            continue;
+        }
+        if (!validateTypedConditionNode(sibling->children)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool validateTypedActions(const AutomationAction *actions) {
+    for (const AutomationAction *action = actions; action != nullptr; action = action->next) {
+        if (action->target != AutomationTargetDevice) {
+            continue;
+        }
+        if (action->hasCustomCommand || automationParamIsCustom(action->param)) {
+            if (!action->hasCustomCommand || action->customCluster == 0) {
+                return false;
+            }
+            continue;
+        }
+        // Catalog commands, typed command/value text, or any non-empty wire payload.
+        if (!automationActionPayloadOk(action->payload)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool AutomationStore::validateAutomation(const AutomationRecord *automation) {
     if (automation == nullptr || !isNameSafe(automation->name)) {
         return false;
     }
     if (!validateConditionTree(automation->condition)) {
+        return false;
+    }
+    if (!validateTypedConditionNode(automation->condition)) {
+        return false;
+    }
+    for (const AutomationListener *listener = automation->listen; listener != nullptr; listener = listener->next) {
+        if (!validateTypedListener(listener)) {
+            return false;
+        }
+    }
+    if (!validateTypedActions(automation->actions)) {
         return false;
     }
     if (automation->timer.use
@@ -571,10 +652,37 @@ bool AutomationStore::parseListeners(const char *objectJson, AutomationListener 
             freeListenerList(*outListeners);
             return false;
         }
+        listener->channel = 0;
+        if (strstr(object.c_str(), "\"channel\"") != nullptr) {
+            int channel = 1;
+            if (extractJsonInt(object.c_str(), "channel", channel) && channel > 0) {
+                if (channel > DEVICE_CHANNEL_COUNT_MAX) {
+                    channel = DEVICE_CHANNEL_COUNT_MAX;
+                }
+                listener->channel = (uint8_t)channel;
+            }
+        }
+        String paramText;
+        if (extractJsonString(object.c_str(), "param", paramText) && paramText.length() > 0) {
+            listener->param = duplicateBoundedString(paramText.c_str(), AUTOMATION_PARAM_KEY_MAX - 1);
+            if (listener->param == nullptr) {
+                freeListenerList(*outListeners);
+                free(listener->ieeeText);
+                free(listener);
+                return false;
+            }
+        }
         int cluster = 0;
         if (extractJsonInt(object.c_str(), "cluster", cluster) && cluster > 0) {
             listener->hasCluster = true;
             listener->cluster = (uint16_t)cluster;
+        }
+        if (strstr(object.c_str(), "\"attrId\"") != nullptr) {
+            int attrId = 0;
+            if (extractJsonInt(object.c_str(), "attrId", attrId)) {
+                listener->hasAttrId = true;
+                listener->attrId = (uint16_t)attrId;
+            }
         }
         if (tail == nullptr) {
             *outListeners = listener;
@@ -639,10 +747,25 @@ bool AutomationStore::parseCondition(const char *conditionJson, AutomationCondit
             channel = DEVICE_CHANNEL_COUNT_MAX;
         }
         condition->channel = (uint8_t)channel;
+        String paramText;
+        if (extractJsonString(conditionJson, "param", paramText) && paramText.length() > 0) {
+            condition->param = duplicateBoundedString(paramText.c_str(), AUTOMATION_PARAM_KEY_MAX - 1);
+            if (condition->param == nullptr) {
+                freeConditionTree(condition);
+                return false;
+            }
+        }
         int cluster = 0;
         if (extractJsonInt(conditionJson, "cluster", cluster) && cluster > 0) {
             condition->hasCluster = true;
             condition->cluster = (uint16_t)cluster;
+        }
+        if (strstr(conditionJson, "\"attrId\"") != nullptr) {
+            int attrId = 0;
+            if (extractJsonInt(conditionJson, "attrId", attrId)) {
+                condition->hasAttrId = true;
+                condition->attrId = (uint16_t)attrId;
+            }
         }
         *outCondition = condition;
         return true;
@@ -800,21 +923,84 @@ bool AutomationStore::parseActions(const char *objectJson, AutomationAction **ou
             action->target = AutomationTargetDevice;
             String ieeeText;
             String payload;
-            if (!extractJsonString(object.c_str(), "ieee", ieeeText)
-                || !extractJsonString(object.c_str(), "payload", payload)
-                || ieeeText.length() == 0) {
+            const bool haveIeee = extractJsonString(object.c_str(), "ieee", ieeeText) && ieeeText.length() > 0;
+            const bool havePayload = extractJsonString(object.c_str(), "payload", payload);
+            int customCluster = 0;
+            int customCommand = 0;
+            String customValue;
+            const bool haveCustomCluster =
+                extractJsonInt(object.c_str(), "cluster", customCluster) && customCluster > 0;
+            const bool haveCustomCommand =
+                strstr(object.c_str(), "\"command\"") != nullptr
+                && extractJsonInt(object.c_str(), "command", customCommand);
+            extractJsonString(object.c_str(), "value", customValue);
+            String paramText;
+            extractJsonString(object.c_str(), "param", paramText);
+            const bool isCustomParam = automationParamIsCustom(paramText.c_str());
+            if (!haveIeee) {
                 free(action);
                 freeActionList(*outActions);
                 return false;
             }
+            if (isCustomParam || (haveCustomCluster && haveCustomCommand)) {
+                if (!haveCustomCluster || !haveCustomCommand) {
+                    free(action);
+                    freeActionList(*outActions);
+                    return false;
+                }
+                action->hasCustomCommand = true;
+                action->customCluster = (uint16_t)customCluster;
+                action->customCommand = (uint16_t)customCommand;
+                action->customValue = duplicateBoundedString(
+                    customValue.c_str(),
+                    AUTOMATION_VALUE_MAX - 1
+                );
+                if (action->customValue == nullptr) {
+                    free(action);
+                    freeActionList(*outActions);
+                    return false;
+                }
+                char builtPayload[AUTOMATION_VALUE_MAX];
+                if (!automationBuildCustomPayload(
+                        action->customCluster,
+                        action->customCommand,
+                        action->customValue,
+                        builtPayload,
+                        sizeof(builtPayload)
+                    )) {
+                    free(action->customValue);
+                    free(action);
+                    freeActionList(*outActions);
+                    return false;
+                }
+                action->payload = duplicateBoundedString(builtPayload, AUTOMATION_VALUE_MAX - 1);
+            } else {
+                if (!havePayload) {
+                    free(action);
+                    freeActionList(*outActions);
+                    return false;
+                }
+                action->payload = duplicateBoundedString(payload.c_str(), AUTOMATION_VALUE_MAX - 1);
+            }
             action->ieeeText = duplicateBoundedString(ieeeText.c_str(), IEEE_TEXT_MAX - 1);
-            action->payload = duplicateBoundedString(payload.c_str(), AUTOMATION_VALUE_MAX - 1);
             if (action->ieeeText == nullptr || action->payload == nullptr) {
                 free(action->ieeeText);
                 free(action->payload);
+                free(action->customValue);
                 free(action);
                 freeActionList(*outActions);
                 return false;
+            }
+            if (paramText.length() > 0) {
+                action->param = duplicateBoundedString(paramText.c_str(), AUTOMATION_PARAM_KEY_MAX - 1);
+                if (action->param == nullptr) {
+                    free(action->ieeeText);
+                    free(action->payload);
+                    free(action->customValue);
+                    free(action);
+                    freeActionList(*outActions);
+                    return false;
+                }
             }
             int channel = 1;
             extractJsonInt(object.c_str(), "channel", channel);
@@ -1062,7 +1248,7 @@ AutomationWriteResult AutomationStore::createAutomation(
         return AutomationWriteOutOfMemory;
     }
     automation->active = active;
-    automation->useCondition = true;
+    automation->useCondition = false;
     automation->debug = false;
     automation->timer.use = false;
     automation->timer.startOnBoot = false;
@@ -1291,9 +1477,18 @@ void AutomationStore::appendConditionJson(String &json, const AutomationConditio
         appendJsonEscaped(json, condition->ieeeText, IEEE_TEXT_MAX);
         json += "\",\"channel\":";
         json += String((unsigned)condition->channel);
+        if (condition->param != nullptr && condition->param[0] != '\0') {
+            json += ",\"param\":\"";
+            appendJsonEscaped(json, condition->param, AUTOMATION_PARAM_KEY_MAX);
+            json += "\"";
+        }
         if (condition->hasCluster) {
             json += ",\"cluster\":";
             json += String((unsigned)condition->cluster);
+        }
+        if (condition->hasAttrId) {
+            json += ",\"attrId\":";
+            json += String((unsigned)condition->attrId);
         }
         json += ",\"cmp\":\"";
         json += compareOpToText(condition->cmp);
@@ -1325,6 +1520,24 @@ void AutomationStore::appendActionJson(String &json, const AutomationAction *act
         appendJsonEscaped(json, action->ieeeText, IEEE_TEXT_MAX);
         json += "\",\"channel\":";
         json += String((unsigned)action->channel);
+        if (action->param != nullptr && action->param[0] != '\0') {
+            json += ",\"param\":\"";
+            appendJsonEscaped(json, action->param, AUTOMATION_PARAM_KEY_MAX);
+            json += "\"";
+        }
+        if (action->hasCustomCommand) {
+            json += ",\"cluster\":";
+            json += String((unsigned)action->customCluster);
+            json += ",\"command\":";
+            json += String((unsigned)action->customCommand);
+            json += ",\"value\":\"";
+            appendJsonEscaped(
+                json,
+                action->customValue != nullptr ? action->customValue : "",
+                AUTOMATION_VALUE_MAX
+            );
+            json += "\"";
+        }
         json += ",\"payload\":\"";
         appendJsonEscaped(json, action->payload, AUTOMATION_VALUE_MAX);
         json += "\"}";
@@ -1384,9 +1597,22 @@ void AutomationStore::appendAutomationFull(String &json, const AutomationRecord 
         json += "{\"ieee\":\"";
         appendJsonEscaped(json, listener->ieeeText, IEEE_TEXT_MAX);
         json += "\"";
+        if (listener->channel > 0) {
+            json += ",\"channel\":";
+            json += String((unsigned)listener->channel);
+        }
+        if (listener->param != nullptr && listener->param[0] != '\0') {
+            json += ",\"param\":\"";
+            appendJsonEscaped(json, listener->param, AUTOMATION_PARAM_KEY_MAX);
+            json += "\"";
+        }
         if (listener->hasCluster) {
             json += ",\"cluster\":";
             json += String((unsigned)listener->cluster);
+        }
+        if (listener->hasAttrId) {
+            json += ",\"attrId\":";
+            json += String((unsigned)listener->attrId);
         }
         json += "}";
     }

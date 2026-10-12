@@ -73,6 +73,13 @@ public:
         void (*)(const uint8_t ieee[8], uint8_t endpoint, uint16_t clusterOr0, const char *newState);
     void setStatusValueChangedHandler(StatusValueChangedFn handler);
     bool copyEndpointState(const uint8_t ieee[8], uint8_t endpoint, char *out, size_t outLen) const;
+    bool copyEndpointStateForParam(
+        const uint8_t ieee[8],
+        uint8_t endpoint,
+        const char *param,
+        char *out,
+        size_t outLen
+    ) const;
     void pumpOnlineWindows();
     bool commandsAllowed() const;
 
@@ -83,6 +90,8 @@ private:
     struct EndpointStatus {
         uint8_t endpoint;
         char state[SPI_DEVICE_MESSAGE_MAX];
+        char coveringMove[16];
+        char coveringPosition[8];
     };
 
     struct CachedDevice {

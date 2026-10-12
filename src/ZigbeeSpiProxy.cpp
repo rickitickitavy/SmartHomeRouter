@@ -139,6 +139,49 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
     const bool valueChanged = strcmp(statusSlot->state, message) != 0;
     strncpy(statusSlot->state, message, sizeof(statusSlot->state) - 1);
     statusSlot->state[sizeof(statusSlot->state) - 1] = '\0';
+    const bool isMove = strcmp(message, "UP") == 0
+        || strcmp(message, "DOWN") == 0
+        || strcmp(message, "STOPPED") == 0;
+    char *positionEnd = nullptr;
+    const unsigned long positionParsed = strtoul(message, &positionEnd, 10);
+    (void)positionParsed;
+    const bool isPosition =
+        positionEnd != message && *positionEnd == '%' && positionEnd[1] == '\0';
+    if (isMove) {
+        strncpy(statusSlot->coveringMove, message, sizeof(statusSlot->coveringMove) - 1);
+        statusSlot->coveringMove[sizeof(statusSlot->coveringMove) - 1] = '\0';
+    } else if (isPosition) {
+        strncpy(statusSlot->coveringPosition, message, sizeof(statusSlot->coveringPosition) - 1);
+        statusSlot->coveringPosition[sizeof(statusSlot->coveringPosition) - 1] = '\0';
+    } else {
+        const char *space = strchr(message, ' ');
+        if (space != nullptr) {
+            char moveToken[16];
+            const size_t moveLen = (size_t)(space - message);
+            if (moveLen > 0 && moveLen < sizeof(moveToken)) {
+                memcpy(moveToken, message, moveLen);
+                moveToken[moveLen] = '\0';
+                char *legacyPosEnd = nullptr;
+                const unsigned long legacyPos = strtoul(space + 1, &legacyPosEnd, 10);
+                (void)legacyPos;
+                const bool legacyMove = strcmp(moveToken, "UP") == 0
+                    || strcmp(moveToken, "DOWN") == 0
+                    || strcmp(moveToken, "STOPPED") == 0;
+                const bool legacyPosOk =
+                    legacyPosEnd != (space + 1) && *legacyPosEnd == '%' && legacyPosEnd[1] == '\0';
+                if (legacyMove && legacyPosOk) {
+                    strncpy(statusSlot->coveringMove, moveToken, sizeof(statusSlot->coveringMove) - 1);
+                    statusSlot->coveringMove[sizeof(statusSlot->coveringMove) - 1] = '\0';
+                    strncpy(
+                        statusSlot->coveringPosition,
+                        space + 1,
+                        sizeof(statusSlot->coveringPosition) - 1
+                    );
+                    statusSlot->coveringPosition[sizeof(statusSlot->coveringPosition) - 1] = '\0';
+                }
+            }
+        }
+    }
     if (valueChanged && statusValueChanged != nullptr) {
         uint16_t clusterOr0 = 0;
         const char *clusterMark = strstr(message, "cl=0x");
@@ -383,6 +426,57 @@ bool ZigbeeSpiProxy::copyEndpointState(
         return false;
     }
     strncpy(out, best->state, outLen - 1);
+    out[outLen - 1] = '\0';
+    return true;
+}
+
+bool ZigbeeSpiProxy::copyEndpointStateForParam(
+    const uint8_t ieee[8],
+    uint8_t endpoint,
+    const char *param,
+    char *out,
+    size_t outLen
+) const {
+    if (out == nullptr || outLen == 0 || ieee == nullptr) {
+        return false;
+    }
+    out[0] = '\0';
+    const CachedDevice *slot = findByIeee(ieee);
+    if (slot == nullptr || slot->channels == nullptr) {
+        return false;
+    }
+    const EndpointStatus *best = nullptr;
+    for (uint8_t index = 0; index < slot->channelCapacity; index++) {
+        const EndpointStatus *candidate = &slot->channels[index];
+        if (candidate->state[0] == '\0'
+            && candidate->coveringMove[0] == '\0'
+            && candidate->coveringPosition[0] == '\0') {
+            continue;
+        }
+        if (endpoint == 0) {
+            if (best == nullptr || candidate->endpoint < best->endpoint) {
+                best = candidate;
+            }
+            continue;
+        }
+        if (candidate->endpoint == endpoint) {
+            best = candidate;
+            break;
+        }
+    }
+    if (best == nullptr) {
+        return false;
+    }
+    const char *source = best->state;
+    if (param != nullptr && strcmp(param, "position") == 0 && best->coveringPosition[0] != '\0') {
+        source = best->coveringPosition;
+    } else if (param != nullptr && strcmp(param, "status") == 0 && best->coveringMove[0] != '\0') {
+        source = best->coveringMove;
+    }
+    if (source[0] == '\0') {
+        return false;
+    }
+    strncpy(out, source, outLen - 1);
     out[outLen - 1] = '\0';
     return true;
 }
@@ -1058,7 +1152,9 @@ void ZigbeeSpiProxy::appendListTelemetry(const uint8_t ieee[8], String &json) co
     }
     bool anyStatus = false;
     for (uint8_t i = 0; i < slot->channelCapacity; i++) {
-        if (slot->channels[i].state[0] != '\0') {
+        if (slot->channels[i].state[0] != '\0'
+            || slot->channels[i].coveringMove[0] != '\0'
+            || slot->channels[i].coveringPosition[0] != '\0') {
             anyStatus = true;
             break;
         }
@@ -1073,7 +1169,9 @@ void ZigbeeSpiProxy::appendListTelemetry(const uint8_t ieee[8], String &json) co
     for (;;) {
         int bestIndex = -1;
         for (uint8_t i = 0; i < slot->channelCapacity; i++) {
-            if (slot->channels[i].state[0] == '\0') {
+            if (slot->channels[i].state[0] == '\0'
+                && slot->channels[i].coveringMove[0] == '\0'
+                && slot->channels[i].coveringPosition[0] == '\0') {
                 continue;
             }
             if (haveLastEndpoint && slot->channels[i].endpoint <= lastEndpoint) {
@@ -1099,7 +1197,26 @@ void ZigbeeSpiProxy::appendListTelemetry(const uint8_t ieee[8], String &json) co
             slot->channels[bestIndex].state,
             sizeof(slot->channels[bestIndex].state)
         );
-        json += "\"}";
+        json += "\"";
+        if (slot->channels[bestIndex].coveringMove[0] != '\0') {
+            json += ",\"move\":\"";
+            appendJsonEscaped(
+                json,
+                slot->channels[bestIndex].coveringMove,
+                sizeof(slot->channels[bestIndex].coveringMove)
+            );
+            json += "\"";
+        }
+        if (slot->channels[bestIndex].coveringPosition[0] != '\0') {
+            json += ",\"position\":\"";
+            appendJsonEscaped(
+                json,
+                slot->channels[bestIndex].coveringPosition,
+                sizeof(slot->channels[bestIndex].coveringPosition)
+            );
+            json += "\"";
+        }
+        json += "}";
         lastEndpoint = slot->channels[bestIndex].endpoint;
         haveLastEndpoint = true;
     }
