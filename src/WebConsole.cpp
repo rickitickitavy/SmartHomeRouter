@@ -1161,13 +1161,16 @@ void WebConsole::handleAutomationsRestorePost(AsyncWebServerRequest *request) {
     String trimmed = body;
     trimmed.trim();
     if (trimmed.length() == 0 || trimmed.charAt(0) != '[') {
+        LOGGER.error("Automation import failed: body is empty or not a JSON array");
         request->send(400, "text/plain", "Need an automations JSON array");
         return;
     }
     if (!automationStore->replaceAllFromJson(trimmed)) {
+        LOGGER.error("Automation import failed: list rejected");
         request->send(400, "text/plain", "Need a valid automations list");
         return;
     }
+    LOGGER.info("Automation import restored " + String(automationStore->automationCount()) + " automation(s)");
     request->send(200, "text/plain", "Restored");
 }
 
@@ -1936,6 +1939,7 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
     }
     if (haveAutomations) {
         if (automationStore == nullptr || !automationStore->replaceAllFromJson(automationsJson)) {
+            LOGGER.error("Settings restore failed: automations list rejected");
             request->send(400, "text/plain", "Need a valid automations list");
             return;
         }

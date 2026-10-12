@@ -1657,7 +1657,7 @@ html, body {
 }
 
 #automationEditDialog .automation-general-box,
-#automationEditDialog .automation-timer-box,
+#automationEditDialog .automation-trigger-box,
 #automationEditDialog .automation-condition-box {
     display: flex;
     flex-direction: column;
@@ -1669,12 +1669,18 @@ html, body {
 }
 
 #automationEditDialog .automation-general-box .upload-title,
+#automationEditDialog .automation-trigger-box .upload-title,
 #automationEditDialog .automation-condition-box .upload-title {
     margin: 0 0 0.25rem;
 }
 
+#automationEditDialog .automation-trigger-box > .upload-title + .upload-title,
+#automationEditDialog .automation-trigger-box #automationTimerDetails + .upload-title {
+    margin-top: 0.65rem;
+}
+
 #automationEditDialog .automation-general-box .field,
-#automationEditDialog .automation-timer-box .field,
+#automationEditDialog .automation-trigger-box .field,
 #automationEditDialog .automation-condition-box .field {
     padding: 0.5rem 0;
     border: none;
@@ -1684,16 +1690,20 @@ html, body {
 }
 
 #automationEditDialog .automation-general-box .field-check,
-#automationEditDialog .automation-timer-box .field-check,
+#automationEditDialog .automation-trigger-box .field-check,
 #automationEditDialog .automation-condition-box .field-check {
     margin: 0;
     padding: 0.15rem 0;
 }
 
 #automationEditDialog .automation-general-box .field-hint,
-#automationEditDialog .automation-timer-box .field-hint,
+#automationEditDialog .automation-trigger-box .field-hint,
 #automationEditDialog .automation-condition-box .field-hint {
     margin: 0.15rem 0 0;
+}
+
+#automationEditDialog .automation-trigger-box .automation-add-btn {
+    align-self: flex-start;
 }
 
 #automationEditDialog .automation-action-toolbar {

@@ -8,6 +8,31 @@
 #include <string.h>
 #include <time.h>
 
+namespace {
+
+const char *automationWriteResultText(AutomationWriteResult result) {
+    switch (result) {
+        case AutomationWriteOk:
+            return "ok";
+        case AutomationWriteNotFound:
+            return "not found";
+        case AutomationWriteFull:
+            return "store full";
+        case AutomationWriteBadName:
+            return "bad name";
+        case AutomationWriteOutOfMemory:
+            return "out of memory";
+        case AutomationWriteParseError:
+            return "parse error";
+        case AutomationWriteValidation:
+            return "validation failed";
+        default:
+            return "unknown error";
+    }
+}
+
+}  // namespace
+
 AutomationStore::AutomationStore()
     : head(nullptr), storedCount(0), persistEnabled(false), persistPending(false) {
 }
@@ -251,9 +276,14 @@ bool AutomationStore::loadFromFile() {
     file.close();
     json.trim();
     if (json.length() == 0 || json.charAt(0) != '[') {
+        LOGGER.error("Automations file invalid (empty or not a JSON array)");
         return false;
     }
-    return replaceAllFromJson(json);
+    if (!replaceAllFromJson(json)) {
+        LOGGER.error("Automations file load/import rejected");
+        return false;
+    }
+    return true;
 }
 
 int AutomationStore::countConditionNodes(const AutomationCondition *node) {
@@ -963,12 +993,26 @@ bool AutomationStore::replaceAllFromJson(const String &json) {
             }
         }
         if (objectEnd == nullptr) {
+            LOGGER.error(
+                "Automation import failed: truncated JSON object at index " + String(count)
+            );
             freeAutomationList(newHead);
             return false;
         }
         String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
         AutomationRecord *automation = nullptr;
-        if (parseOneAutomation(object.c_str(), &automation, true) != AutomationWriteOk || automation == nullptr) {
+        const AutomationWriteResult parseResult = parseOneAutomation(object.c_str(), &automation, true);
+        if (parseResult != AutomationWriteOk || automation == nullptr) {
+            String nameHint;
+            extractJsonString(object.c_str(), "name", nameHint);
+            String message = "Automation import failed at index " + String(count);
+            if (nameHint.length() > 0) {
+                message += " name=";
+                message += nameHint;
+            }
+            message += ": ";
+            message += automationWriteResultText(parseResult);
+            LOGGER.error(message);
             freeAutomationList(newHead);
             return false;
         }

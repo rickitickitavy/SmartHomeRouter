@@ -10,15 +10,19 @@ System → Hardware MUST scroll its settings fields when content exceeds the pan
 - **THEN** the fields scroll inside the panel and Save and Reset remain visible at the bottom
 
 ### Requirement: Automation editor uses spaced groups including General
-The automation edit dialog body MUST present groups in this order with about one blank line of vertical space between them: **General**, **Timer**, **Triggered by devices**, **Condition**, **Actions**. General MUST be a single container holding Active, Name, Group, then optional Min trigger interval if still shown, then Debug—without wrapping each of those controls in its own field card. The dialog MUST NOT show a Title field.
+The automation edit dialog body MUST present groups in this order with about one blank line of vertical space between them: **General**, **Trigger**, **Condition**, **Actions**. General MUST be a single container holding Active, Name, Group, then optional Min trigger interval if still shown, then Debug—without wrapping each of those controls in its own field card. The Trigger group MUST be a single container that starts with the countdown timer controls (enable labeled **Use countdown timer**), then **Triggered by devices** (heading, trigger-device rows, and **Add device to trigger**). The dialog MUST NOT show a Title field.
 
 #### Scenario: General order without Title
 - **WHEN** the operator opens the automation edit dialog
 - **THEN** General shows Active, then Name, then Group, and no Title control appears
 
 #### Scenario: Group spacing
-- **WHEN** the operator views the edit dialog with Timer and Condition sections present
-- **THEN** General, Timer, Triggered by devices, Condition, and Actions are separated by visible vertical spacing
+- **WHEN** the operator views the edit dialog with Trigger and Condition sections present
+- **THEN** General, Trigger, Condition, and Actions are separated by visible vertical spacing
+
+#### Scenario: Timer at start of Trigger
+- **WHEN** the operator views the Trigger group
+- **THEN** Use countdown timer appears before Triggered by devices inside the same container
 
 ### Requirement: Automation condition group has an enable checkbox
 The Condition group MUST include a checkbox that enables the main condition editor. When the checkbox is unchecked, the main condition editor MUST be hidden. That checkbox state MUST persist with the automation and round-trip through dialog Save, export/import, and settings restore.
@@ -41,7 +45,7 @@ General MUST end with a Debug checkbox. That flag MUST persist with the automati
 ## MODIFIED Requirements
 
 ### Requirement: Automation edit dialog import and export
-Add or row edit MUST open an edit dialog with **General** (Active, then Name, then Group, Debug; no title), TIMER (`use`, `startOnBoot`, `autoRestart`, `defaultTime`, and runtime `counting` / `timeLeft` when known), listening devices, Condition (enable checkbox plus editor when enabled), actions (device or automation targets), Export, and Import. Dialog Import MUST be enabled only when the form is empty (no listeners, no actions, condition disabled or empty, TIMER `use` false / defaults unset). Dialog Export MUST download one JSON file named from the automation’s `name`.
+Add or row edit MUST open an edit dialog with **General** (Active, then Name, then Group, Debug; no title), **Trigger** (countdown TIMER controls first, then listening devices), Condition (enable checkbox plus editor when enabled), actions (device or automation targets), Export, and Import. Dialog Import MUST be enabled only when the form is empty (no listeners, no actions, condition disabled or empty, TIMER `use` false / defaults unset). Dialog Export MUST download one JSON file named from the automation’s `name`.
 
 #### Scenario: Group after name
 - **WHEN** the operator opens the automation edit dialog

@@ -21,6 +21,12 @@
 
 - [x] 4.1 During apply, bump `FIRMWARE_VERSION` build by 1 from the propose value `3.1.13` and verify a host build succeeds for the environments that ship this console.
 
+## 5. Follow-up editor polish
+
+- [x] 5.1 Rename the Timer enable label to **Use countdown timer** in the automation edit dialog; verify the checkbox text shows the new wording.
+- [x] 5.2 Wrap Triggered by devices heading, device rows, and **Add device to trigger** in one listen container (same chrome as General/Condition); verify they sit inside a single bordered group.
+- [x] 5.3 Move the timer controls into the **Trigger** section at the beginning (before Triggered by devices) in one shared container; verify order is Use countdown timer then Triggered by devices.
+
 ## Workflow follow-up
 
 - Archive after implementation review.

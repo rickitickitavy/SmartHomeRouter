@@ -3920,6 +3920,7 @@
         var automationEditorDraft = null;
         var automationEditorBaseline = null;
         var automationEditorOriginalName = "";
+        var automationEditorIsNew = false;
         var automationNameListCache = [];
         var automationListCache = [];
         var automationSelectedGroup = "__all__";
@@ -5035,7 +5036,7 @@
                 });
             }).then(function (payload) {
                 loadAutomations();
-                openAutomationEditDialog(payload.name);
+                openAutomationEditDialog(payload.name, true);
             }).catch(function (error) {
                 if (errorLine) {
                     errorLine.hidden = false;
@@ -5044,7 +5045,7 @@
             });
         }
 
-        function openAutomationEditDialog(automationName) {
+        function openAutomationEditDialog(automationName, isNew) {
             var errorLine = document.getElementById("automationEditError");
             if (errorLine) {
                 errorLine.hidden = true;
@@ -5089,9 +5090,13 @@
                 }
                 automationEditorOriginalName = automationEditorDraft.name;
                 automationEditorBaseline = JSON.stringify(automationEditorDraft);
+                automationEditorIsNew = !!isNew;
                 document.getElementById("automationEditDialog").hidden = false;
                 renderAutomationEditor();
             }).catch(function (error) {
+                if (isNew) {
+                    discardNewAutomationIfNeeded(automationName);
+                }
                 if (errorLine) {
                     errorLine.hidden = false;
                     errorLine.textContent = error && error.message ? error.message : "Load failed";
@@ -5099,12 +5104,35 @@
             });
         }
 
+        function discardNewAutomationIfNeeded(name) {
+            if (!name) {
+                loadAutomations();
+                return;
+            }
+            fetch("/api/automations", {
+                method: "DELETE",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: name })
+            }).then(function () {
+                loadAutomations();
+            }).catch(function () {
+                loadAutomations();
+            });
+        }
+
         function closeAutomationEditDialog() {
             closeAutomationGroupCombo();
+            var discardName = automationEditorIsNew
+                ? (automationEditorOriginalName || (automationEditorDraft && automationEditorDraft.name) || "")
+                : "";
             automationEditorDraft = null;
             automationEditorBaseline = null;
             automationEditorOriginalName = "";
+            automationEditorIsNew = false;
             document.getElementById("automationEditDialog").hidden = true;
+            if (discardName) {
+                discardNewAutomationIfNeeded(discardName);
+            }
         }
 
         function automationEditHasUnsavedChanges() {
@@ -5761,6 +5789,7 @@
                     if (!response.ok) {
                         throw new Error(text || ("HTTP " + response.status));
                     }
+                    automationEditorIsNew = false;
                     automationEditorBaseline = JSON.stringify(automationEditorDraft);
                     loadAutomations();
                     closeAutomationEditDialog();
@@ -5784,6 +5813,7 @@
         function confirmDeleteAutomation() {
             var errorLine = document.getElementById("automationEditError");
             var name = automationEditorOriginalName || (automationEditorDraft && automationEditorDraft.name);
+            automationEditorIsNew = false;
             fetch("/api/automations", {
                 method: "DELETE",
                 headers: { "Content-Type": "application/json" },
@@ -7982,10 +8012,11 @@
                     Debug
                 </label>
             </div>
-            <div class="automation-timer-box automation-edit-section">
+            <div class="automation-trigger-box automation-edit-section">
+                <h4 class="upload-title">Trigger</h4>
                 <label class="field-check">
                     <input id="automationTimerUse" type="checkbox" onchange="updateAutomationTimerVisibility(); updateAutomationImportEnabled();">
-                    Use timer
+                    Use countdown timer
                 </label>
                 <div id="automationTimerDetails">
                     <label class="field-check">
@@ -8003,8 +8034,6 @@
                     </div>
                     <p id="automationTimerRuntime" class="field-hint">Not counting</p>
                 </div>
-            </div>
-            <div class="automation-edit-section">
                 <h4 class="upload-title">Triggered by devices</h4>
                 <div id="automationListenEditor"></div>
             </div>
