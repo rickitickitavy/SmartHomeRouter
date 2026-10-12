@@ -1085,7 +1085,11 @@ void WebConsole::sendAutomationWriteResult(AsyncWebServerRequest *request, Autom
         return;
     }
     if (result == AutomationWriteValidation) {
-        request->send(400, "text/plain", "Need timer or at least one listener and condition");
+        request->send(
+            400,
+            "text/plain",
+            "Invalid automation (need timer, or a listener plus a complete condition value; check actions)"
+        );
         return;
     }
     request->send(400, "text/plain", "Bad automation");
@@ -1193,12 +1197,8 @@ void WebConsole::handleAutomationsPost(AsyncWebServerRequest *request) {
     extractJsonString(body.c_str(), "title", title);
     extractJsonBool(body.c_str(), "active", active);
     if (name.length() == 0) {
-        for (int attempt = 1; attempt <= AUTOMATION_STORE_MAX + 1; attempt++) {
-            name = "rule-" + String(attempt);
-            if (automationStore->findByName(name.c_str()) == nullptr) {
-                break;
-            }
-        }
+        request->send(400, "text/plain", "Need automation name");
+        return;
     }
     if (title.length() == 0) {
         title = name;
@@ -1264,13 +1264,19 @@ void WebConsole::handleAutomationPut(AsyncWebServerRequest *request) {
     if (lookupName.length() == 0) {
         lookupName = name;
     }
-    if (lookupName.length() == 0) {
+    if (name.length() == 0) {
         request->send(400, "text/plain", "Need automation name");
         return;
     }
+    const bool exists =
+        lookupName.length() > 0 && automationStore->findByName(lookupName.c_str()) != nullptr;
     sendAutomationWriteResult(
         request,
-        automationStore->replaceFromJson(lookupName.c_str(), body.c_str(), true)
+        automationStore->replaceFromJson(
+            exists ? lookupName.c_str() : name.c_str(),
+            body.c_str(),
+            exists
+        )
     );
 }
 

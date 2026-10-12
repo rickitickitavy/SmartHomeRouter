@@ -942,30 +942,28 @@ static void runDeviceRegistryFixtures() {
         || zigbeeWindowCoveringPositionPercent(0x64) != 100
         || zigbeeWindowCoveringPositionPercent(0x80) != 100
         || strcmp(zigbeeWindowCoveringMoveName(kZigbeeWindowCoveringMoveDown), "DOWN") != 0
-        || zigbeeWindowCoveringMoveName(kZigbeeWindowCoveringMoveStopped) != nullptr
+        || strcmp(zigbeeWindowCoveringMoveName(kZigbeeWindowCoveringMoveStopped), "STOPPED") != 0
         || strcmp(zigbeeWindowCoveringMoveName(kZigbeeWindowCoveringMoveUp), "UP") != 0
         || ![&]() {
             char coveringStatus[32];
-            zigbeeWindowCoveringFormatStatus(
+            zigbeeWindowCoveringFormatMoveStatus(
                 coveringStatus,
                 sizeof(coveringStatus),
-                true,
-                kZigbeeWindowCoveringMoveDown,
-                true,
-                42
+                kZigbeeWindowCoveringMoveDown
             );
-            if (strcmp(coveringStatus, "DOWN 42%") != 0) {
+            if (strcmp(coveringStatus, "DOWN") != 0) {
                 return false;
             }
-            zigbeeWindowCoveringFormatStatus(
+            zigbeeWindowCoveringFormatMoveStatus(
                 coveringStatus,
                 sizeof(coveringStatus),
-                true,
-                kZigbeeWindowCoveringMoveStopped,
-                true,
-                42
+                kZigbeeWindowCoveringMoveStopped
             );
-            return strcmp(coveringStatus, "42%") == 0;
+            if (strcmp(coveringStatus, "STOPPED") != 0) {
+                return false;
+            }
+            zigbeeWindowCoveringFormatPosition(coveringStatus, sizeof(coveringStatus), 42);
+            return strcmp(coveringStatus, "42") == 0;
         }()
         || !zigbeeJoinShouldEmit(kZigbeeDeviceTypeNeverEmitted, ZigbeeDeviceTypeUnknown)
         || !zigbeeJoinShouldEmit(ZigbeeDeviceTypeUnknown, ZigbeeDeviceTypeOnOff)

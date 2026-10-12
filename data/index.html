@@ -2497,7 +2497,9 @@
             for (index = 0; index < raw.length; index++) {
                 entries.push({
                     ep: raw[index].ep,
-                    state: raw[index].state || ""
+                    state: raw[index].state || "",
+                    move: raw[index].move || "",
+                    position: raw[index].position || ""
                 });
             }
             entries.sort(function (left, right) {
@@ -2506,14 +2508,32 @@
             return entries;
         }
 
-        function findStatusState(entries, endpoint) {
+        function findStatusEntry(entries, endpoint) {
             var index;
             for (index = 0; index < entries.length; index++) {
                 if (entries[index].ep == endpoint) {
-                    return entries[index].state;
+                    return entries[index];
                 }
             }
-            return "";
+            return null;
+        }
+
+        function findStatusState(entries, endpoint) {
+            var entry = findStatusEntry(entries, endpoint);
+            return entry ? (entry.state || "") : "";
+        }
+
+        function coveringDisplayText(entry) {
+            if (!entry) {
+                return "";
+            }
+            var move = entry.move || "";
+            var position = entry.position || "";
+            if (move || position) {
+                var positionLabel = position ? coveringPositionText(position) : "";
+                return [move, positionLabel].filter(Boolean).join(" ");
+            }
+            return coveringPositionText(entry.state || "");
         }
 
         function coveringPositionText(state) {
@@ -2606,8 +2626,9 @@
                 var coveringParts = [];
                 var coveringIndex;
                 for (coveringIndex = 0; coveringIndex < entries.length; coveringIndex++) {
-                    if (entries[coveringIndex].state) {
-                        coveringParts.push(coveringPositionText(entries[coveringIndex].state));
+                    var coveringText = coveringDisplayText(entries[coveringIndex]);
+                    if (coveringText) {
+                        coveringParts.push(coveringText);
                     }
                 }
                 cell.textContent = coveringParts.join(" ");
@@ -4247,8 +4268,11 @@
                 });
                 var position = document.createElement("span");
                 position.className = "console-cover-position";
+                var coveringEntry = findStatusEntry(statusEntriesForDevice(device), channel);
                 position.textContent = placeCoveringPosition(
-                    findStatusState(statusEntriesForDevice(device), channel)
+                    coveringEntry && coveringEntry.position
+                        ? coveringEntry.position
+                        : (coveringEntry ? coveringEntry.state : "")
                 );
                 controls.appendChild(position);
             } else if (isMeasurementDeviceType(typeId)) {
@@ -4429,7 +4453,7 @@
                 title: "",
                 active: true,
                 group: "",
-                useCondition: true,
+                useCondition: false,
                 debug: false,
                 minTriggerIntervalSec: 0,
                 timer: { use: false, autoRestart: false, startOnBoot: false, defaultTime: 0, counting: false, timeLeft: 0 },
@@ -4438,7 +4462,7 @@
                 actions: []
             }));
             if (typeof draft.useCondition !== "boolean") {
-                draft.useCondition = true;
+                draft.useCondition = false;
             }
             if (typeof draft.debug !== "boolean") {
                 draft.debug = false;
@@ -4475,46 +4499,122 @@
 
         function buildEditableDiscreteControl(currentValue, discreteValues, onChange) {
             var host = document.createElement("div");
-            host.className = "automation-value-combo";
-            if (discreteValues && discreteValues.length > 0) {
-                var select = document.createElement("select");
-                var values = discreteValues.slice();
-                var current = currentValue != null ? String(currentValue) : "";
-                if (current && values.indexOf(current) < 0) {
-                    values.unshift(current);
-                }
-                if (!current) {
-                    var blankOption = document.createElement("option");
-                    blankOption.value = "";
-                    blankOption.textContent = "—";
-                    select.appendChild(blankOption);
-                }
-                var valueIndex;
-                for (valueIndex = 0; valueIndex < values.length; valueIndex++) {
-                    var option = document.createElement("option");
-                    option.value = values[valueIndex];
-                    option.textContent = values[valueIndex];
-                    select.appendChild(option);
-                }
-                select.value = current;
-                select.onchange = function () {
-                    onChange(select.value);
-                };
-                host.appendChild(select);
-                return host;
-            }
+            host.className = "combo-field automation-value-combo";
             var input = document.createElement("input");
             input.type = "text";
-            input.value = currentValue || "";
             input.autocomplete = "off";
+            input.placeholder = "Value";
+            input.value = currentValue != null ? String(currentValue) : "";
+            var toggle = document.createElement("button");
+            toggle.type = "button";
+            toggle.className = "combo-field-toggle";
+            toggle.setAttribute("aria-label", "Show values");
+            toggle.tabIndex = -1;
+            var list = document.createElement("ul");
+            list.className = "combo-field-list";
+            list.hidden = true;
             function commitValue() {
                 onChange(input.value);
             }
+            function placeList() {
+                if (list.hidden) {
+                    return;
+                }
+                if (list.parentNode !== document.body) {
+                    document.body.appendChild(list);
+                }
+                var rect = host.getBoundingClientRect();
+                list.style.position = "fixed";
+                list.style.left = String(Math.round(rect.left)) + "px";
+                list.style.width = String(Math.round(rect.width)) + "px";
+                list.style.top = String(Math.round(rect.bottom + 2)) + "px";
+                list.style.zIndex = "80";
+            }
+            function closeList() {
+                list.hidden = true;
+                host.classList.remove("is-open");
+                if (list.parentNode !== host) {
+                    host.appendChild(list);
+                }
+            }
+            function renderList(filterText) {
+                list.innerHTML = "";
+                var values = Array.isArray(discreteValues) ? discreteValues.slice() : [];
+                var filter = String(filterText || "").trim().toLowerCase();
+                var shown = 0;
+                var valueIndex;
+                for (valueIndex = 0; valueIndex < values.length; valueIndex++) {
+                    var optionValue = String(values[valueIndex]);
+                    if (filter && optionValue.toLowerCase().indexOf(filter) < 0) {
+                        continue;
+                    }
+                    var item = document.createElement("li");
+                    item.className = "combo-field-option";
+                    item.textContent = optionValue;
+                    item.onmousedown = function (event) {
+                        event.preventDefault();
+                        input.value = this.textContent;
+                        commitValue();
+                        closeList();
+                    };
+                    list.appendChild(item);
+                    shown++;
+                }
+                if (!shown) {
+                    var empty = document.createElement("li");
+                    empty.className = "combo-field-option is-empty";
+                    empty.textContent = "Type a value";
+                    list.appendChild(empty);
+                }
+            }
+            function openList() {
+                renderList(input.value);
+                list.hidden = false;
+                host.classList.add("is-open");
+                placeList();
+            }
+            input.oninput = function () {
+                commitValue();
+                if (!list.hidden) {
+                    renderList(input.value);
+                    placeList();
+                }
+            };
             input.onchange = commitValue;
-            input.oninput = commitValue;
+            input.onfocus = function () {
+                openList();
+            };
+            toggle.onclick = function (event) {
+                event.preventDefault();
+                if (list.hidden) {
+                    openList();
+                    input.focus();
+                } else {
+                    closeList();
+                }
+            };
             host.appendChild(input);
+            host.appendChild(toggle);
+            host.appendChild(list);
+            host._automationValueComboList = list;
+            host._automationValueComboClose = closeList;
             return host;
         }
+
+        document.addEventListener("mousedown", function (event) {
+            var openCombos = document.querySelectorAll("#automationEditDialog .automation-value-combo.is-open");
+            var index;
+            for (index = 0; index < openCombos.length; index++) {
+                var combo = openCombos[index];
+                var comboList = combo._automationValueComboList;
+                if (combo.contains(event.target) || (comboList && comboList.contains(event.target))) {
+                    continue;
+                }
+                if (typeof combo._automationValueComboClose === "function") {
+                    combo._automationValueComboClose();
+                }
+            }
+        });
 
         function formatAutomationLastActivation(value) {
             if (value === null || value === undefined || value === "") {
@@ -4560,7 +4660,7 @@
             if (!device) {
                 return [];
             }
-            return deviceTypeActionPayloads(device.type || "");
+            return automationValuesForDeviceParam(device, "status", false);
         }
 
         function updateAutomationTimerVisibility() {
@@ -5023,24 +5123,60 @@
             if (errorLine) {
                 errorLine.hidden = true;
             }
-            fetch("/api/automations", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ active: true })
-            }).then(function (response) {
-                return response.text().then(function (text) {
-                    if (!response.ok) {
-                        throw new Error(text || ("HTTP " + response.status));
-                    }
-                    return JSON.parse(text);
-                });
-            }).then(function (payload) {
-                loadAutomations();
-                openAutomationEditDialog(payload.name, true);
+            openNewAutomationEditDialog();
+        }
+
+        function prepareAutomationEditorDraft(payload, isNew) {
+            automationEditorDraft = cloneAutomationDraft(payload);
+            if (!automationEditorDraft.condition) {
+                automationEditorDraft.condition = emptyAutomationCondition();
+            }
+            if (!Array.isArray(automationEditorDraft.listen)) {
+                automationEditorDraft.listen = [];
+            }
+            if (!Array.isArray(automationEditorDraft.actions)) {
+                automationEditorDraft.actions = [];
+            }
+            if (!automationEditorDraft.timer) {
+                automationEditorDraft.timer = {
+                    use: false,
+                    autoRestart: false,
+                    startOnBoot: false,
+                    defaultTime: 0
+                };
+            }
+            if (isNew) {
+                automationEditorDraft.name = "";
+                automationEditorDraft.useCondition = false;
+            }
+            automationEditorOriginalName = isNew ? "" : (automationEditorDraft.name || "");
+            automationEditorBaseline = JSON.stringify(automationEditorDraft);
+            automationEditorIsNew = !!isNew;
+            var deleteBtn = document.querySelector("#automationEditDialog button[onclick=\"openAutomationDeleteConfirm()\"]");
+            if (deleteBtn) {
+                deleteBtn.hidden = !!isNew;
+            }
+            document.getElementById("automationEditDialog").hidden = false;
+            renderAutomationEditor();
+        }
+
+        function openNewAutomationEditDialog() {
+            var errorLine = document.getElementById("automationEditError");
+            if (errorLine) {
+                errorLine.hidden = true;
+            }
+            Promise.all([
+                fetch("/api/devices", { cache: "no-store" }).then(function (response) { return response.json(); }),
+                fetch("/api/automations", { cache: "no-store" }).then(function (response) { return response.json(); })
+            ]).then(function (parts) {
+                registeredDeviceRows = Array.isArray(parts[0]) ? parts[0] : registeredDeviceRows;
+                automationNameListCache = (Array.isArray(parts[1]) ? parts[1] : [])
+                    .map(function (row) { return row.name || ""; }).filter(Boolean);
+                prepareAutomationEditorDraft(cloneAutomationDraft(null), true);
             }).catch(function (error) {
                 if (errorLine) {
                     errorLine.hidden = false;
-                    errorLine.textContent = error && error.message ? error.message : "Create failed";
+                    errorLine.textContent = error && error.message ? error.message : "Load failed";
                 }
             });
         }
@@ -5049,6 +5185,10 @@
             var errorLine = document.getElementById("automationEditError");
             if (errorLine) {
                 errorLine.hidden = true;
+            }
+            if (isNew) {
+                openNewAutomationEditDialog();
+                return;
             }
             Promise.all([
                 fetch("/api/automations/item?name=" + encodeURIComponent(automationName), { cache: "no-store" })
@@ -5070,33 +5210,8 @@
                 if (!payload || typeof payload !== "object" || !payload.name) {
                     throw new Error("Bad automation payload");
                 }
-                automationEditorDraft = cloneAutomationDraft(payload);
-                if (!automationEditorDraft.condition) {
-                    automationEditorDraft.condition = emptyAutomationCondition();
-                }
-                if (!Array.isArray(automationEditorDraft.listen)) {
-                    automationEditorDraft.listen = [];
-                }
-                if (!Array.isArray(automationEditorDraft.actions)) {
-                    automationEditorDraft.actions = [];
-                }
-                if (!automationEditorDraft.timer) {
-                    automationEditorDraft.timer = {
-                        use: false,
-                        autoRestart: false,
-                        startOnBoot: false,
-                        defaultTime: 0
-                    };
-                }
-                automationEditorOriginalName = automationEditorDraft.name;
-                automationEditorBaseline = JSON.stringify(automationEditorDraft);
-                automationEditorIsNew = !!isNew;
-                document.getElementById("automationEditDialog").hidden = false;
-                renderAutomationEditor();
+                prepareAutomationEditorDraft(payload, false);
             }).catch(function (error) {
-                if (isNew) {
-                    discardNewAutomationIfNeeded(automationName);
-                }
                 if (errorLine) {
                     errorLine.hidden = false;
                     errorLine.textContent = error && error.message ? error.message : "Load failed";
@@ -5104,35 +5219,17 @@
             });
         }
 
-        function discardNewAutomationIfNeeded(name) {
-            if (!name) {
-                loadAutomations();
-                return;
-            }
-            fetch("/api/automations", {
-                method: "DELETE",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name: name })
-            }).then(function () {
-                loadAutomations();
-            }).catch(function () {
-                loadAutomations();
-            });
-        }
-
         function closeAutomationEditDialog() {
             closeAutomationGroupCombo();
-            var discardName = automationEditorIsNew
-                ? (automationEditorOriginalName || (automationEditorDraft && automationEditorDraft.name) || "")
-                : "";
             automationEditorDraft = null;
             automationEditorBaseline = null;
             automationEditorOriginalName = "";
             automationEditorIsNew = false;
-            document.getElementById("automationEditDialog").hidden = true;
-            if (discardName) {
-                discardNewAutomationIfNeeded(discardName);
+            var deleteBtn = document.querySelector("#automationEditDialog button[onclick=\"openAutomationDeleteConfirm()\"]");
+            if (deleteBtn) {
+                deleteBtn.hidden = false;
             }
+            document.getElementById("automationEditDialog").hidden = true;
         }
 
         function automationEditHasUnsavedChanges() {
@@ -5260,6 +5357,358 @@
             return pad(hours) + ":" + pad(minutes) + ":" + pad(seconds);
         }
 
+        function findRegisteredDeviceByIeee(ieeeText) {
+            var list = registeredDeviceRows || [];
+            var index;
+            for (index = 0; index < list.length; index++) {
+                if ((list[index].ieee || "") === (ieeeText || "")) {
+                    return list[index];
+                }
+            }
+            return null;
+        }
+
+        // Zigbee cluster/attr/command ids: hex (500 or 0x0500 → 0x0500).
+        function parseZigbeeIdToken(text) {
+            var raw = String(text || "").trim();
+            if (!raw) {
+                return null;
+            }
+            if (!/^(0x)?[0-9a-fA-F]+$/i.test(raw)) {
+                return null;
+            }
+            var parsed = parseInt(raw, 16);
+            if (!isFinite(parsed) || parsed < 0) {
+                return null;
+            }
+            return parsed;
+        }
+
+        function formatZigbeeIdToken(value) {
+            if (value == null || value === "") {
+                return "";
+            }
+            var number = Number(value);
+            if (!isFinite(number) || number < 0) {
+                return "";
+            }
+            return "0x" + Math.floor(number).toString(16).toUpperCase().padStart(4, "0");
+        }
+
+        function automationKnownParamsForDevice(device) {
+            var typeId = device && device.type ? String(device.type) : "unknown";
+            var params = [];
+            if (typeId === "windowCovering") {
+                params.push({ id: "status", label: "Status" });
+                params.push({ id: "position", label: "Position" });
+            } else if (typeId === "onOff") {
+                params.push({ id: "status", label: "Status" });
+            } else if (typeId === "iasZone") {
+                params.push({ id: "status", label: "Status" });
+            } else if (typeId === "levelControl") {
+                params.push({ id: "status", label: "Status" });
+                params.push({ id: "lightLevel", label: "Light level" });
+            } else {
+                params.push({ id: "sensorValue", label: "Sensor value" });
+            }
+            params.push({ id: "battery", label: "Battery level" });
+            params.push({ id: "custom", label: "CUSTOM" });
+            return params;
+        }
+
+        function automationValuesForDeviceParam(device, paramId, forAction) {
+            var typeId = device && device.type ? String(device.type) : "unknown";
+            var key = paramId || "";
+            if (forAction) {
+                return [];
+            }
+            // Condition Value lists must match live MQTT/state strings the host publishes.
+            if (key === "status") {
+                if (typeId === "windowCovering") {
+                    return ["STOPPED", "UP", "DOWN"];
+                }
+                if (typeId === "iasZone") {
+                    return ["LEAK", "DRY"];
+                }
+                if (typeId === "onOff" || typeId === "levelControl") {
+                    return ["ON", "OFF"];
+                }
+                return [];
+            }
+            if (key === "position") {
+                return ["0", "25", "50", "75", "100"];
+            }
+            if (key === "lightLevel") {
+                return ["0", "64", "128", "192", "254"];
+            }
+            if (key === "battery") {
+                return ["10", "25", "50", "75", "100"];
+            }
+            if (key === "sensorValue") {
+                return [];
+            }
+            return [];
+        }
+
+        function automationCommandsForDevice(device) {
+            var typeId = device && device.type ? String(device.type) : "unknown";
+            var commands = [];
+            if (typeId === "windowCovering") {
+                commands.push({ id: "OPEN", label: "OPEN", needsValue: false });
+                commands.push({ id: "CLOSE", label: "CLOSE", needsValue: false });
+                commands.push({ id: "STOP", label: "STOP", needsValue: false });
+                commands.push({
+                    id: "MOVETO",
+                    label: "MOVETO",
+                    needsValue: true,
+                    values: ["0", "25", "50", "75", "100"]
+                });
+            } else if (typeId === "levelControl") {
+                commands.push({ id: "ON", label: "ON", needsValue: false });
+                commands.push({ id: "OFF", label: "OFF", needsValue: false });
+                commands.push({
+                    id: "LIGHT_LEVEL",
+                    label: "LIGHT LEVEL",
+                    needsValue: true,
+                    values: ["0", "64", "128", "192", "254"]
+                });
+            } else if (typeId === "onOff") {
+                commands.push({ id: "ON", label: "ON", needsValue: false });
+                commands.push({ id: "OFF", label: "OFF", needsValue: false });
+            }
+            commands.push({ id: "custom", label: "CUSTOM", needsValue: false });
+            return commands;
+        }
+
+        function automationDefaultDeviceAction(device) {
+            var commands = automationCommandsForDevice(device);
+            var first = commands[0] || { id: "custom" };
+            if (first.id === "custom") {
+                return {
+                    target: "device",
+                    ieee: device && device.ieee ? device.ieee : "",
+                    channel: 1,
+                    param: "custom",
+                    cluster: 6,
+                    command: 1,
+                    value: ""
+                };
+            }
+            return {
+                target: "device",
+                ieee: device && device.ieee ? device.ieee : "",
+                channel: 1,
+                param: first.id,
+                payload: first.needsValue ? "" : first.id
+            };
+        }
+
+        function automationActionCommandId(action) {
+            if (!action) {
+                return "custom";
+            }
+            if (action.param === "custom"
+                || (action.cluster != null && action.command != null && !action.payload)) {
+                return "custom";
+            }
+            var param = String(action.param || "");
+            if (param === "MOVETO" || param === "position") {
+                return "MOVETO";
+            }
+            if (param === "LIGHT_LEVEL" || param === "lightLevel") {
+                return "LIGHT_LEVEL";
+            }
+            if (param === "OPEN" || param === "CLOSE" || param === "STOP"
+                || param === "ON" || param === "OFF") {
+                return param;
+            }
+            var payload = String(action.payload || "").trim();
+            var upper = payload.toUpperCase();
+            if (upper.indexOf("MOVETO") === 0) {
+                return "MOVETO";
+            }
+            if (upper.indexOf("LEVEL") === 0) {
+                return "LIGHT_LEVEL";
+            }
+            if (upper === "OPEN" || upper === "CLOSE" || upper === "STOP"
+                || upper === "ON" || upper === "OFF") {
+                return upper;
+            }
+            if (param === "status" && upper) {
+                return upper;
+            }
+            if (payload) {
+                return "";
+            }
+            return param || "custom";
+        }
+
+        function automationActionValueText(action, commandId) {
+            var payload = String(action && action.payload != null ? action.payload : "").trim();
+            if (commandId === "MOVETO") {
+                var moveMatch = payload.match(/^MOVETO\s*[=:]?\s*(.*)$/i);
+                if (moveMatch) {
+                    return String(moveMatch[1] || "").trim();
+                }
+                if (action && action.param === "position") {
+                    return payload.replace(/%/g, "");
+                }
+                return payload.replace(/%/g, "");
+            }
+            if (commandId === "LIGHT_LEVEL") {
+                var levelMatch = payload.match(/^LEVEL\s*[=:]?\s*(.*)$/i);
+                if (levelMatch) {
+                    return String(levelMatch[1] || "").trim();
+                }
+                if (action && action.param === "lightLevel") {
+                    return payload;
+                }
+                return payload;
+            }
+            return "";
+        }
+
+        function automationBuildActionPayload(commandId, valueText) {
+            if (commandId === "MOVETO") {
+                return "MOVETO " + String(valueText || "").trim();
+            }
+            if (commandId === "LIGHT_LEVEL") {
+                return "LEVEL " + String(valueText || "").trim();
+            }
+            return commandId;
+        }
+
+        function automationCommandLabels(device) {
+            return automationCommandsForDevice(device).map(function (command) {
+                return command.label;
+            });
+        }
+
+        function automationCommandNeedsValue(device, commandId) {
+            var commands = automationCommandsForDevice(device);
+            var index;
+            for (index = 0; index < commands.length; index++) {
+                if (commands[index].id === commandId) {
+                    return !!commands[index].needsValue;
+                }
+            }
+            return false;
+        }
+
+        function automationCommandValueList(device, commandId) {
+            var commands = automationCommandsForDevice(device);
+            var index;
+            for (index = 0; index < commands.length; index++) {
+                if (commands[index].id === commandId) {
+                    return Array.isArray(commands[index].values) ? commands[index].values : [];
+                }
+            }
+            return [];
+        }
+
+        function automationResolveTypedCommand(device, typedText) {
+            var text = String(typedText || "").trim();
+            var upper = text.toUpperCase();
+            if (!text) {
+                return { kind: "empty" };
+            }
+            if (upper === "CUSTOM") {
+                return { kind: "custom" };
+            }
+            var commands = automationCommandsForDevice(device);
+            var index;
+            for (index = 0; index < commands.length; index++) {
+                if (commands[index].id === upper
+                    || String(commands[index].label || "").toUpperCase() === upper) {
+                    return { kind: "command", id: commands[index].id, value: "" };
+                }
+            }
+            var moveMatch = text.match(/^MOVETO\s*[=:]?\s*(.*)$/i);
+            if (moveMatch) {
+                return { kind: "command", id: "MOVETO", value: String(moveMatch[1] || "").trim() };
+            }
+            var levelMatch = text.match(/^LEVEL\s*[=:]?\s*(.*)$/i);
+            if (levelMatch) {
+                return {
+                    kind: "command",
+                    id: "LIGHT_LEVEL",
+                    value: String(levelMatch[1] || "").trim()
+                };
+            }
+            return { kind: "manual", payload: text };
+        }
+
+        function automationActionCommandDisplay(action) {
+            var commandId = automationActionCommandId(action);
+            if (commandId === "custom") {
+                return "CUSTOM";
+            }
+            if (commandId === "MOVETO") {
+                return "MOVETO";
+            }
+            if (commandId === "LIGHT_LEVEL") {
+                return "LIGHT LEVEL";
+            }
+            if (commandId) {
+                return commandId;
+            }
+            return String(action && action.payload != null ? action.payload : "");
+        }
+
+        function fillAutomationChannelSelect(select, device, selectedChannel) {
+            select.innerHTML = "";
+            select.hidden = true;
+            if (!device) {
+                return 1;
+            }
+            var count = deviceChannelCount(device);
+            if (!(count >= 2 || device.channels == 0)) {
+                return 1;
+            }
+            select.hidden = false;
+            var maxChannel = device.channels == 0 ? 8 : count;
+            var channel;
+            var chosen = selectedChannel > 0 ? selectedChannel : 1;
+            for (channel = 1; channel <= maxChannel; channel++) {
+                var option = document.createElement("option");
+                option.value = String(channel);
+                option.textContent = "Ch " + String(channel);
+                if (channel === chosen) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            }
+            return chosen;
+        }
+
+        function fillAutomationParamSelect(select, device, selectedParam) {
+            select.innerHTML = "";
+            var params = automationKnownParamsForDevice(device);
+            var index;
+            var matched = false;
+            for (index = 0; index < params.length; index++) {
+                var option = document.createElement("option");
+                option.value = params[index].id;
+                option.textContent = params[index].label;
+                if (selectedParam && selectedParam === params[index].id) {
+                    option.selected = true;
+                    matched = true;
+                }
+                select.appendChild(option);
+            }
+            if (!matched && selectedParam) {
+                var customOption = document.createElement("option");
+                customOption.value = selectedParam;
+                customOption.textContent = selectedParam;
+                customOption.selected = true;
+                select.appendChild(customOption);
+            }
+            if (!select.value) {
+                select.value = params[0] ? params[0].id : "custom";
+            }
+            return select.value;
+        }
+
         function renderAutomationEditor() {
             if (!automationEditorDraft) {
                 return;
@@ -5273,7 +5722,7 @@
             document.getElementById("automationEditActive").checked = !!automationEditorDraft.active;
             document.getElementById("automationEditDebug").checked = !!automationEditorDraft.debug;
             document.getElementById("automationUseCondition").checked =
-                automationEditorDraft.useCondition !== false;
+                !!automationEditorDraft.useCondition;
             document.getElementById("automationMinTriggerIntervalSec").value =
                 automationEditorDraft.minTriggerIntervalSec > 0
                     ? String(automationEditorDraft.minTriggerIntervalSec)
@@ -5306,25 +5755,88 @@
             var index;
             for (index = 0; index < listen.length; index++) {
                 (function (listenIndex) {
+                    var binding = listen[listenIndex];
                     var row = document.createElement("div");
                     row.className = "field";
                     var deviceSelect = document.createElement("select");
-                    fillDeviceSelect(deviceSelect, listen[listenIndex].ieee || "");
+                    fillDeviceSelect(deviceSelect, binding.ieee || "");
+                    var channelSelect = document.createElement("select");
+                    var paramSelect = document.createElement("select");
+                    var clusterInput = document.createElement("input");
+                    clusterInput.type = "text";
+                    clusterInput.placeholder = "cluster (hex)";
+                    clusterInput.value = formatZigbeeIdToken(binding.cluster);
+                    var attrInput = document.createElement("input");
+                    attrInput.type = "text";
+                    attrInput.placeholder = "attrId (hex)";
+                    attrInput.value =
+                        binding.attrId != null && binding.attrId !== ""
+                            ? formatZigbeeIdToken(binding.attrId)
+                            : "";
+                    function refreshCustomVisibility() {
+                        var isCustom = paramSelect.value === "custom";
+                        clusterInput.hidden = !isCustom;
+                        attrInput.hidden = !isCustom;
+                        if (!isCustom) {
+                            delete binding.cluster;
+                            delete binding.attrId;
+                            clusterInput.value = "";
+                            attrInput.value = "";
+                        }
+                    }
+                    function refreshDeviceDependent() {
+                        binding.ieee = deviceSelect.value;
+                        var device = findRegisteredDeviceByIeee(binding.ieee);
+                        binding.channel = fillAutomationChannelSelect(
+                            channelSelect,
+                            device,
+                            binding.channel || 1
+                        );
+                        if (channelSelect.hidden) {
+                            binding.channel = 1;
+                        }
+                        binding.param = fillAutomationParamSelect(
+                            paramSelect,
+                            device,
+                            binding.param || ""
+                        );
+                        refreshCustomVisibility();
+                    }
                     deviceSelect.onchange = function () {
-                        automationEditorDraft.listen[listenIndex].ieee = deviceSelect.value;
+                        refreshDeviceDependent();
                         updateAutomationImportEnabled();
                     };
-                    var clusterInput = document.createElement("input");
-                    clusterInput.type = "number";
-                    clusterInput.min = "0";
-                    clusterInput.placeholder = "cluster (optional)";
-                    clusterInput.value = listen[listenIndex].cluster ? String(listen[listenIndex].cluster) : "";
+                    channelSelect.onchange = function () {
+                        binding.channel = parseInt(channelSelect.value, 10) || 1;
+                    };
+                    paramSelect.onchange = function () {
+                        binding.param = paramSelect.value;
+                        refreshCustomVisibility();
+                        updateAutomationImportEnabled();
+                    };
                     clusterInput.onchange = function () {
-                        var clusterValue = parseInt(clusterInput.value, 10);
-                        if (clusterValue > 0) {
-                            automationEditorDraft.listen[listenIndex].cluster = clusterValue;
+                        var clusterValue = parseZigbeeIdToken(clusterInput.value);
+                        if (clusterValue != null && clusterValue > 0) {
+                            binding.cluster = clusterValue;
+                            clusterInput.value = formatZigbeeIdToken(clusterValue);
                         } else {
-                            delete automationEditorDraft.listen[listenIndex].cluster;
+                            delete binding.cluster;
+                            clusterInput.value = "";
+                        }
+                        updateAutomationImportEnabled();
+                    };
+                    attrInput.onchange = function () {
+                        if (attrInput.value === "") {
+                            delete binding.attrId;
+                        } else {
+                            var attrValue = parseZigbeeIdToken(attrInput.value);
+                            if (attrValue == null) {
+                                delete binding.attrId;
+                                attrInput.value = "";
+                            } else {
+                                binding.attrId = attrValue;
+                                attrInput.value = formatZigbeeIdToken(attrValue);
+                            }
                         }
                         updateAutomationImportEnabled();
                     };
@@ -5337,8 +5849,12 @@
                         renderAutomationListenEditor();
                         updateAutomationImportEnabled();
                     };
+                    refreshDeviceDependent();
                     row.appendChild(deviceSelect);
+                    row.appendChild(channelSelect);
+                    row.appendChild(paramSelect);
                     row.appendChild(clusterInput);
+                    row.appendChild(attrInput);
                     row.appendChild(removeBtn);
                     host.appendChild(row);
                 })(index);
@@ -5349,7 +5865,11 @@
             addBtn.textContent = "Add device to trigger";
             addBtn.onclick = function () {
                 var firstIeee = registeredDeviceRows[0] ? registeredDeviceRows[0].ieee : "";
-                automationEditorDraft.listen.push({ ieee: firstIeee || "" });
+                automationEditorDraft.listen.push({
+                    ieee: firstIeee || "",
+                    channel: 1,
+                    param: "status"
+                });
                 renderAutomationListenEditor();
                 updateAutomationImportEnabled();
             };
@@ -5363,10 +5883,13 @@
             var kindSelect = document.createElement("select");
             kindSelect.innerHTML = "<option value=\"comparison\">comparison</option><option value=\"container\">container</option>";
             kindSelect.value = node.kind || "comparison";
+            if (typeof node.not !== "boolean") {
+                node.not = false;
+            }
             var notCheck = document.createElement("label");
             notCheck.className = "field-check";
             notCheck.innerHTML = "<input type=\"checkbox\"> NOT";
-            notCheck.firstChild.checked = !!node.not;
+            notCheck.firstChild.checked = node.not === true;
             notCheck.firstChild.onchange = function () {
                 node.not = !!notCheck.firstChild.checked;
             };
@@ -5445,22 +5968,34 @@
             }
             var deviceSelect = document.createElement("select");
             fillDeviceSelect(deviceSelect, node.ieee || "", true);
-            var channelInput = document.createElement("input");
-            channelInput.type = "number";
-            channelInput.min = "1";
-            channelInput.value = String(node.channel || 1);
-            channelInput.onchange = function () {
-                var channelValue = parseInt(channelInput.value, 10);
-                node.channel = channelValue > 0 ? channelValue : 1;
-            };
+            var channelSelect = document.createElement("select");
+            var paramSelect = document.createElement("select");
             var cmpSelect = document.createElement("select");
+            var clusterInput = document.createElement("input");
+            clusterInput.type = "text";
+            clusterInput.placeholder = "cluster (hex)";
+            clusterInput.value = formatZigbeeIdToken(node.cluster);
+            var attrInput = document.createElement("input");
+            attrInput.type = "text";
+            attrInput.placeholder = "attrId (hex)";
+            attrInput.value =
+                node.attrId != null && node.attrId !== ""
+                    ? formatZigbeeIdToken(node.attrId)
+                    : "";
+            var valueHost = document.createElement("div");
             function refreshCompareOpControl() {
                 var currentTime = isAutomationCurrentTimeIeee(node.ieee);
+                var isCustom = paramSelect.value === "custom";
                 var previous = node.cmp || (currentTime ? "GREATER" : "EQUAL");
                 if (currentTime) {
                     cmpSelect.innerHTML = "<option>GREATER</option><option>LESS</option>";
                     if (previous !== "GREATER" && previous !== "LESS") {
                         previous = "GREATER";
+                    }
+                } else if (isCustom) {
+                    cmpSelect.innerHTML = "<option>EQUAL</option><option>GREATER</option><option>LESS</option>";
+                    if (previous !== "EQUAL" && previous !== "GREATER" && previous !== "LESS") {
+                        previous = "EQUAL";
                     }
                 } else {
                     cmpSelect.innerHTML = "<option>EQUAL</option><option>GREATER</option><option>LESS</option><option>CONTAINS</option><option>STARTS</option><option>ENDS</option>";
@@ -5469,11 +6004,17 @@
                 node.cmp = cmpSelect.value;
             }
             cmpSelect.onchange = function () { node.cmp = cmpSelect.value; };
-            var clusterInput = document.createElement("input");
-            clusterInput.type = "number";
-            clusterInput.placeholder = "cluster optional";
-            clusterInput.value = node.cluster ? String(node.cluster) : "";
-            var valueHost = document.createElement("div");
+            function refreshCustomVisibility() {
+                var isCustom = paramSelect.value === "custom";
+                clusterInput.hidden = !isCustom || isAutomationCurrentTimeIeee(node.ieee);
+                attrInput.hidden = !isCustom || isAutomationCurrentTimeIeee(node.ieee);
+                if (!isCustom) {
+                    delete node.cluster;
+                    delete node.attrId;
+                    clusterInput.value = "";
+                    attrInput.value = "";
+                }
+            }
             function refreshCompareValueControl() {
                 valueHost.innerHTML = "";
                 if (isAutomationCurrentTimeIeee(node.ieee)) {
@@ -5489,15 +6030,22 @@
                         }
                     };
                     valueHost.appendChild(timeInput);
-                    channelInput.hidden = true;
+                    channelSelect.hidden = true;
+                    paramSelect.hidden = true;
                     clusterInput.hidden = true;
+                    attrInput.hidden = true;
                     delete node.cluster;
+                    delete node.attrId;
+                    delete node.param;
                     node.channel = 1;
                     return;
                 }
-                channelInput.hidden = false;
-                clusterInput.hidden = false;
-                var discreteValues = discreteAutomationCompareValues(node.ieee || "", !!node.cluster);
+                paramSelect.hidden = false;
+                refreshCustomVisibility();
+                var device = findRegisteredDeviceByIeee(node.ieee || "");
+                var discreteValues = paramSelect.value === "custom"
+                    ? []
+                    : automationValuesForDeviceParam(device, paramSelect.value, false);
                 valueHost.appendChild(buildEditableDiscreteControl(
                     node.value || "",
                     discreteValues,
@@ -5506,7 +6054,7 @@
                     }
                 ));
             }
-            deviceSelect.onchange = function () {
+            function refreshDeviceDependent() {
                 node.ieee = deviceSelect.value;
                 if (isAutomationCurrentTimeIeee(node.ieee)) {
                     if (node.cmp !== "GREATER" && node.cmp !== "LESS") {
@@ -5515,26 +6063,78 @@
                     if (!normalizeTimeOfDayValue(node.value)) {
                         node.value = "00:00:00";
                     }
+                    refreshCompareOpControl();
+                    refreshCompareValueControl();
+                    return;
+                }
+                var device = findRegisteredDeviceByIeee(node.ieee);
+                node.channel = fillAutomationChannelSelect(channelSelect, device, node.channel || 1);
+                if (channelSelect.hidden) {
+                    node.channel = 1;
+                }
+                node.param = fillAutomationParamSelect(paramSelect, device, node.param || "");
+                refreshCompareOpControl();
+                refreshCompareValueControl();
+            }
+            deviceSelect.onchange = function () {
+                refreshDeviceDependent();
+                updateAutomationImportEnabled();
+            };
+            channelSelect.onchange = function () {
+                node.channel = parseInt(channelSelect.value, 10) || 1;
+            };
+            paramSelect.onchange = function () {
+                node.param = paramSelect.value;
+                if (paramSelect.value !== "custom"
+                    && !isAutomationCurrentTimeIeee(node.ieee)) {
+                    var deviceForParam = findRegisteredDeviceByIeee(node.ieee || "");
+                    var allowedValues = automationValuesForDeviceParam(
+                        deviceForParam,
+                        paramSelect.value,
+                        false
+                    );
+                    var currentValue = String(node.value || "");
+                    if (allowedValues.length && allowedValues.indexOf(currentValue) < 0) {
+                        node.value = paramSelect.value === "status" ? allowedValues[0] : "";
+                    }
                 }
                 refreshCompareOpControl();
                 refreshCompareValueControl();
+                updateAutomationImportEnabled();
             };
             clusterInput.onchange = function () {
-                var clusterValue = parseInt(clusterInput.value, 10);
-                if (clusterValue > 0) {
+                var clusterValue = parseZigbeeIdToken(clusterInput.value);
+                if (clusterValue != null && clusterValue > 0) {
                     node.cluster = clusterValue;
+                    clusterInput.value = formatZigbeeIdToken(clusterValue);
                 } else {
                     delete node.cluster;
+                    clusterInput.value = "";
                 }
                 refreshCompareValueControl();
             };
-            refreshCompareOpControl();
-            refreshCompareValueControl();
+            attrInput.onchange = function () {
+                if (attrInput.value === "") {
+                    delete node.attrId;
+                } else {
+                    var attrValue = parseZigbeeIdToken(attrInput.value);
+                    if (attrValue == null) {
+                        delete node.attrId;
+                        attrInput.value = "";
+                    } else {
+                        node.attrId = attrValue;
+                        attrInput.value = formatZigbeeIdToken(attrValue);
+                    }
+                }
+            };
+            refreshDeviceDependent();
             box.appendChild(deviceSelect);
-            box.appendChild(channelInput);
+            box.appendChild(channelSelect);
+            box.appendChild(paramSelect);
             box.appendChild(cmpSelect);
             box.appendChild(valueHost);
             box.appendChild(clusterInput);
+            box.appendChild(attrInput);
             host.appendChild(box);
         }
 
@@ -5554,7 +6154,9 @@
         function fillAutomationNameSelect(select, selectedName) {
             select.innerHTML = "";
             var names = automationNameListCache.slice();
-            if (automationEditorDraft && automationEditorDraft.name
+            if (!automationEditorIsNew
+                && automationEditorDraft
+                && automationEditorDraft.name
                 && names.indexOf(automationEditorDraft.name) < 0) {
                 names.push(automationEditorDraft.name);
             }
@@ -5590,16 +6192,13 @@
                         if (targetSelect.value === "automation") {
                             automationEditorDraft.actions[actionIndex] = {
                                 target: "automation",
-                                name: automationNameListCache[0] || automationEditorDraft.name || "",
+                                name: automationNameListCache[0] || "",
                                 op: "ENABLE"
                             };
                         } else {
-                            automationEditorDraft.actions[actionIndex] = {
-                                target: "device",
-                                ieee: registeredDeviceRows[0] ? registeredDeviceRows[0].ieee : "",
-                                channel: 1,
-                                payload: "ON"
-                            };
+                            var firstDevice = registeredDeviceRows[0] || null;
+                            automationEditorDraft.actions[actionIndex] =
+                                automationDefaultDeviceAction(firstDevice);
                         }
                         renderAutomationActionsEditor();
                         updateAutomationImportEnabled();
@@ -5608,37 +6207,205 @@
                     if (targetSelect.value === "device") {
                         var deviceSelect = document.createElement("select");
                         fillDeviceSelect(deviceSelect, action.ieee || "");
-                        var channelInput = document.createElement("input");
-                        channelInput.type = "number";
-                        channelInput.min = "1";
-                        channelInput.value = String(action.channel || 1);
-                        channelInput.onchange = function () {
-                            var channelValue = parseInt(channelInput.value, 10);
-                            automationEditorDraft.actions[actionIndex].channel = channelValue > 0 ? channelValue : 1;
-                        };
+                        var channelSelect = document.createElement("select");
+                        var commandHost = document.createElement("div");
                         var payloadHost = document.createElement("div");
-                        function refreshActionPayloadControl() {
-                            payloadHost.innerHTML = "";
-                            var discreteValues = discreteAutomationCompareValues(
-                                automationEditorDraft.actions[actionIndex].ieee || "",
-                                false
+                        var clusterInput = document.createElement("input");
+                        clusterInput.type = "text";
+                        clusterInput.placeholder = "cluster (hex)";
+                        clusterInput.value = formatZigbeeIdToken(action.cluster);
+                        var commandInput = document.createElement("input");
+                        commandInput.type = "text";
+                        commandInput.placeholder = "command (hex)";
+                        commandInput.value =
+                            action.command != null && action.command !== ""
+                                ? formatZigbeeIdToken(action.command)
+                                : "";
+                        var valueInput = document.createElement("input");
+                        valueInput.type = "text";
+                        valueInput.placeholder = "value";
+                        valueInput.value = action.value != null ? String(action.value) : "";
+                        function enterCustomActionMode() {
+                            var stored = automationEditorDraft.actions[actionIndex];
+                            stored.param = "custom";
+                            delete stored.payload;
+                            if (stored.cluster == null) {
+                                stored.cluster = 6;
+                            }
+                            if (stored.command == null) {
+                                stored.command = 1;
+                            }
+                            if (stored.value == null) {
+                                stored.value = "";
+                            }
+                            clusterInput.value = formatZigbeeIdToken(stored.cluster);
+                            commandInput.value = formatZigbeeIdToken(stored.command);
+                            valueInput.value = String(stored.value || "");
+                        }
+                        function applyActionCommand(commandId, valueText) {
+                            var stored = automationEditorDraft.actions[actionIndex];
+                            stored.param = commandId;
+                            if (commandId === "custom") {
+                                enterCustomActionMode();
+                                return;
+                            }
+                            delete stored.cluster;
+                            delete stored.command;
+                            delete stored.value;
+                            stored.payload = automationBuildActionPayload(commandId, valueText);
+                        }
+                        function applyTypedCommand(typedText) {
+                            var device = findRegisteredDeviceByIeee(
+                                automationEditorDraft.actions[actionIndex].ieee || ""
                             );
-                            payloadHost.appendChild(buildEditableDiscreteControl(
-                                automationEditorDraft.actions[actionIndex].payload || "",
-                                discreteValues,
+                            var resolved = automationResolveTypedCommand(device, typedText);
+                            if (resolved.kind === "custom") {
+                                enterCustomActionMode();
+                                return;
+                            }
+                            if (resolved.kind === "command") {
+                                var valueText = resolved.value;
+                                if (automationCommandNeedsValue(device, resolved.id) && !valueText) {
+                                    var presets = automationCommandValueList(device, resolved.id);
+                                    valueText = presets[0] || "";
+                                }
+                                applyActionCommand(resolved.id, valueText);
+                                return;
+                            }
+                            if (resolved.kind === "manual") {
+                                var stored = automationEditorDraft.actions[actionIndex];
+                                delete stored.cluster;
+                                delete stored.command;
+                                delete stored.value;
+                                delete stored.param;
+                                stored.payload = resolved.payload;
+                            }
+                        }
+                        function currentCommandId() {
+                            return automationActionCommandId(automationEditorDraft.actions[actionIndex]);
+                        }
+                        function refreshActionCustomVisibility() {
+                            var isCustom = currentCommandId() === "custom";
+                            clusterInput.hidden = !isCustom;
+                            commandInput.hidden = !isCustom;
+                            valueInput.hidden = !isCustom;
+                            var device = findRegisteredDeviceByIeee(
+                                automationEditorDraft.actions[actionIndex].ieee || ""
+                            );
+                            payloadHost.hidden = isCustom
+                                || !automationCommandNeedsValue(device, currentCommandId());
+                        }
+                        function refreshActionCommandControl() {
+                            commandHost.innerHTML = "";
+                            var device = findRegisteredDeviceByIeee(
+                                automationEditorDraft.actions[actionIndex].ieee || ""
+                            );
+                            commandHost.appendChild(buildEditableDiscreteControl(
+                                automationActionCommandDisplay(
+                                    automationEditorDraft.actions[actionIndex]
+                                ),
+                                automationCommandLabels(device),
                                 function (nextValue) {
-                                    automationEditorDraft.actions[actionIndex].payload = nextValue;
+                                    applyTypedCommand(nextValue);
+                                    refreshActionCustomVisibility();
+                                    refreshActionPayloadControl();
+                                    updateAutomationImportEnabled();
                                 }
                             ));
                         }
-                        deviceSelect.onchange = function () {
+                        function refreshActionPayloadControl() {
+                            payloadHost.innerHTML = "";
+                            var device = findRegisteredDeviceByIeee(
+                                automationEditorDraft.actions[actionIndex].ieee || ""
+                            );
+                            var commandId = currentCommandId();
+                            if (commandId === "custom" || !automationCommandNeedsValue(device, commandId)) {
+                                payloadHost.hidden = true;
+                                return;
+                            }
+                            payloadHost.hidden = false;
+                            var currentValue = automationActionValueText(
+                                automationEditorDraft.actions[actionIndex],
+                                commandId
+                            );
+                            payloadHost.appendChild(buildEditableDiscreteControl(
+                                currentValue,
+                                automationCommandValueList(device, commandId),
+                                function (nextValue) {
+                                    applyActionCommand(commandId, nextValue);
+                                }
+                            ));
+                        }
+                        function refreshActionDeviceDependent() {
                             automationEditorDraft.actions[actionIndex].ieee = deviceSelect.value;
+                            var device = findRegisteredDeviceByIeee(deviceSelect.value);
+                            automationEditorDraft.actions[actionIndex].channel = fillAutomationChannelSelect(
+                                channelSelect,
+                                device,
+                                automationEditorDraft.actions[actionIndex].channel || 1
+                            );
+                            if (channelSelect.hidden) {
+                                automationEditorDraft.actions[actionIndex].channel = 1;
+                            }
+                            if (!automationEditorDraft.actions[actionIndex].payload
+                                && currentCommandId() !== "custom") {
+                                var defaults = automationDefaultDeviceAction(device);
+                                automationEditorDraft.actions[actionIndex].param = defaults.param;
+                                if (defaults.payload) {
+                                    automationEditorDraft.actions[actionIndex].payload = defaults.payload;
+                                }
+                            }
+                            refreshActionCommandControl();
+                            refreshActionCustomVisibility();
                             refreshActionPayloadControl();
+                        }
+                        deviceSelect.onchange = function () {
+                            var device = findRegisteredDeviceByIeee(deviceSelect.value);
+                            var defaults = automationDefaultDeviceAction(device);
+                            defaults.channel = automationEditorDraft.actions[actionIndex].channel || 1;
+                            automationEditorDraft.actions[actionIndex] = defaults;
+                            refreshActionDeviceDependent();
+                            updateAutomationImportEnabled();
                         };
-                        refreshActionPayloadControl();
+                        channelSelect.onchange = function () {
+                            automationEditorDraft.actions[actionIndex].channel =
+                                parseInt(channelSelect.value, 10) || 1;
+                        };
+                        clusterInput.onchange = function () {
+                            var clusterValue = parseZigbeeIdToken(clusterInput.value);
+                            if (clusterValue != null && clusterValue > 0) {
+                                automationEditorDraft.actions[actionIndex].cluster = clusterValue;
+                                clusterInput.value = formatZigbeeIdToken(clusterValue);
+                            } else {
+                                delete automationEditorDraft.actions[actionIndex].cluster;
+                                clusterInput.value = "";
+                            }
+                        };
+                        commandInput.onchange = function () {
+                            if (commandInput.value === "") {
+                                delete automationEditorDraft.actions[actionIndex].command;
+                            } else {
+                                var commandValue = parseZigbeeIdToken(commandInput.value);
+                                if (commandValue == null) {
+                                    delete automationEditorDraft.actions[actionIndex].command;
+                                    commandInput.value = "";
+                                } else {
+                                    automationEditorDraft.actions[actionIndex].command = commandValue;
+                                    commandInput.value = formatZigbeeIdToken(commandValue);
+                                }
+                            }
+                        };
+                        valueInput.onchange = function () {
+                            automationEditorDraft.actions[actionIndex].value = valueInput.value;
+                        };
+                        refreshActionDeviceDependent();
                         row.appendChild(deviceSelect);
-                        row.appendChild(channelInput);
+                        row.appendChild(channelSelect);
+                        row.appendChild(commandHost);
                         row.appendChild(payloadHost);
+                        row.appendChild(clusterInput);
+                        row.appendChild(commandInput);
+                        row.appendChild(valueInput);
                     } else {
                         var nameSelect = document.createElement("select");
                         fillAutomationNameSelect(nameSelect, action.name || "");
@@ -5692,7 +6459,7 @@
                     toolbar.className = "automation-action-toolbar";
                     var upBtn = document.createElement("button");
                     upBtn.type = "button";
-                    upBtn.className = "btn btn-secondary";
+                    upBtn.className = "btn btn-secondary btn-inline";
                     upBtn.textContent = "Up";
                     upBtn.onclick = function () {
                         if (actionIndex <= 0) {
@@ -5705,7 +6472,7 @@
                     };
                     var downBtn = document.createElement("button");
                     downBtn.type = "button";
-                    downBtn.className = "btn btn-secondary";
+                    downBtn.className = "btn btn-secondary btn-inline";
                     downBtn.textContent = "Down";
                     downBtn.onclick = function () {
                         if (actionIndex >= automationEditorDraft.actions.length - 1) {
@@ -5718,7 +6485,7 @@
                     };
                     var removeBtn = document.createElement("button");
                     removeBtn.type = "button";
-                    removeBtn.className = "btn btn-secondary";
+                    removeBtn.className = "btn btn-secondary btn-inline";
                     removeBtn.textContent = "Remove";
                     removeBtn.onclick = function () {
                         if (!window.confirm("Remove this action?")) {
@@ -5740,12 +6507,9 @@
             addBtn.className = "btn btn-secondary btn-inline automation-add-btn";
             addBtn.textContent = "Add action";
             addBtn.onclick = function () {
-                automationEditorDraft.actions.push({
-                    target: "device",
-                    ieee: registeredDeviceRows[0] ? registeredDeviceRows[0].ieee : "",
-                    channel: 1,
-                    payload: "ON"
-                });
+                automationEditorDraft.actions.push(
+                    automationDefaultDeviceAction(registeredDeviceRows[0] || null)
+                );
                 renderAutomationActionsEditor();
                 updateAutomationImportEnabled();
             };
@@ -5776,7 +6540,11 @@
                 return;
             }
             var payload = cloneAutomationDraft(automationEditorDraft);
-            payload.originalName = automationEditorOriginalName || payload.name;
+            if (automationEditorIsNew) {
+                payload.originalName = "";
+            } else {
+                payload.originalName = automationEditorOriginalName || payload.name;
+            }
             delete payload.timer.counting;
             delete payload.timer.timeLeft;
             delete payload.lastActivation;
@@ -8040,12 +8808,12 @@
             <div class="automation-condition-box automation-edit-section">
                 <h4 class="upload-title">Condition</h4>
                 <label class="field-check">
-                    <input id="automationUseCondition" type="checkbox" checked onchange="updateAutomationConditionVisibility(); updateAutomationImportEnabled();">
+                    <input id="automationUseCondition" type="checkbox" onchange="updateAutomationConditionVisibility(); updateAutomationImportEnabled();">
                     Use condition
                 </label>
                 <div id="automationConditionEditor"></div>
             </div>
-            <div class="automation-edit-section">
+            <div class="automation-actions-box automation-edit-section">
                 <h4 class="upload-title">Actions</h4>
                 <div id="automationActionsEditor"></div>
             </div>

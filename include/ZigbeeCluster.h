@@ -40,6 +40,8 @@ constexpr uint8_t kZigbeeWindowCoveringMoveUp = 0x02;
 constexpr uint8_t kZigbeeWindowCoveringCmdClose = 0x00;
 constexpr uint8_t kZigbeeWindowCoveringCmdOpen = 0x01;
 constexpr uint8_t kZigbeeWindowCoveringCmdStop = 0x02;
+constexpr uint8_t kZigbeeWindowCoveringCmdGoToLiftPercentage = 0x05;
+constexpr uint8_t kZigbeeLevelControlCmdMoveToLevel = 0x00;
 constexpr uint8_t kZigbeeBatteryPercentageRemainingMax = 200;
 
 inline const char *zigbeeClusterName(uint16_t clusterId) {
@@ -152,44 +154,29 @@ inline const char *zigbeeWindowCoveringMoveName(uint32_t rawValue) {
             return "DOWN";
         case kZigbeeWindowCoveringMoveUp:
             return "UP";
+        case kZigbeeWindowCoveringMoveStopped:
+            return "STOPPED";
         default:
             return nullptr;
     }
 }
 
-inline void zigbeeWindowCoveringFormatStatus(
-    char *out,
-    size_t outSize,
-    bool hasMove,
-    uint32_t moveRaw,
-    bool hasPosition,
-    unsigned positionPercent
-) {
+inline void zigbeeWindowCoveringFormatMoveStatus(char *out, size_t outSize, uint32_t moveRaw) {
     if (out == nullptr || outSize == 0) {
         return;
     }
-    out[0] = '\0';
-    if (hasMove && moveRaw == kZigbeeWindowCoveringMoveStopped) {
-        hasMove = false;
-    }
-    const char *moveName = hasMove ? zigbeeWindowCoveringMoveName(moveRaw) : nullptr;
-    if (hasMove && hasPosition && moveName != nullptr) {
-        snprintf(out, outSize, "%s %u%%", moveName, positionPercent);
-        return;
-    }
-    if (hasMove && hasPosition) {
-        snprintf(out, outSize, "%u %u%%", (unsigned)moveRaw, positionPercent);
-        return;
-    }
-    if (hasMove && moveName != nullptr) {
+    const char *moveName = zigbeeWindowCoveringMoveName(moveRaw);
+    if (moveName != nullptr) {
         snprintf(out, outSize, "%s", moveName);
         return;
     }
-    if (hasMove) {
-        snprintf(out, outSize, "%u", (unsigned)moveRaw);
+    snprintf(out, outSize, "%u", (unsigned)moveRaw);
+}
+
+inline void zigbeeWindowCoveringFormatPosition(char *out, size_t outSize, unsigned positionPercent) {
+    if (out == nullptr || outSize == 0) {
         return;
     }
-    if (hasPosition) {
-        snprintf(out, outSize, "%u%%", positionPercent);
-    }
+    // Plain integer only — no '%' so GREATER/LESS automation compares work.
+    snprintf(out, outSize, "%u", positionPercent);
 }

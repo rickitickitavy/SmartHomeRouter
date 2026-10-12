@@ -494,6 +494,42 @@ bool DeviceTopicMap::parseZclCommandBody(const char *body, uint8_t mappedEndpoin
         fields->parsed = true;
         return true;
     }
+    if (shortcut.startsWith("moveto")) {
+        String valueText = trimmed.substring(6);
+        valueText.trim();
+        if (valueText.startsWith("=") || valueText.startsWith(":")) {
+            valueText = valueText.substring(1);
+            valueText.trim();
+        }
+        uint32_t percent = 0;
+        if (parseNumericField(valueText, &percent) && percent <= 100) {
+            fields->clusterId = kZigbeeClusterWindowCovering;
+            fields->commandId = kZigbeeWindowCoveringCmdGoToLiftPercentage;
+            fields->payload[0] = (uint8_t)percent;
+            fields->payloadLength = 1;
+            fields->parsed = true;
+            return true;
+        }
+    }
+    if (shortcut.startsWith("level")) {
+        String valueText = trimmed.substring(5);
+        valueText.trim();
+        if (valueText.startsWith("=") || valueText.startsWith(":")) {
+            valueText = valueText.substring(1);
+            valueText.trim();
+        }
+        uint32_t level = 0;
+        if (parseNumericField(valueText, &level) && level <= 254) {
+            fields->clusterId = kZigbeeClusterLevelControl;
+            fields->commandId = kZigbeeLevelControlCmdMoveToLevel;
+            fields->payload[0] = (uint8_t)level;
+            fields->payload[1] = 0xFF;
+            fields->payload[2] = 0xFF;
+            fields->payloadLength = 3;
+            fields->parsed = true;
+            return true;
+        }
+    }
 
     String remaining = trimmed;
     bool sawCluster = false;

@@ -49,8 +49,12 @@ struct AutomationTimer {
 
 struct AutomationListener {
     char *ieeeText;
+    uint8_t channel;
+    char *param;
     bool hasCluster;
     uint16_t cluster;
+    bool hasAttrId;
+    uint16_t attrId;
     AutomationListener *next;
 };
 
@@ -59,8 +63,11 @@ struct AutomationCondition {
     bool notFlag;
     char *ieeeText;
     uint8_t channel;
+    char *param;
     bool hasCluster;
     uint16_t cluster;
+    bool hasAttrId;
+    uint16_t attrId;
     AutomationCompareOp cmp;
     char *value;
     AutomationContainerOp containerOp;
@@ -72,7 +79,12 @@ struct AutomationAction {
     AutomationActionTarget target;
     char *ieeeText;
     uint8_t channel;
+    char *param;
     char *payload;
+    bool hasCustomCommand;
+    uint16_t customCluster;
+    uint16_t customCommand;
+    char *customValue;
     char *automationName;
     AutomationAutomationOp automationOp;
     bool hasStartTime;

@@ -1,4 +1,5 @@
 #include "AutomationEngine.h"
+#include "AutomationParam.h"
 #include "DeviceTopicMap.h"
 #include "Logger.h"
 #include "ZigbeeSpiProxy.h"
@@ -83,12 +84,11 @@ bool AutomationEngine::compareValues(AutomationCompareOp op, const char *left, c
     if (right == nullptr) {
         right = "";
     }
-    char *leftEnd = nullptr;
-    char *rightEnd = nullptr;
-    const double leftNumber = strtod(left, &leftEnd);
-    const double rightNumber = strtod(right, &rightEnd);
+    double leftNumber = 0;
+    double rightNumber = 0;
+    // Parse embedded numbers so legacy "BATTERY 66" / "66%" still compare with GREATER/LESS.
     const bool bothNumeric =
-        leftEnd != left && rightEnd != right && *leftEnd == '\0' && *rightEnd == '\0';
+        automationParseNumericVal(left, leftNumber) && automationParseNumericVal(right, rightNumber);
     const bool bothTimeOfDay =
         AutomationStore::isTimeOfDayValue(left) && AutomationStore::isTimeOfDayValue(right);
     switch (op) {
@@ -132,6 +132,7 @@ bool AutomationEngine::resolveStatus(
     uint8_t channel,
     bool hasCluster,
     uint16_t cluster,
+    const char *param,
     char *out,
     size_t outLen
 ) const {
@@ -143,7 +144,7 @@ bool AutomationEngine::resolveStatus(
     if (!topicMap->parseIeee(ieeeText, ieee)) {
         return false;
     }
-    if (!spiProxy->copyEndpointState(ieee, channel, out, outLen)) {
+    if (!spiProxy->copyEndpointStateForParam(ieee, channel, param, out, outLen)) {
         return false;
     }
     if (hasCluster) {
@@ -202,13 +203,35 @@ bool AutomationEngine::evaluateComparison(
             condition->channel,
             condition->hasCluster,
             condition->cluster,
+            condition->param,
             statusText,
             sizeof(statusText)
         )) {
         resolved = true;
     }
-    const bool result = resolved
-        && compareValues(condition->cmp, statusText, condition->value);
+    bool result = false;
+    if (resolved && automationParamIsCustom(condition->param)) {
+        double liveVal = 0;
+        double compareVal = 0;
+        const bool bothNumeric =
+            automationParseNumericVal(statusText, liveVal)
+            && automationParseNumericVal(condition->value, compareVal);
+        if (bothNumeric
+            && (condition->cmp == AutomationCmpGreater
+                || condition->cmp == AutomationCmpLess
+                || condition->cmp == AutomationCmpEqual)) {
+            char liveNumber[32];
+            char compareNumber[32];
+            snprintf(liveNumber, sizeof(liveNumber), "%.6g", liveVal);
+            snprintf(compareNumber, sizeof(compareNumber), "%.6g", compareVal);
+            result = compareValues(condition->cmp, liveNumber, compareNumber);
+        } else {
+            // EQUAL (and string ops) against interpreted text such as DRY/LEAK/ON.
+            result = compareValues(condition->cmp, statusText, condition->value);
+        }
+    } else if (resolved) {
+        result = compareValues(condition->cmp, statusText, condition->value);
+    }
     if (automation != nullptr && automation->debug) {
         LOGGER.info(
             String("Automation debug ")
@@ -217,6 +240,7 @@ bool AutomationEngine::evaluateComparison(
             + (condition->ieeeText != nullptr ? condition->ieeeText : "?")
             + " ch"
             + String((unsigned)condition->channel)
+            + (condition->param != nullptr ? String(" param=") + condition->param : String(""))
             + " live="
             + (resolved ? statusText : "(unresolved)")
             + " "
@@ -288,7 +312,24 @@ void AutomationEngine::applyAction(const AutomationAction *action) {
         return;
     }
     if (action->target == AutomationTargetDevice) {
-        if (deviceCommand == nullptr || action->ieeeText == nullptr || action->payload == nullptr) {
+        if (deviceCommand == nullptr || action->ieeeText == nullptr) {
+            return;
+        }
+        if (action->hasCustomCommand) {
+            char customPayload[AUTOMATION_VALUE_MAX];
+            if (!automationBuildCustomPayload(
+                    action->customCluster,
+                    action->customCommand,
+                    action->customValue,
+                    customPayload,
+                    sizeof(customPayload)
+                )) {
+                return;
+            }
+            deviceCommand(action->ieeeText, customPayload, (int)action->channel);
+            return;
+        }
+        if (action->payload == nullptr) {
             return;
         }
         deviceCommand(action->ieeeText, action->payload, (int)action->channel);
@@ -440,6 +481,51 @@ void AutomationEngine::evaluateCurrentTimeAutomations() {
     }
 }
 
+bool AutomationEngine::listenerMatchesEvent(
+    const AutomationListener *listener,
+    uint8_t endpoint,
+    uint16_t clusterOr0,
+    const char *newState
+) {
+    if (listener == nullptr) {
+        return false;
+    }
+    if (listener->channel > 0 && listener->channel != endpoint) {
+        return false;
+    }
+    uint16_t effectiveCluster = clusterOr0;
+    if (effectiveCluster == 0) {
+        effectiveCluster = automationInferClusterFromInterpretedState(newState);
+    }
+    if (listener->hasCluster && effectiveCluster != 0
+        && !automationClusterIdMatches(listener->cluster, effectiveCluster)) {
+        return false;
+    }
+    if (listener->hasCluster && effectiveCluster == 0) {
+        return false;
+    }
+    if (listener->hasAttrId) {
+        uint16_t attrFromState = automationParseAttrIdFromState(newState);
+        if (attrFromState == 0) {
+            attrFromState = automationInferAttrIdFromInterpretedState(newState);
+        }
+        if (attrFromState != 0 && !automationAttrIdMatches(listener->attrId, attrFromState)) {
+            return false;
+        }
+        if (attrFromState == 0
+            && listener->param != nullptr
+            && !automationStateMatchesParam(listener->param, effectiveCluster, newState)) {
+            return false;
+        }
+    } else if (listener->param != nullptr && listener->param[0] != '\0'
+        && !automationParamIsCustom(listener->param)) {
+        if (!automationStateMatchesParam(listener->param, effectiveCluster, newState)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void AutomationEngine::evaluateMatching(
     const char *ieeeText,
     uint8_t endpoint,
@@ -469,26 +555,10 @@ void AutomationEngine::evaluateMatching(
             if (strcasecmp(listener->ieeeText, ieeeText) != 0) {
                 continue;
             }
-            if (listener->hasCluster && clusterOr0 != 0 && listener->cluster != clusterOr0) {
+            if (!listenerMatchesEvent(listener, endpoint, clusterOr0, nullptr)) {
                 continue;
             }
-            if (listener->hasCluster && clusterOr0 == 0) {
-                continue;
-            }
-            (void)endpoint;
             matched = true;
-            if (automation->debug) {
-                LOGGER.info(
-                    String("Automation debug ")
-                    + (automation->name != nullptr ? automation->name : "?")
-                    + " trigger match "
-                    + ieeeText
-                    + " ep"
-                    + String((unsigned)endpoint)
-                    + " cluster="
-                    + String((unsigned)clusterOr0)
-                );
-            }
             break;
         }
         if (matched) {
@@ -503,12 +573,45 @@ void AutomationEngine::onStatusChanged(
     uint16_t clusterOr0,
     const char *newState
 ) {
-    (void)newState;
-    if (topicMap == nullptr || ieee == nullptr) {
+    if (topicMap == nullptr || ieee == nullptr || store == nullptr) {
         return;
     }
     const String ieeeText = topicMap->formatIeee(ieee);
-    evaluateMatching(ieeeText.c_str(), endpoint, clusterOr0, false, nullptr);
+    for (AutomationRecord *automation = store->first(); automation != nullptr; automation = automation->next) {
+        if (!automation->active) {
+            continue;
+        }
+        bool matched = false;
+        for (const AutomationListener *listener = automation->listen; listener != nullptr; listener = listener->next) {
+            if (listener->ieeeText == nullptr) {
+                continue;
+            }
+            if (strcasecmp(listener->ieeeText, ieeeText.c_str()) != 0) {
+                continue;
+            }
+            if (!listenerMatchesEvent(listener, endpoint, clusterOr0, newState)) {
+                continue;
+            }
+            matched = true;
+            if (automation->debug) {
+                LOGGER.info(
+                    String("Automation debug ")
+                    + (automation->name != nullptr ? automation->name : "?")
+                    + " trigger match "
+                    + ieeeText
+                    + " ep"
+                    + String((unsigned)endpoint)
+                    + " cluster="
+                    + String((unsigned)clusterOr0)
+                    + (listener->param != nullptr ? String(" param=") + listener->param : String(""))
+                );
+            }
+            break;
+        }
+        if (matched) {
+            evaluateAndMaybeRun(automation);
+        }
+    }
 }
 
 void AutomationEngine::tick() {

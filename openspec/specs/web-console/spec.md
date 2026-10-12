@@ -75,7 +75,7 @@ The Automation section MUST show a narrow left group list and a table of automat
 - **THEN** each visible row shows name, active, and last performed when known
 
 ### Requirement: Automation edit dialog import and export
-Add or row edit MUST open an edit dialog with **General** (Active, then Name, then Group, Debug; no title), **Trigger** (countdown TIMER controls first, then listening devices), Condition (enable checkbox plus editor when enabled), actions (device or automation targets), Export, and Import. Dialog Import MUST be enabled only when the form is empty (no listeners, no actions, condition disabled or empty, TIMER `use` false / defaults unset). Dialog Export MUST download one JSON file named from the automation’s `name`.
+Add or row edit MUST open an edit dialog with **General** (Active, then Name, then Group, Debug; no title), **Trigger** (countdown TIMER controls first, then listening devices with typed parameter pickers), Condition (enable checkbox plus editor when enabled, with typed comparison pickers), actions (device actions with typed pickers or automation targets), Export, and Import. Dialog Import MUST be enabled only when the form is empty (no listeners, no actions, condition disabled or empty, TIMER `use` false / defaults unset). Dialog Export MUST download one JSON file named from the automation’s `name`.
 
 #### Scenario: Group after name
 - **WHEN** the operator opens the automation edit dialog
@@ -88,6 +88,54 @@ Add or row edit MUST open an edit dialog with **General** (Active, then Name, th
 #### Scenario: No Title field
 - **WHEN** the operator opens the automation edit dialog
 - **THEN** there is no Title input
+
+### Requirement: Automation Trigger rows use typed parameters
+Each Trigger (listening) row MUST let the operator choose a registered device, a channel when that device has more than one channel (channel control MUST be hidden when only one channel is available), and either a **known parameter** for that device’s classified type or **CUSTOM**. When CUSTOM is selected, the row MUST show cluster and attrId fields for entry (hex). The Remove control on Trigger rows MUST use the same compact button sizing as Remove controls in Condition and Actions (`btn-inline` / shared editor button style).
+
+#### Scenario: Hide single-channel picker
+- **WHEN** the operator selects a device that has only one channel on a Trigger row
+- **THEN** no channel control is shown for that row
+
+#### Scenario: Custom shows cluster and attrId
+- **WHEN** the operator chooses CUSTOM on a Trigger row
+- **THEN** cluster and attrId inputs are visible and required for a complete custom binding
+
+#### Scenario: Trigger Remove matches other editors
+- **WHEN** the operator views Trigger, Condition, and Actions Remove buttons
+- **THEN** Trigger Remove uses the same compact inline button styling as the other Remove buttons
+
+### Requirement: Automation Condition comparisons use typed parameters
+Each condition comparison MUST use the same device / channel / known-parameter-or-CUSTOM picker as Trigger. For a known parameter, the compare value MUST be chosen or entered against the host’s interpreted status vocabulary for that parameter. For CUSTOM, GREATER/LESS MUST apply to numeric VAL; EQUAL MAY use interpreted status text (for example DRY) or a numeric value.
+
+#### Scenario: Custom condition uses VAL
+- **WHEN** the operator saves a CUSTOM condition comparison with GREATER and value `42`
+- **THEN** evaluation compares the numeric attribute VAL to 42
+
+#### Scenario: Custom EQUAL to status text
+- **WHEN** the operator saves a CUSTOM condition comparison with EQUAL and value `DRY`
+- **THEN** the dialog stores that binding and the host accepts it
+
+#### Scenario: Known On/Off status compare
+- **WHEN** the operator picks an On/Off device’s Status parameter and EQUAL to ON
+- **THEN** the dialog stores a known Status binding that compares the interpreted ON/OFF status
+
+### Requirement: Automation device actions use typed parameters
+Each device-target action MUST use the same device / channel / known-parameter-or-CUSTOM picker pattern as Trigger. Known parameters MUST map to the existing device-command payloads for that type (for example On/Off ON/OFF, window covering open/close/stop/position). When CUSTOM is selected, the row MUST show cluster, command, and value fields (cluster and command as hex).
+
+#### Scenario: Custom action fields
+- **WHEN** the operator chooses CUSTOM on a device action
+- **THEN** cluster, command, and value inputs are visible
+
+#### Scenario: Known dimmer light level
+- **WHEN** the operator picks Light level on a level-capable device action
+- **THEN** the dialog collects the level value and stores a known Light-level action binding
+
+### Requirement: Known parameter lists by device type
+The console MUST offer known parameters based on the device’s classified type (and related clusters when present), including at least: Window covering — Status (STOPPED, UP, DOWN) and Position; On/Off — Status (ON, OFF); Level/dimmer — Status (ON, OFF) and Light level; measurement sensors — Sensor value (and Battery level when the device exposes battery); IAS zone — zone Status (LEAK/DRY style strings the host already publishes). Devices with no matching catalog entry MUST still offer CUSTOM.
+
+#### Scenario: Window covering known list
+- **WHEN** the operator selects a window-covering device on Trigger or Condition
+- **THEN** the parameter list includes Status and Position plus CUSTOM
 
 ### Requirement: Automation actions target devices or automations
 The edit dialog Actions editor MUST let each action target a device (payload/channel as Manual command) or an automation. Automation-target ops MUST include ENABLE and DISABLE; when the selected target automation uses a timer, ops MUST also include STOP TIMER, START TIMER, and RESTART TIMER. START TIMER MUST allow an optional countdown time when the target has no default time.

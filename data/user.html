@@ -365,7 +365,9 @@
             for (index = 0; index < raw.length; index++) {
                 entries.push({
                     ep: raw[index].ep,
-                    state: raw[index].state || ""
+                    state: raw[index].state || "",
+                    move: raw[index].move || "",
+                    position: raw[index].position || ""
                 });
             }
             entries.sort(function (left, right) {
@@ -374,14 +376,19 @@
             return entries;
         }
 
-        function findStatusState(entries, endpoint) {
+        function findStatusEntry(entries, endpoint) {
             var index;
             for (index = 0; index < entries.length; index++) {
                 if (entries[index].ep == endpoint) {
-                    return entries[index].state;
+                    return entries[index];
                 }
             }
-            return "";
+            return null;
+        }
+
+        function findStatusState(entries, endpoint) {
+            var entry = findStatusEntry(entries, endpoint);
+            return entry ? (entry.state || "") : "";
         }
 
         function measurementStateForBinding(device, binding) {
@@ -780,7 +787,10 @@
                 var position = document.createElement("span");
                 position.className = "console-cover-position";
                 var entries = statusEntriesForDevice(device);
-                position.textContent = coveringPositionText(findStatusState(entries, channel));
+                var coveringEntry = findStatusEntry(entries, channel);
+                position.textContent = coveringEntry && coveringEntry.position
+                    ? coveringEntry.position
+                    : coveringPositionText(coveringEntry ? coveringEntry.state : "");
                 controls.appendChild(openButton);
                 controls.appendChild(closeButton);
                 controls.appendChild(stopButton);
