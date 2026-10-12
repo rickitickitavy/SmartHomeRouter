@@ -270,6 +270,15 @@
             renderConsoleTabs();
         }
 
+        function appendUserConsoleSignOutTab(tabsHost) {
+            var signOutButton = document.createElement("button");
+            signOutButton.type = "button";
+            signOutButton.className = "tab-btn user-console-signout-tab";
+            signOutButton.textContent = "Sign out";
+            signOutButton.onclick = openSignOutConfirm;
+            tabsHost.appendChild(signOutButton);
+        }
+
         function renderConsoleTabs() {
             var tabsHost = document.getElementById("consoleTabs");
             var panelsHost = document.getElementById("consolePanels");
@@ -280,11 +289,12 @@
             tabsHost.innerHTML = "";
             panelsHost.innerHTML = "";
             if (!assignedConsoles.length) {
-                tabsHost.hidden = true;
+                tabsHost.hidden = false;
                 panelsHost.hidden = true;
                 if (emptyState) {
                     emptyState.hidden = false;
                 }
+                appendUserConsoleSignOutTab(tabsHost);
                 return;
             }
             tabsHost.hidden = false;
@@ -305,6 +315,7 @@
                 })(tabIndex);
                 tabsHost.appendChild(tabButton);
             }
+            appendUserConsoleSignOutTab(tabsHost);
             var panel = document.createElement("div");
             panel.className = "tab-content user-console-tab";
             renderConsoleGrid(panel, assignedConsoles[activeConsoleIndex]);
@@ -1048,7 +1059,6 @@
 <div id="userShell" class="user-console-shell" hidden>
     <div class="user-console-toolbar">
         <div id="consoleTabs" class="tabs user-console-tabs" hidden></div>
-        <button type="button" class="btn btn-secondary btn-inline user-console-signout" onclick="openSignOutConfirm()">Sign out</button>
     </div>
     <div id="consolePanels" class="user-console-panels" hidden></div>
     <p id="emptyState" class="field-hint user-console-empty" hidden>No consoles are assigned to your account.</p>
