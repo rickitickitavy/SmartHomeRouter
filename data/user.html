@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Control consoles</title>
     <link rel="stylesheet" type="text/css" href="css/all.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css"/>
     <script>
         var signedInUser = null;
         var sessionWatchTimer = null;
@@ -474,6 +475,51 @@
                 || typeId == "electricalMeasurement";
         }
 
+        function isBinarySensorDeviceType(typeId) {
+            return typeId == "binaryInput"
+                || typeId == "binaryOutput"
+                || typeId == "binaryValue"
+                || typeId == "bacnetBinaryInputRegular"
+                || typeId == "bacnetBinaryInputExtended"
+                || typeId == "bacnetBinaryOutputRegular"
+                || typeId == "bacnetBinaryOutputExtended"
+                || typeId == "bacnetBinaryValueRegular"
+                || typeId == "bacnetBinaryValueExtended";
+        }
+
+        function normalizeMdiIconId(iconId) {
+            var text = String(iconId || "").trim().toLowerCase();
+            if (!text) {
+                return "mdi:checkbox-marked-circle";
+            }
+            if (text.indexOf("mdi:") !== 0) {
+                text = "mdi:" + text.replace(/^mdi-/, "");
+            }
+            return text;
+        }
+
+        function mdiIconClassName(iconId) {
+            return normalizeMdiIconId(iconId).replace(":", "-");
+        }
+
+        function isBinaryStateOn(stateText) {
+            var upper = String(stateText || "").trim().toUpperCase();
+            return upper === "ON" || upper === "1" || upper === "TRUE";
+        }
+
+        function buildConsoleIconElement(binding, stateText) {
+            var iconId = normalizeMdiIconId(binding && binding.icon);
+            var wrap = document.createElement("span");
+            wrap.className = "console-binary-icon"
+                + (isBinaryStateOn(stateText) ? " is-on" : " is-off");
+            wrap.title = stateText ? String(stateText) : iconId;
+            var icon = document.createElement("i");
+            icon.className = "mdi " + mdiIconClassName(iconId);
+            icon.setAttribute("aria-hidden", "true");
+            wrap.appendChild(icon);
+            return wrap;
+        }
+
         function parseNumericState(stateText) {
             var text = String(stateText || "").trim();
             if (!text.length) {
@@ -528,6 +574,35 @@
                 places = 3;
             }
             return Number(value).toFixed(places);
+        }
+
+        function measurementNumericValue(typeId, stateText, unitId) {
+            var value = parseNumericState(stateText);
+            if (value === null) {
+                return NaN;
+            }
+            var unit = unitId || "";
+            if (typeId == "temperatureMeasurement") {
+                if (unit === "F") {
+                    return value * 9 / 5 + 32;
+                }
+                if (unit === "K") {
+                    return value + 273.15;
+                }
+            }
+            return value;
+        }
+
+        function measurementGaugeDisplay(typeId, stateText, unitId, decimals) {
+            var value = measurementNumericValue(typeId, stateText, unitId);
+            if (isNaN(value)) {
+                return "";
+            }
+            var places = decimals;
+            if (places === undefined || places === null || places < 0) {
+                places = defaultMeasurementDecimals(typeId);
+            }
+            return formatFixedValue(value, places);
         }
 
         function formatMeasurementDisplay(typeId, stateText, unitId, decimals) {
@@ -989,6 +1064,11 @@
                     };
                 })(device.ieee, channel, String(onState).toUpperCase() === "ON");
                 controls.appendChild(onOffSwitch);
+            } else if (isBinarySensorDeviceType(typeId) && binding.viewStyle === "icon") {
+                controls.appendChild(buildConsoleIconElement(
+                    binding,
+                    bindingResolvedState(device, binding)
+                ));
             } else if (showTypeControls && typeId === "windowCovering") {
                 var openButton = document.createElement("button");
                 openButton.type = "button";
@@ -1031,18 +1111,24 @@
             } else if (binding.viewStyle === "gauge") {
                 row.classList.add("console-device-row--gauge");
                 var rawState = bindingResolvedState(device, binding);
-                var displayText = isMeasurementDeviceType(typeId) && param !== "battery"
-                    ? formatMeasurementDisplay(
+                var gaugeNumeric;
+                var gaugeDisplay;
+                if (isMeasurementDeviceType(typeId) && param !== "battery") {
+                    gaugeNumeric = measurementNumericValue(typeId, rawState, binding.unit);
+                    gaugeDisplay = measurementGaugeDisplay(
                         typeId,
                         rawState,
                         binding.unit,
                         bindingDecimals(binding, typeId)
-                    )
-                    : (rawState || "—");
+                    );
+                } else {
+                    gaugeNumeric = parseBindingNumericValue(rawState);
+                    gaugeDisplay = rawState || "";
+                }
                 controls.appendChild(buildConsoleGaugeElement(
                     binding,
-                    parseBindingNumericValue(rawState),
-                    displayText
+                    gaugeNumeric,
+                    gaugeDisplay
                 ));
             } else if (isMeasurementDeviceType(typeId) && param !== "battery") {
                 var valueLabel = document.createElement("span");

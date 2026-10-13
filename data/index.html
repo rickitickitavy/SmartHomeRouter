@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>z2m-gateway</title>
     <link rel="stylesheet" type="text/css" href="css/all.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css"/>
     <script>
         function showMainSection(name) {
             var buttons = document.querySelectorAll(".sidebar-btn");
@@ -2700,6 +2701,95 @@
                 || typeId == "electricalMeasurement";
         }
 
+        // Zigbee Binary Input/Output/Value — Home Assistant binary_sensor style (MDI icons).
+        function isBinarySensorDeviceType(typeId) {
+            return typeId == "binaryInput"
+                || typeId == "binaryOutput"
+                || typeId == "binaryValue"
+                || typeId == "bacnetBinaryInputRegular"
+                || typeId == "bacnetBinaryInputExtended"
+                || typeId == "bacnetBinaryOutputRegular"
+                || typeId == "bacnetBinaryOutputExtended"
+                || typeId == "bacnetBinaryValueRegular"
+                || typeId == "bacnetBinaryValueExtended";
+        }
+
+        // Curated from Material Design Icons (Pictogrammers) — same library Home Assistant uses.
+        var BINARY_SENSOR_ICON_CHOICES = [
+            "mdi:door",
+            "mdi:door-open",
+            "mdi:window-closed-variant",
+            "mdi:window-open-variant",
+            "mdi:motion-sensor",
+            "mdi:motion-sensor-off",
+            "mdi:water",
+            "mdi:water-off",
+            "mdi:smoke-detector",
+            "mdi:smoke-detector-off",
+            "mdi:eye",
+            "mdi:eye-off",
+            "mdi:lightbulb",
+            "mdi:lightbulb-outline",
+            "mdi:power-plug",
+            "mdi:power-plug-off",
+            "mdi:toggle-switch",
+            "mdi:toggle-switch-off",
+            "mdi:checkbox-marked-circle",
+            "mdi:checkbox-blank-circle-outline",
+            "mdi:home",
+            "mdi:home-outline",
+            "mdi:bell",
+            "mdi:bell-off",
+            "mdi:lock",
+            "mdi:lock-open-variant",
+            "mdi:garage",
+            "mdi:garage-open",
+            "mdi:gate",
+            "mdi:gate-open",
+            "mdi:radiator",
+            "mdi:radiator-off",
+            "mdi:fan",
+            "mdi:fan-off",
+            "mdi:pump",
+            "mdi:water-pump",
+            "mdi:heat-pump",
+            "mdi:engine",
+            "mdi:engine-off"
+        ];
+
+        function normalizeMdiIconId(iconId) {
+            var text = String(iconId || "").trim().toLowerCase();
+            if (!text) {
+                return "mdi:checkbox-marked-circle";
+            }
+            if (text.indexOf("mdi:") !== 0) {
+                text = "mdi:" + text.replace(/^mdi-/, "");
+            }
+            return text;
+        }
+
+        function mdiIconClassName(iconId) {
+            return normalizeMdiIconId(iconId).replace(":", "-");
+        }
+
+        function isBinaryStateOn(stateText) {
+            var upper = String(stateText || "").trim().toUpperCase();
+            return upper === "ON" || upper === "1" || upper === "TRUE";
+        }
+
+        function buildConsoleIconElement(binding, stateText) {
+            var iconId = normalizeMdiIconId(binding && binding.icon);
+            var wrap = document.createElement("span");
+            wrap.className = "console-binary-icon"
+                + (isBinaryStateOn(stateText) ? " is-on" : " is-off");
+            wrap.title = stateText ? String(stateText) : iconId;
+            var icon = document.createElement("i");
+            icon.className = "mdi " + mdiIconClassName(iconId);
+            icon.setAttribute("aria-hidden", "true");
+            wrap.appendChild(icon);
+            return wrap;
+        }
+
         function fillMeasurementStatusCell(cell, entries) {
             var textParts = [];
             var textIndex;
@@ -4078,6 +4168,7 @@
         var consoleDeviceDialogBaseline = null;
         var consoleDeviceDialogDevices = [];
         var consoleDeviceGaugeRangesDraft = [];
+        var consoleDeviceIconDraft = "mdi:checkbox-marked-circle";
         var consoleDragWidgetIndex = null;
         var consoleDragBindingWidgetIndex = null;
         var consoleDragBindingIndex = null;
@@ -4190,6 +4281,35 @@
                 places = 3;
             }
             return Number(value).toFixed(places);
+        }
+
+        function placeMeasurementNumericValue(typeId, stateText, unitId) {
+            var value = placeParseNumericState(stateText);
+            if (value === null) {
+                return NaN;
+            }
+            var unit = unitId || "";
+            if (typeId == "temperatureMeasurement") {
+                if (unit === "F") {
+                    return value * 9 / 5 + 32;
+                }
+                if (unit === "K") {
+                    return value + 273.15;
+                }
+            }
+            return value;
+        }
+
+        function placeMeasurementGaugeDisplay(typeId, stateText, unitId, decimals) {
+            var value = placeMeasurementNumericValue(typeId, stateText, unitId);
+            if (isNaN(value)) {
+                return "";
+            }
+            var places = decimals;
+            if (places === undefined || places === null || places < 0) {
+                places = placeDefaultDecimals(typeId);
+            }
+            return placeFormatFixed(value, places);
         }
 
         function placeFormatMeasurement(typeId, stateText, unitId, decimals) {
@@ -4569,6 +4689,11 @@
                     };
                 })(device.ieee, channel, String(onState).toUpperCase() === "ON");
                 controls.appendChild(onOffSwitch);
+            } else if (isBinarySensorDeviceType(typeId) && binding.viewStyle === "icon") {
+                controls.appendChild(buildConsoleIconElement(
+                    binding,
+                    placeBindingResolvedState(device, binding)
+                ));
             } else if (showTypeControls && typeId === "windowCovering") {
                 [["OPEN", "OPEN"], ["CLOSE", "CLOSE"], ["STOP", "STOP"]].forEach(function (pair) {
                     var button = document.createElement("button");
@@ -4594,18 +4719,24 @@
             } else if (binding.viewStyle === "gauge") {
                 row.classList.add("console-device-row--gauge");
                 var rawState = placeBindingResolvedState(device, binding);
-                var displayText = isMeasurementDeviceType(typeId) && param !== "battery"
-                    ? placeFormatMeasurement(
+                var gaugeNumeric;
+                var gaugeDisplay;
+                if (isMeasurementDeviceType(typeId) && param !== "battery") {
+                    gaugeNumeric = placeMeasurementNumericValue(typeId, rawState, binding.unit);
+                    gaugeDisplay = placeMeasurementGaugeDisplay(
                         typeId,
                         rawState,
                         binding.unit,
                         placeBindingDecimals(binding, typeId)
-                    )
-                    : (rawState || "—");
+                    );
+                } else {
+                    gaugeNumeric = parseBindingNumericValue(rawState);
+                    gaugeDisplay = rawState || "";
+                }
                 controls.appendChild(buildConsoleGaugeElement(
                     binding,
-                    parseBindingNumericValue(rawState),
-                    displayText
+                    gaugeNumeric,
+                    gaugeDisplay
                 ));
             } else if (isMeasurementDeviceType(typeId) && param !== "battery") {
                 var valueLabel = document.createElement("span");
@@ -6028,14 +6159,8 @@
                 }
                 select.appendChild(option);
             }
-            if (!matched && selectedParam) {
-                var customOption = document.createElement("option");
-                customOption.value = selectedParam;
-                customOption.textContent = selectedParam;
-                customOption.selected = true;
-                select.appendChild(customOption);
-            }
-            if (!select.value) {
+            // Do not inject an unmatched previous param (e.g. orphan Status) as selected.
+            if (!matched || !select.value) {
                 select.value = params[0] ? params[0].id : "custom";
             }
             return select.value;
@@ -8013,6 +8138,7 @@
                 setHidden(document.getElementById("consoleDeviceDecimalsField"), true);
                 setHidden(document.getElementById("consoleDeviceViewStyleField"), true);
                 setHidden(document.getElementById("consoleDeviceGaugeGroup"), true);
+                setHidden(document.getElementById("consoleDeviceIconGroup"), true);
             } else {
                 refreshConsoleDeviceParamFields();
             }
@@ -8036,8 +8162,13 @@
             if (!device || !paramValue) {
                 return false;
             }
-            if (paramValue === "status" || paramValue === "onOff") {
+            var typeId = device.type || "";
+            if (paramValue === "onOff") {
                 return false;
+            }
+            if (paramValue === "status") {
+                // Safety net: saved Measurement bindings may still carry orphan Status.
+                return isMeasurementDeviceType(typeId);
             }
             if (paramValue === "battery"
                 || paramValue === "custom"
@@ -8046,7 +8177,6 @@
                 || paramValue === "lightLevel") {
                 return true;
             }
-            var typeId = device.type || "";
             if (isMeasurementDeviceType(typeId)) {
                 return true;
             }
@@ -8137,22 +8267,90 @@
             refreshConsoleDeviceGaugeFields();
         }
 
+        function fillConsoleDeviceViewStyleOptions(isBinarySensor, selectedStyle) {
+            var viewStyleSelect = document.getElementById("consoleDeviceViewStyle");
+            if (!viewStyleSelect) {
+                return;
+            }
+            var previous = selectedStyle || viewStyleSelect.value || "default";
+            viewStyleSelect.innerHTML = "";
+            var options = isBinarySensor
+                ? [["default", "Default"], ["icon", "Icon"]]
+                : [["default", "Default"], ["gauge", "Gauge"]];
+            var index;
+            var matched = false;
+            for (index = 0; index < options.length; index++) {
+                var option = document.createElement("option");
+                option.value = options[index][0];
+                option.textContent = options[index][1];
+                if (previous === options[index][0]) {
+                    option.selected = true;
+                    matched = true;
+                }
+                viewStyleSelect.appendChild(option);
+            }
+            if (!matched) {
+                viewStyleSelect.value = "default";
+            }
+        }
+
+        function renderConsoleDeviceIconGrid() {
+            var host = document.getElementById("consoleDeviceIconGrid");
+            if (!host) {
+                return;
+            }
+            host.innerHTML = "";
+            var selected = normalizeMdiIconId(consoleDeviceIconDraft);
+            var index;
+            for (index = 0; index < BINARY_SENSOR_ICON_CHOICES.length; index++) {
+                (function (iconId) {
+                    var button = document.createElement("button");
+                    button.type = "button";
+                    button.className = "console-icon-pick"
+                        + (normalizeMdiIconId(iconId) === selected ? " is-selected" : "");
+                    button.title = iconId;
+                    button.setAttribute("aria-label", iconId);
+                    var icon = document.createElement("i");
+                    icon.className = "mdi " + mdiIconClassName(iconId);
+                    button.appendChild(icon);
+                    button.onclick = function () {
+                        consoleDeviceIconDraft = normalizeMdiIconId(iconId);
+                        renderConsoleDeviceIconGrid();
+                    };
+                    host.appendChild(button);
+                })(BINARY_SENSOR_ICON_CHOICES[index]);
+            }
+        }
+
         function refreshConsoleDeviceGaugeFields() {
             var device = consoleDialogSelectedDevice();
             var paramSelect = document.getElementById("consoleDeviceParam");
             var paramValue = paramSelect ? paramSelect.value : "";
-            var allowsGauge = consoleBindingAllowsGauge(device, paramValue);
+            var isBinary = !!(device && isBinarySensorDeviceType(device.type || ""));
+            var allowsGauge = !isBinary && consoleBindingAllowsGauge(device, paramValue);
+            var allowsIconStyle = isBinary;
             var viewStyleField = document.getElementById("consoleDeviceViewStyleField");
             var viewStyleSelect = document.getElementById("consoleDeviceViewStyle");
             var gaugeGroup = document.getElementById("consoleDeviceGaugeGroup");
-            setHidden(viewStyleField, !allowsGauge);
-            if (!allowsGauge && viewStyleSelect) {
+            var iconGroup = document.getElementById("consoleDeviceIconGroup");
+            var showViewStyle = allowsGauge || allowsIconStyle;
+            setHidden(viewStyleField, !showViewStyle);
+            if (showViewStyle) {
+                fillConsoleDeviceViewStyleOptions(
+                    allowsIconStyle,
+                    viewStyleSelect ? viewStyleSelect.value : "default"
+                );
+            } else if (viewStyleSelect) {
                 viewStyleSelect.value = "default";
             }
-            var displayAsGauge = allowsGauge
-                && viewStyleSelect
-                && viewStyleSelect.value === "gauge";
+            var styleValue = viewStyleSelect ? viewStyleSelect.value : "default";
+            var displayAsGauge = allowsGauge && styleValue === "gauge";
+            var displayAsIcon = allowsIconStyle && styleValue === "icon";
             setHidden(gaugeGroup, !displayAsGauge);
+            setHidden(iconGroup, !displayAsIcon);
+            if (displayAsIcon) {
+                renderConsoleDeviceIconGrid();
+            }
         }
 
         function refreshConsoleDeviceParamFields() {
@@ -8168,6 +8366,7 @@
                 setHidden(document.getElementById("consoleDeviceAttrField"), true);
                 setHidden(document.getElementById("consoleDeviceViewStyleField"), true);
                 setHidden(document.getElementById("consoleDeviceGaugeGroup"), true);
+                setHidden(document.getElementById("consoleDeviceIconGroup"), true);
                 updateConsoleDeviceUnitField();
                 return;
             }
@@ -8176,7 +8375,7 @@
             fillAutomationChannelSelect(channelSelect, device, previousChannel);
             setHidden(channelField, channelSelect.hidden);
             setHidden(paramField, false);
-            fillAutomationParamSelect(paramSelect, device, previousParam || "status");
+            fillAutomationParamSelect(paramSelect, device, previousParam || "");
             refreshConsoleDeviceCustomAndGaugeFields();
             updateConsoleDeviceUnitField();
         }
@@ -8187,7 +8386,7 @@
             consoleDeviceDialogBindingIndex = bindingIndex;
             var binding = bindingIndex >= 0
                 ? consoleEditorDraft.widgets[widgetIndex].devices[bindingIndex]
-                : { ieee: "", channel: 1, title: "", unit: "", decimals: -1, param: "status", viewStyle: "default" };
+                : { ieee: "", channel: 1, title: "", unit: "", decimals: -1, param: "", viewStyle: "default" };
             document.getElementById("consoleDeviceDialogError").hidden = true;
             var targetSelect = document.getElementById("consoleBindingTarget");
             targetSelect.value = binding.automation ? "automation" : "device";
@@ -8197,6 +8396,7 @@
                     return { top: range.top, color: range.color || "#3b82f6" };
                 });
             }
+            consoleDeviceIconDraft = normalizeMdiIconId(binding.icon || "mdi:checkbox-marked-circle");
             Promise.all([
                 fetch("/api/devices", { cache: "no-store" }).then(function (response) { return response.json(); }),
                 fetch("/api/automations", { cache: "no-store" }).then(function (response) { return response.json(); })
@@ -8247,7 +8447,9 @@
                 }
                 var viewStyleSelect = document.getElementById("consoleDeviceViewStyle");
                 if (viewStyleSelect) {
-                    viewStyleSelect.value = binding.viewStyle === "gauge" ? "gauge" : "default";
+                    viewStyleSelect.value = binding.viewStyle === "gauge"
+                        ? "gauge"
+                        : (binding.viewStyle === "icon" ? "icon" : "default");
                 }
                 var gaugeType = document.getElementById("consoleDeviceGaugeType");
                 var gaugeMin = document.getElementById("consoleDeviceGaugeMin");
@@ -8270,7 +8472,7 @@
                     fillAutomationChannelSelect(channelSelect, device, binding.channel || 1);
                     setHidden(document.getElementById("consoleDeviceChannelField"), channelSelect.hidden);
                     setHidden(document.getElementById("consoleDeviceParamField"), false);
-                    fillAutomationParamSelect(paramSelect, device, binding.param || "status");
+                    fillAutomationParamSelect(paramSelect, device, binding.param || "");
                     refreshConsoleDeviceCustomAndGaugeFields();
                     updateConsoleDeviceUnitField();
                     var unitSelect = document.getElementById("consoleDeviceUnit");
@@ -8451,7 +8653,14 @@
                 }
             }
             var device = consoleDialogSelectedDevice();
-            if (consoleBindingAllowsGauge(device, body.param)
+            var isBinary = !!(device && isBinarySensorDeviceType(device.type || ""));
+            if (isBinary
+                && viewStyleSelect
+                && viewStyleSelect.value === "icon") {
+                body.viewStyle = "icon";
+                body.icon = normalizeMdiIconId(consoleDeviceIconDraft);
+            } else if (!isBinary
+                && consoleBindingAllowsGauge(device, body.param)
                 && viewStyleSelect
                 && viewStyleSelect.value === "gauge") {
                 body.viewStyle = "gauge";
@@ -9704,12 +9913,16 @@
                 <select id="consoleDeviceDecimals"></select>
             </div>
             <div id="consoleDeviceViewStyleField" class="console-binding-general-row" hidden>
-                <label for="consoleDeviceViewStyle">Display as</label>
+                <label for="consoleDeviceViewStyle">View style</label>
                 <select id="consoleDeviceViewStyle" onchange="refreshConsoleDeviceGaugeFields();">
                     <option value="default">Default</option>
                     <option value="gauge">Gauge</option>
                 </select>
             </div>
+        </div>
+        <div id="consoleDeviceIconGroup" class="console-icon-config" hidden>
+            <p class="field-hint">Icon (Material Design Icons — Home Assistant / Pictogrammers)</p>
+            <div id="consoleDeviceIconGrid" class="console-icon-grid"></div>
         </div>
         <div id="consoleDeviceGaugeGroup" class="console-gauge-config" hidden>
             <p class="field-hint">Gauge</p>

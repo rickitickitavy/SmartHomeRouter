@@ -22,6 +22,7 @@ struct ConsoleBinding {
     uint16_t cluster;
     int32_t attrId;
     uint8_t viewStyle;
+    char *icon;
     uint8_t gaugeType;
     float gaugeMin;
     float gaugeMax;

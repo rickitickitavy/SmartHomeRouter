@@ -71,6 +71,7 @@ void ConsoleStore::freeBindingList(ConsoleBinding *&listHead) {
         free(listHead->title);
         free(listHead->unit);
         free(listHead->param);
+        free(listHead->icon);
         freeGaugeRanges(listHead->gaugeRanges);
         free(listHead);
         listHead = next;
@@ -143,12 +144,18 @@ uint8_t ConsoleStore::parseViewStyleId(const char *text) {
     if (text != nullptr && strcmp(text, "gauge") == 0) {
         return CONSOLE_VIEW_STYLE_GAUGE;
     }
+    if (text != nullptr && strcmp(text, "icon") == 0) {
+        return CONSOLE_VIEW_STYLE_ICON;
+    }
     return CONSOLE_VIEW_STYLE_DEFAULT;
 }
 
 const char *ConsoleStore::viewStyleJsonId(uint8_t viewStyle) {
     if (viewStyle == CONSOLE_VIEW_STYLE_GAUGE) {
         return "gauge";
+    }
+    if (viewStyle == CONSOLE_VIEW_STYLE_ICON) {
+        return "icon";
     }
     return "default";
 }
@@ -446,6 +453,7 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         String unit;
         String paramText;
         String viewStyleText;
+        String iconText;
         int channel = 1;
         int decimals = -1;
         int clusterValue = 0;
@@ -462,6 +470,7 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         extractJsonString(object.c_str(), "unit", unit);
         extractJsonString(object.c_str(), "param", paramText);
         extractJsonString(object.c_str(), "viewStyle", viewStyleText);
+        extractJsonString(object.c_str(), "icon", iconText);
         extractJsonInt(object.c_str(), "channel", channel);
         extractJsonInt(object.c_str(), "decimals", decimals);
         extractJsonInt(object.c_str(), "cluster", clusterValue);
@@ -497,6 +506,7 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
             unit = "";
             paramText = "";
             viewStyleText = "";
+            iconText = "";
             decimals = -1;
             channel = 1;
             clusterValue = 0;
@@ -515,14 +525,19 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         binding->param = (!isAutomation && paramText.length() > 0)
             ? duplicateBoundedString(paramText.c_str(), CONSOLE_PARAM_MAX - 1)
             : nullptr;
+        binding->icon = (!isAutomation && iconText.length() > 0)
+            ? duplicateBoundedString(iconText.c_str(), CONSOLE_ICON_MAX - 1)
+            : nullptr;
         if (binding->ieeeText == nullptr || binding->title == nullptr || binding->unit == nullptr
             || (isAutomation && binding->automationName == nullptr)
-            || (!isAutomation && paramText.length() > 0 && binding->param == nullptr)) {
+            || (!isAutomation && paramText.length() > 0 && binding->param == nullptr)
+            || (!isAutomation && iconText.length() > 0 && binding->icon == nullptr)) {
             free(binding->ieeeText);
             free(binding->automationName);
             free(binding->title);
             free(binding->unit);
             free(binding->param);
+            free(binding->icon);
             free(binding);
             freeBindingList(*outBindings);
             return false;
@@ -539,6 +554,7 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
                 free(binding->title);
                 free(binding->unit);
                 free(binding->param);
+                free(binding->icon);
                 free(binding);
                 freeBindingList(*outBindings);
                 return false;
@@ -548,6 +564,10 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
             } else {
                 freeGaugeRanges(binding->gaugeRanges);
                 binding->hasGauge = false;
+            }
+            if (binding->viewStyle != CONSOLE_VIEW_STYLE_ICON) {
+                free(binding->icon);
+                binding->icon = nullptr;
             }
         }
         binding->next = nullptr;
@@ -1039,6 +1059,13 @@ void ConsoleStore::appendConsoleFull(String &json, const ConsoleRecord *console)
                     if (binding->viewStyle == CONSOLE_VIEW_STYLE_GAUGE) {
                         json += ",\"viewStyle\":\"gauge\"";
                         appendGaugeJson(json, binding);
+                    } else if (binding->viewStyle == CONSOLE_VIEW_STYLE_ICON) {
+                        json += ",\"viewStyle\":\"icon\"";
+                        if (binding->icon != nullptr && binding->icon[0] != '\0') {
+                            json += ",\"icon\":\"";
+                            appendJsonEscaped(json, binding->icon, CONSOLE_ICON_MAX);
+                            json += "\"";
+                        }
                     }
                 }
                 json += "}";

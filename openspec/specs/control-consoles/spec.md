@@ -52,18 +52,18 @@ A device binding (not an automation binding) MUST allow selecting the displayed 
 - **THEN** the host still loads it and view mode behaves as before this change
 
 ### Requirement: Numeric binding view style and gauge
-For a device binding whose selected parameter is numeric (measurement class or custom numeric), the binding MUST support view style `default` (current text/control presentation) or `gauge`. Missing view style MUST behave as `default`. When view style is `gauge`, the binding MUST store gauge type `arc` (default) or `linear`, numeric min and max, and an ordered list of color ranges. Each range MUST have a top limit and a color; the bottom of the first range MUST be the gauge min; each later range’s bottom MUST be the previous range’s top. Non-numeric bindings (On/Off, covering, automation) MUST ignore gauge settings and keep their existing controls.
+For a device binding whose selected parameter is numeric, the binding MUST support view style `default` (current text/control presentation) or `gauge`. Numeric parameters MUST include: `sensorValue` for Measurement-class device types (at least temperature, pressure, humidity, illuminance, flow, metering, and electrical measurement), `battery`, `position`, `lightLevel`, and `custom` when the operator intends a numeric attribute. Missing view style MUST behave as `default`. When view style is `gauge`, the binding MUST store gauge type `arc` (default) or `linear`, numeric min and max, and an ordered list of color ranges. Each range MUST have a top limit and a color; the bottom of the first range MUST be the gauge min; each later range’s bottom MUST be the previous range’s top. Non-numeric bindings (On/Off status, covering move status, automation) MUST ignore gauge settings and keep their existing controls.
 
-#### Scenario: Gauge config persists
-- **WHEN** the editor saves a temperature binding with view style `gauge`, type `arc`, min 0, max 40, and one range top 25 with a color
+#### Scenario: Temperature sensor value allows gauge
+- **WHEN** an editor saves a temperature Measurement binding with param `sensorValue`, view style `gauge`, type `arc`, min 0, max 40, and one range top 25 with a color
 - **THEN** after reboot that binding still has those gauge fields
 
-#### Scenario: Default view style
+#### Scenario: Missing view style defaults to default
 - **WHEN** a numeric binding has no viewStyle field
-- **THEN** view mode shows the value in the default text style
+- **THEN** view mode uses the existing text or control presentation
 
 #### Scenario: On/Off ignores gauge
-- **WHEN** a binding targets an On/Off device
+- **WHEN** an On/Off binding has view style fields set in stored JSON
 - **THEN** view mode shows the On/Off switch even if gauge fields are present in stored JSON
 
 ### Requirement: Gauge appearance and scaling
@@ -76,6 +76,35 @@ In view mode, a gauge binding MUST render a Home Assistant–like arc or linear 
 #### Scenario: Linear fits horizontal slot
 - **WHEN** a horizontal viewport shows a linear gauge binding
 - **THEN** the bar scales to the slot width and stays within the widget
+
+### Requirement: Gauge value uses measurement engineering units
+When a Measurement-class binding is rendered as a gauge, the gauge needle and numeric scale MUST use the same engineering-unit value that the default measurement text display would use for that binding (including the binding’s selected unit when applicable). The gauge MUST NOT treat Measurement-class readings as non-numeric solely because the live state string includes units or formatting. The visible gauge value text MUST be the number only and MUST NOT append a measure unit suffix (for example °C, °F, K, hPa, %, lx).
+
+#### Scenario: Temperature gauge tracks Celsius reading
+- **WHEN** a temperature Measurement binding with view style `gauge` and unit Celsius shows live state that formats as a temperature reading
+- **THEN** the gauge position reflects that Celsius number within the configured min and max
+
+#### Scenario: Gauge readout omits units
+- **WHEN** a temperature Measurement gauge shows a live reading of 22.5 °C in default text style terms
+- **THEN** the gauge value text is `22.5` with no unit suffix
+
+### Requirement: Arc gauge value font size
+The arc gauge center value text MUST use a font size 15% smaller than the previous default of 16px (13.6px). Linear gauge value text size is unchanged by this requirement.
+
+#### Scenario: Arc value is smaller
+- **WHEN** a binding uses view style gauge with type arc
+- **THEN** the center value text uses the reduced arc font size
+
+### Requirement: Binary sensor icon view style
+For Binary Input / Binary Output / Binary Value (and BACnet binary) device bindings, the binding MUST support view style `default` or `icon` instead of gauge. When view style is `icon`, the binding MUST store an icon id from the Material Design Icons set used by Home Assistant (`mdi:…`). In view mode the console MUST render that icon (not an On/Off switch); ON/1 MUST use the active (yellow) icon color and OFF/0 MUST use a muted theme color.
+
+#### Scenario: Binary icon persists
+- **WHEN** an editor saves a binaryInput binding with view style `icon` and icon `mdi:pump`
+- **THEN** after reboot that binding still has those fields and view mode shows the pump icon
+
+#### Scenario: Binary does not use gauge
+- **WHEN** a binaryInput binding is edited
+- **THEN** View style offers Default and Icon and does not offer Gauge
 
 ### Requirement: Inactive consoles are hidden from users
 A console that is not active MUST NOT appear as a tab for simple users even if those users are assigned to it. Editors MUST still see inactive consoles in the Consoles table.
