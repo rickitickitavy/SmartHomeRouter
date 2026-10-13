@@ -530,6 +530,35 @@
             return Number(value).toFixed(places);
         }
 
+        function measurementNumericValue(typeId, stateText, unitId) {
+            var value = parseNumericState(stateText);
+            if (value === null) {
+                return NaN;
+            }
+            var unit = unitId || "";
+            if (typeId == "temperatureMeasurement") {
+                if (unit === "F") {
+                    return value * 9 / 5 + 32;
+                }
+                if (unit === "K") {
+                    return value + 273.15;
+                }
+            }
+            return value;
+        }
+
+        function measurementGaugeDisplay(typeId, stateText, unitId, decimals) {
+            var value = measurementNumericValue(typeId, stateText, unitId);
+            if (isNaN(value)) {
+                return "";
+            }
+            var places = decimals;
+            if (places === undefined || places === null || places < 0) {
+                places = defaultMeasurementDecimals(typeId);
+            }
+            return formatFixedValue(value, places);
+        }
+
         function formatMeasurementDisplay(typeId, stateText, unitId, decimals) {
             var value = parseNumericState(stateText);
             if (value === null) {
@@ -1031,18 +1060,24 @@
             } else if (binding.viewStyle === "gauge") {
                 row.classList.add("console-device-row--gauge");
                 var rawState = bindingResolvedState(device, binding);
-                var displayText = isMeasurementDeviceType(typeId) && param !== "battery"
-                    ? formatMeasurementDisplay(
+                var gaugeNumeric;
+                var gaugeDisplay;
+                if (isMeasurementDeviceType(typeId) && param !== "battery") {
+                    gaugeNumeric = measurementNumericValue(typeId, rawState, binding.unit);
+                    gaugeDisplay = measurementGaugeDisplay(
                         typeId,
                         rawState,
                         binding.unit,
                         bindingDecimals(binding, typeId)
-                    )
-                    : (rawState || "—");
+                    );
+                } else {
+                    gaugeNumeric = parseBindingNumericValue(rawState);
+                    gaugeDisplay = rawState || "";
+                }
                 controls.appendChild(buildConsoleGaugeElement(
                     binding,
-                    parseBindingNumericValue(rawState),
-                    displayText
+                    gaugeNumeric,
+                    gaugeDisplay
                 ));
             } else if (isMeasurementDeviceType(typeId) && param !== "battery") {
                 var valueLabel = document.createElement("span");

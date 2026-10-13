@@ -4192,6 +4192,35 @@
             return Number(value).toFixed(places);
         }
 
+        function placeMeasurementNumericValue(typeId, stateText, unitId) {
+            var value = placeParseNumericState(stateText);
+            if (value === null) {
+                return NaN;
+            }
+            var unit = unitId || "";
+            if (typeId == "temperatureMeasurement") {
+                if (unit === "F") {
+                    return value * 9 / 5 + 32;
+                }
+                if (unit === "K") {
+                    return value + 273.15;
+                }
+            }
+            return value;
+        }
+
+        function placeMeasurementGaugeDisplay(typeId, stateText, unitId, decimals) {
+            var value = placeMeasurementNumericValue(typeId, stateText, unitId);
+            if (isNaN(value)) {
+                return "";
+            }
+            var places = decimals;
+            if (places === undefined || places === null || places < 0) {
+                places = placeDefaultDecimals(typeId);
+            }
+            return placeFormatFixed(value, places);
+        }
+
         function placeFormatMeasurement(typeId, stateText, unitId, decimals) {
             var value = placeParseNumericState(stateText);
             if (value === null) {
@@ -4594,18 +4623,24 @@
             } else if (binding.viewStyle === "gauge") {
                 row.classList.add("console-device-row--gauge");
                 var rawState = placeBindingResolvedState(device, binding);
-                var displayText = isMeasurementDeviceType(typeId) && param !== "battery"
-                    ? placeFormatMeasurement(
+                var gaugeNumeric;
+                var gaugeDisplay;
+                if (isMeasurementDeviceType(typeId) && param !== "battery") {
+                    gaugeNumeric = placeMeasurementNumericValue(typeId, rawState, binding.unit);
+                    gaugeDisplay = placeMeasurementGaugeDisplay(
                         typeId,
                         rawState,
                         binding.unit,
                         placeBindingDecimals(binding, typeId)
-                    )
-                    : (rawState || "—");
+                    );
+                } else {
+                    gaugeNumeric = parseBindingNumericValue(rawState);
+                    gaugeDisplay = rawState || "";
+                }
                 controls.appendChild(buildConsoleGaugeElement(
                     binding,
-                    parseBindingNumericValue(rawState),
-                    displayText
+                    gaugeNumeric,
+                    gaugeDisplay
                 ));
             } else if (isMeasurementDeviceType(typeId) && param !== "battery") {
                 var valueLabel = document.createElement("span");
@@ -6028,14 +6063,8 @@
                 }
                 select.appendChild(option);
             }
-            if (!matched && selectedParam) {
-                var customOption = document.createElement("option");
-                customOption.value = selectedParam;
-                customOption.textContent = selectedParam;
-                customOption.selected = true;
-                select.appendChild(customOption);
-            }
-            if (!select.value) {
+            // Do not inject an unmatched previous param (e.g. orphan Status) as selected.
+            if (!matched || !select.value) {
                 select.value = params[0] ? params[0].id : "custom";
             }
             return select.value;
@@ -8036,8 +8065,13 @@
             if (!device || !paramValue) {
                 return false;
             }
-            if (paramValue === "status" || paramValue === "onOff") {
+            var typeId = device.type || "";
+            if (paramValue === "onOff") {
                 return false;
+            }
+            if (paramValue === "status") {
+                // Safety net: saved Measurement bindings may still carry orphan Status.
+                return isMeasurementDeviceType(typeId);
             }
             if (paramValue === "battery"
                 || paramValue === "custom"
@@ -8046,7 +8080,6 @@
                 || paramValue === "lightLevel") {
                 return true;
             }
-            var typeId = device.type || "";
             if (isMeasurementDeviceType(typeId)) {
                 return true;
             }
@@ -8176,7 +8209,7 @@
             fillAutomationChannelSelect(channelSelect, device, previousChannel);
             setHidden(channelField, channelSelect.hidden);
             setHidden(paramField, false);
-            fillAutomationParamSelect(paramSelect, device, previousParam || "status");
+            fillAutomationParamSelect(paramSelect, device, previousParam || "");
             refreshConsoleDeviceCustomAndGaugeFields();
             updateConsoleDeviceUnitField();
         }
@@ -8187,7 +8220,7 @@
             consoleDeviceDialogBindingIndex = bindingIndex;
             var binding = bindingIndex >= 0
                 ? consoleEditorDraft.widgets[widgetIndex].devices[bindingIndex]
-                : { ieee: "", channel: 1, title: "", unit: "", decimals: -1, param: "status", viewStyle: "default" };
+                : { ieee: "", channel: 1, title: "", unit: "", decimals: -1, param: "", viewStyle: "default" };
             document.getElementById("consoleDeviceDialogError").hidden = true;
             var targetSelect = document.getElementById("consoleBindingTarget");
             targetSelect.value = binding.automation ? "automation" : "device";
@@ -8270,7 +8303,7 @@
                     fillAutomationChannelSelect(channelSelect, device, binding.channel || 1);
                     setHidden(document.getElementById("consoleDeviceChannelField"), channelSelect.hidden);
                     setHidden(document.getElementById("consoleDeviceParamField"), false);
-                    fillAutomationParamSelect(paramSelect, device, binding.param || "status");
+                    fillAutomationParamSelect(paramSelect, device, binding.param || "");
                     refreshConsoleDeviceCustomAndGaugeFields();
                     updateConsoleDeviceUnitField();
                     var unitSelect = document.getElementById("consoleDeviceUnit");

@@ -1466,7 +1466,7 @@ html, body {
 
 .console-gauge-value-svg {
     fill: var(--text);
-    font-size: 16px;
+    font-size: 13.6px;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
 }
