@@ -378,6 +378,7 @@ void WebConsole::begin() {
         [this](AsyncWebServerRequest *request) { handleFirmwareUpdateStatusGet(request); }
     );
     server.on("/api/status", HTTP_GET, [this](AsyncWebServerRequest *request) { handleGatewayStatusGet(request); });
+    server.on("/api/reboot", HTTP_POST, [this](AsyncWebServerRequest *request) { handleRebootPost(request); });
 
     server.on(
         "/update",
@@ -1438,8 +1439,11 @@ void WebConsole::handleMqttPost(AsyncWebServerRequest *request) {
         request->send(400, "text/plain", errorText.length() > 0 ? errorText : "Need mqtt settings");
         return;
     }
-    settingsManager->saveMain(true);
-    request->send(200, "text/plain", "Saved. Device will restart to apply MQTT.");
+    settingsManager->saveMain(false);
+    if (reloadMqttRuntime != nullptr) {
+        reloadMqttRuntime();
+    }
+    request->send(200, "text/plain", "Saved. MQTT settings applied.");
 }
 
 void WebConsole::appendRequestBody(
@@ -1553,8 +1557,11 @@ void WebConsole::handleZigbeePost(AsyncWebServerRequest *request) {
     GlobalSettings *settings = settingsManager->getSettings();
     settings->zigbee.channel = (uint8_t)channel;
     settings->zigbee.permitJoinOnBootSec = (uint8_t)permitJoinOnBootSec;
-    settingsManager->saveMain(true);
-    request->send(200, "text/plain", "Saved. Device will restart to apply ZigBee.");
+    settingsManager->saveMain(false);
+    if (applyZigbeeRuntime != nullptr) {
+        applyZigbeeRuntime();
+    }
+    request->send(200, "text/plain", "Saved. ZigBee settings applied.");
 }
 
 void WebConsole::setDeviceOnlineHandler(WebConsole::DeviceOnlineFn handler) {
@@ -1583,6 +1590,14 @@ void WebConsole::setDevicesRestoredHandler(WebConsole::DevicesRestoredFn handler
 
 void WebConsole::setUsersRestoredHandler(WebConsole::UsersRestoredFn handler) {
     applyUsersRestored = handler;
+}
+
+void WebConsole::setMqttReloadHandler(WebConsole::VoidApplyFn handler) {
+    reloadMqttRuntime = handler;
+}
+
+void WebConsole::setZigbeeApplyHandler(WebConsole::VoidApplyFn handler) {
+    applyZigbeeRuntime = handler;
 }
 
 void WebConsole::setDevicesFileHandler(WebConsole::DevicesFileFn handler) {
@@ -2232,6 +2247,12 @@ void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
     if (extractJsonBool(body.c_str(), "fullControl", parsedFullControl)) {
         entry->fullControl = parsedFullControl ? 1 : 0;
     }
+    bool parsedDebug = false;
+    if (extractJsonBool(body.c_str(), "debug", parsedDebug)) {
+        entry->debug = parsedDebug ? 1 : 0;
+    } else if (!isEdit) {
+        entry->debug = 0;
+    }
     String typeText;
     const bool haveType = extractJsonString(body.c_str(), "type", typeText);
     if (transport == DeviceTransportMqtt) {
@@ -2536,6 +2557,14 @@ void WebConsole::handleSlaveResetPausePost(AsyncWebServerRequest *request) {
     AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
     response->addHeader("Cache-Control", "no-store");
     request->send(response);
+}
+
+void WebConsole::handleRebootPost(AsyncWebServerRequest *request) {
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    settingsManager->requestRestart();
+    request->send(200, "text/plain", "Reboot scheduled.");
 }
 
 void WebConsole::handleOtaUpload(

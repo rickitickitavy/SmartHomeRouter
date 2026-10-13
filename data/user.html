@@ -136,6 +136,21 @@
             applyThemeToDocument("dark");
             document.getElementById("userShell").hidden = true;
             document.getElementById("loginOverlay").hidden = false;
+            focusLoginDefaultField();
+        }
+
+        function focusLoginDefaultField() {
+            var userNameInput = document.getElementById("loginUserName");
+            var passwordInput = document.getElementById("loginPassword");
+            window.setTimeout(function () {
+                if (userNameInput && !String(userNameInput.value || "").trim()) {
+                    userNameInput.focus();
+                    return;
+                }
+                if (passwordInput) {
+                    passwordInput.focus();
+                }
+            }, 0);
         }
 
         function stopSessionWatch() {

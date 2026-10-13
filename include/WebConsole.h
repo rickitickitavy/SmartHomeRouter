@@ -23,6 +23,7 @@ public:
     using DeviceCommandFn = int (*)(const char *ieeeText, const char *payload, int channel);
     using DevicesRestoredFn = bool (*)(const uint8_t (*removedIeees)[8], int removedCount);
     using UsersRestoredFn = bool (*)(const char (*removedNames)[USER_NAME_MAX], int removedCount);
+    using VoidApplyFn = void (*)();
 
     explicit WebConsole(
         SettingsManager *settingsManager,
@@ -54,6 +55,8 @@ public:
     void setDeviceCommandHandler(DeviceCommandFn handler);
     void setDevicesRestoredHandler(DevicesRestoredFn handler);
     void setUsersRestoredHandler(UsersRestoredFn handler);
+    void setMqttReloadHandler(VoidApplyFn handler);
+    void setZigbeeApplyHandler(VoidApplyFn handler);
 
 private:
     SettingsManager *settingsManager;
@@ -74,6 +77,8 @@ private:
     DeviceCommandFn applyDeviceCommand = nullptr;
     DevicesRestoredFn applyDevicesRestored = nullptr;
     UsersRestoredFn applyUsersRestored = nullptr;
+    VoidApplyFn reloadMqttRuntime = nullptr;
+    VoidApplyFn applyZigbeeRuntime = nullptr;
     AsyncWebServer server;
     AsyncWebSocket devicesSocket;
     AsyncWebSocket consolesSocket;
@@ -181,6 +186,7 @@ private:
     void handleFirmwareUpdateStatusGet(AsyncWebServerRequest *request);
     void handleSlaveResetPauseGet(AsyncWebServerRequest *request);
     void handleSlaveResetPausePost(AsyncWebServerRequest *request);
+    void handleRebootPost(AsyncWebServerRequest *request);
     void appendSlaveResetPauseJson(String &json) const;
     void handleOtaUpload(
         AsyncWebServerRequest *request,

@@ -103,6 +103,7 @@ bool DeviceTopicMap::cloneEntry(DeviceTopicEntry *destination, const DeviceTopic
     }
     destination->channelCount = source->channelCount;
     destination->fullControl = source->fullControl;
+    destination->debug = source->debug;
     destination->zigbeeType = source->zigbeeType;
     destination->transport = source->transport;
     destination->used = source->used;
@@ -687,10 +688,12 @@ DeviceTopicEntry *DeviceTopicMap::upsert(
 ) {
     DeviceTopicEntry *entry = findByIeee(ieee);
     uint8_t preservedFullControl = 0;
+    uint8_t preservedDebug = 0;
     uint8_t preservedZigbeeType = ZigbeeDeviceTypeUnknown;
     uint8_t preservedTransport = DeviceTransportZigbee;
     if (entry != nullptr && entry->used) {
         preservedFullControl = entry->fullControl;
+        preservedDebug = entry->debug;
         preservedZigbeeType = entry->zigbeeType;
         preservedTransport = clampDeviceTransport(entry->transport);
     }
@@ -706,6 +709,7 @@ DeviceTopicEntry *DeviceTopicMap::upsert(
     assignEntryStrings(entry, friendlyName, stateTopic, commandTopic, availabilityTopic);
     entry->channelCount = normalizeChannelCount(channelCount);
     entry->fullControl = preservedFullControl;
+    entry->debug = preservedDebug;
     entry->zigbeeType = preservedZigbeeType;
     entry->transport = preservedTransport;
     return entry;
@@ -729,6 +733,7 @@ DeviceTopicEntry *DeviceTopicMap::upsertFromEntry(const DeviceTopicEntry *source
     if (!keepExistingFullControl || source->fullControl) {
         entry->fullControl = source->fullControl ? 1 : 0;
     }
+    entry->debug = source->debug ? 1 : 0;
     if (source->zigbeeType != ZigbeeDeviceTypeUnknown) {
         entry->zigbeeType = source->zigbeeType;
     }
@@ -779,6 +784,7 @@ void DeviceTopicMap::copyFullControlFrom(const DeviceTopicMap *source) {
         const DeviceTopicEntry *previous = source->findByIeee(entry->ieee);
         if (previous != nullptr) {
             entry->fullControl = previous->fullControl;
+            entry->debug = previous->debug;
         }
     }
 }
@@ -873,6 +879,10 @@ void DeviceTopicMap::replaceFromJson(const String &json) {
             if (entry != nullptr && extractJsonBool(object.c_str(), "fullControl", parsedFullControl)) {
                 entry->fullControl = parsedFullControl ? 1 : 0;
             }
+            bool parsedDebug = false;
+            if (entry != nullptr && extractJsonBool(object.c_str(), "debug", parsedDebug)) {
+                entry->debug = parsedDebug ? 1 : 0;
+            }
             const char *typeKey = strstr(object.c_str(), "\"type\":");
             if (entry != nullptr && typeKey != nullptr) {
                 String typeText;
@@ -949,7 +959,9 @@ size_t DeviceTopicMap::packSyncPayload(
         strncpy((char *)out + 97, deviceTopicCStr(entry->commandTopic), SPI_DEVICE_SYNC_TOPIC_LEN - 1);
         strncpy((char *)out + 161, deviceTopicCStr(entry->availabilityTopic), SPI_DEVICE_SYNC_TOPIC_LEN - 1);
         out[SPI_DEVICE_SYNC_ENTRY_LEN_NO_CHANNELS] = entry->channelCount;
-        out[SPI_DEVICE_SYNC_ENTRY_LEN_WITH_CHANNELS] = entry->fullControl ? 1 : 0;
+        // Bit0 = fullControl, bit1 = debug (legacy hosts ignore bit1).
+        out[SPI_DEVICE_SYNC_ENTRY_LEN_WITH_CHANNELS] =
+            (entry->fullControl ? 0x01 : 0x00) | (entry->debug ? 0x02 : 0x00);
         out[SPI_DEVICE_SYNC_ENTRY_LEN_WITH_FULL_CONTROL] = entry->zigbeeType;
     }
     return length;
@@ -986,7 +998,9 @@ bool DeviceTopicMap::unpackSyncPayload(
         entry->channelCount = DEVICE_CHANNEL_COUNT_DEFAULT;
     }
     if (length >= SPI_DEVICE_SYNC_ENTRY_LEN_WITH_FULL_CONTROL) {
-        entry->fullControl = in[SPI_DEVICE_SYNC_ENTRY_LEN_WITH_CHANNELS] != 0 ? 1 : 0;
+        const uint8_t flagsByte = in[SPI_DEVICE_SYNC_ENTRY_LEN_WITH_CHANNELS];
+        entry->fullControl = (flagsByte & 0x01) != 0 ? 1 : 0;
+        entry->debug = (flagsByte & 0x02) != 0 ? 1 : 0;
     }
     if (length >= SPI_DEVICE_SYNC_ENTRY_LEN) {
         entry->zigbeeType = in[SPI_DEVICE_SYNC_ENTRY_LEN_WITH_FULL_CONTROL];
@@ -1091,6 +1105,8 @@ static void appendDeviceListEntryJson(
     json += String(deviceEntry->channelCount);
     json += ",\"fullControl\":";
     json += deviceEntry->fullControl ? "true" : "false";
+    json += ",\"debug\":";
+    json += deviceEntry->debug ? "true" : "false";
     json += ",\"type\":\"";
     json += zigbeeDeviceTypeJsonId(deviceEntry->zigbeeType);
     json += "\",\"transport\":\"";

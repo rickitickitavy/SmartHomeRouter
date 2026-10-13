@@ -64,6 +64,28 @@ void MqttClient::begin(void (*rawCallback)(char *topic, byte *payload, unsigned 
     bornBootAnnounceDone = false;
 }
 
+void MqttClient::reloadFromSettings() {
+    GlobalSettings *settings = settingsManager->getSettings();
+    rebuildTopics();
+    applyRemoteBrokerTarget();
+    localAttached = false;
+    remoteSessionAttachPending = false;
+    reconnectBackoffMs = 0;
+    lastReconnectMs = 0;
+    bornBootAnnounceDone = false;
+    lastBornAnnounceMs = 0;
+    if (client != nullptr) {
+        client->setSocketTimeout(
+            settings->mqtt.clientTimeoutMs / 1000 > 0 ? settings->mqtt.clientTimeoutMs / 1000 : 1
+        );
+        if (client->connected()) {
+            client->disconnect();
+        }
+    }
+    STATUS_RGB.setMqttConnected(false);
+    LOGGER.info("MQTT client reloaded from settings");
+}
+
 void MqttClient::onMessage(char *topic, byte *payload, unsigned int length) {
     // PubSubClient can underflow the payload length on a truncated PUBLISH after a
     // TCP reset; walking that length into ROM (e.g. 0x40000000) panics the host.
@@ -358,7 +380,7 @@ void MqttClient::dispatch(bool staConnected) {
     reconnect();
 }
 
-bool MqttClient::publishMessage(const char *topic, const char *payload, bool retained) {
+bool MqttClient::publishMessage(const char *topic, const char *payload, bool retained, bool logInfo) {
     if (!isConnected() || topic == nullptr || topic[0] == '\0') {
         return false;
     }
@@ -367,7 +389,9 @@ bool MqttClient::publishMessage(const char *topic, const char *payload, bool ret
         ? localBroker->publishFromHost(topic, data, retained)
         : client->publish(topic, data, retained);
     if (sent) {
-        LOGGER.info(String("MQTT send topic=") + topic + " data=" + data);
+        if (logInfo) {
+            LOGGER.info(String("MQTT send topic=") + topic + " data=" + data);
+        }
     } else {
         LOGGER.warning(String("MQTT send failed topic=") + topic + " data=" + data);
         // Drop a half-closed remote socket so the next loop() does not parse junk.
@@ -407,7 +431,7 @@ void MqttClient::publishDeviceState(const DeviceTopicEntry *entry, const char *m
     }
     const String topic = DeviceTopicMap::statePublishTopic(entry, endpoint);
     const String payload = DeviceTopicMap::statePublishPayload(entry, endpoint, message);
-    if (publishMessage(topic.c_str(), payload.c_str(), true)) {
+    if (publishMessage(topic.c_str(), payload.c_str(), true, entry->debug != 0)) {
         STATUS_RGB.pulseMqttPublished();
     }
 }
@@ -417,7 +441,7 @@ bool MqttClient::publishDeviceCommand(const DeviceTopicEntry *entry, const char 
         return false;
     }
     if (entry->transport == DeviceTransportMqtt) {
-        const bool sent = publishMessage(entry->commandTopic, message, false);
+        const bool sent = publishMessage(entry->commandTopic, message, false, entry->debug != 0);
         if (sent) {
             STATUS_RGB.pulseMqttPublished();
         }
@@ -439,7 +463,7 @@ bool MqttClient::publishDeviceCommand(const DeviceTopicEntry *entry, const char 
         entry,
         DeviceTopicMap::usesTopicSuffix(entry->channelCount) ? publishEndpoint : 1
     );
-    const bool sent = publishMessage(topic.c_str(), publishBody.c_str(), false);
+    const bool sent = publishMessage(topic.c_str(), publishBody.c_str(), false, entry->debug != 0);
     if (sent) {
         STATUS_RGB.pulseMqttPublished();
     }

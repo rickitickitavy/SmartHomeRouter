@@ -36,7 +36,7 @@ private:
     static constexpr int kPulseLedCount = 4;
     static constexpr unsigned long kPulseMs = 100UL;
     static constexpr unsigned long kFaultBlinkHalfMs = 125UL;
-    static constexpr unsigned long kUpdateBlinkHalfMs = 50UL;
+    static constexpr unsigned long kUpdateBlinkHalfMs = 100UL;
     static constexpr uint8_t kLedOnLevel = HIGH;
     static constexpr uint8_t kLedOffLevel = LOW;
     static constexpr int kLed5Index = 4;
