@@ -1506,6 +1506,77 @@ html, body {
     display: none !important;
 }
 
+.console-icon-config {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin: 0.5rem 0;
+    padding: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.console-icon-config[hidden] {
+    display: none !important;
+}
+
+.console-icon-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(2.5rem, 1fr));
+    gap: 0.35rem;
+}
+
+.console-icon-pick {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+}
+
+.console-icon-pick .mdi {
+    font-size: 1.35rem;
+    line-height: 1;
+}
+
+.console-icon-pick.is-selected {
+    border-color: var(--accent);
+    color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.console-binary-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+}
+
+.console-binary-icon .mdi {
+    font-size: 2rem;
+    line-height: 1;
+}
+
+.console-binary-icon.is-on {
+    color: #E8C547;
+}
+
+html[data-theme="light"] .console-binary-icon.is-on {
+    color: #C9A227;
+}
+
+.console-binary-icon.is-off {
+    color: color-mix(in srgb, var(--muted) 70%, #000 30%);
+    opacity: 1;
+}
+
 .console-binding-general {
     display: flex;
     flex-direction: column;

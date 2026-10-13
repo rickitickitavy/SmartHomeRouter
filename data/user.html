@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Control consoles</title>
     <link rel="stylesheet" type="text/css" href="css/all.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css"/>
     <script>
         var signedInUser = null;
         var sessionWatchTimer = null;
@@ -472,6 +473,51 @@
                 || typeId == "relativeHumidity"
                 || typeId == "metering"
                 || typeId == "electricalMeasurement";
+        }
+
+        function isBinarySensorDeviceType(typeId) {
+            return typeId == "binaryInput"
+                || typeId == "binaryOutput"
+                || typeId == "binaryValue"
+                || typeId == "bacnetBinaryInputRegular"
+                || typeId == "bacnetBinaryInputExtended"
+                || typeId == "bacnetBinaryOutputRegular"
+                || typeId == "bacnetBinaryOutputExtended"
+                || typeId == "bacnetBinaryValueRegular"
+                || typeId == "bacnetBinaryValueExtended";
+        }
+
+        function normalizeMdiIconId(iconId) {
+            var text = String(iconId || "").trim().toLowerCase();
+            if (!text) {
+                return "mdi:checkbox-marked-circle";
+            }
+            if (text.indexOf("mdi:") !== 0) {
+                text = "mdi:" + text.replace(/^mdi-/, "");
+            }
+            return text;
+        }
+
+        function mdiIconClassName(iconId) {
+            return normalizeMdiIconId(iconId).replace(":", "-");
+        }
+
+        function isBinaryStateOn(stateText) {
+            var upper = String(stateText || "").trim().toUpperCase();
+            return upper === "ON" || upper === "1" || upper === "TRUE";
+        }
+
+        function buildConsoleIconElement(binding, stateText) {
+            var iconId = normalizeMdiIconId(binding && binding.icon);
+            var wrap = document.createElement("span");
+            wrap.className = "console-binary-icon"
+                + (isBinaryStateOn(stateText) ? " is-on" : " is-off");
+            wrap.title = stateText ? String(stateText) : iconId;
+            var icon = document.createElement("i");
+            icon.className = "mdi " + mdiIconClassName(iconId);
+            icon.setAttribute("aria-hidden", "true");
+            wrap.appendChild(icon);
+            return wrap;
         }
 
         function parseNumericState(stateText) {
@@ -1018,6 +1064,11 @@
                     };
                 })(device.ieee, channel, String(onState).toUpperCase() === "ON");
                 controls.appendChild(onOffSwitch);
+            } else if (isBinarySensorDeviceType(typeId) && binding.viewStyle === "icon") {
+                controls.appendChild(buildConsoleIconElement(
+                    binding,
+                    bindingResolvedState(device, binding)
+                ));
             } else if (showTypeControls && typeId === "windowCovering") {
                 var openButton = document.createElement("button");
                 openButton.type = "button";
