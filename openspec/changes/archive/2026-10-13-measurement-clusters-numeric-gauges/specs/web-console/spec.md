@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Console device dialog gauge config
-When the selected binding parameter is numeric (including Measurement-class `sensorValue`, battery, position, light level, or custom), the binding dialog MUST show a View style control with Default and Gauge. When Gauge is selected, the dialog MUST show a Gauge group: type Arc (default) or Linear, Min value, Max value, and a list of color ranges. Each list row shows top limit and color; the dialog MUST provide Top and color-picker fields below the list to append a range. Bottom of each range is derived (first from Min, later from previous top). View style Gauge MUST be hidden or ignored for On/Off status, covering move status, and automation bindings.
+When the selected binding parameter is numeric (including Measurement-class `sensorValue`, battery, position, light level, or custom) and the device is not a binary sensor type, the binding dialog MUST show a View style control with Default and Gauge. When Gauge is selected, the dialog MUST show a Gauge group: type Arc (default) or Linear, Min value, Max value, and a list of color ranges. Each list row shows top limit and color; the dialog MUST provide Top and color-picker fields below the list to append a range. Bottom of each range is derived (first from Min, later from previous top). View style Gauge MUST be hidden or ignored for On/Off status, covering move status, automation bindings, and binary sensor types.
 
 #### Scenario: Temperature offers Gauge
 - **WHEN** an editor opens a device binding for a temperature Measurement device and the param is Sensor value
@@ -12,6 +12,17 @@ When the selected binding parameter is numeric (including Measurement-class `sen
 - **THEN** View style Gauge is hidden
 
 ## ADDED Requirements
+
+### Requirement: Console device dialog binary icon View style
+When the selected device is a binary sensor type (Binary Input / Output / Value or BACnet binary), the binding dialog MUST show View style with Default and Icon (not Gauge). When Icon is selected, the dialog MUST show an icon picker of Material Design Icons (Home Assistant / Pictogrammers), including at least door, window, motion, water, pump, water-pump, heat-pump, and engine icons.
+
+#### Scenario: Binary offers Icon
+- **WHEN** an editor opens a binding for a binaryInput device
+- **THEN** View style shows Default and Icon and does not show Gauge
+
+#### Scenario: Pick pump icon
+- **WHEN** the editor selects View style Icon and chooses `mdi:pump`
+- **THEN** the saved binding stores `viewStyle` `icon` and `icon` `mdi:pump`
 
 ### Requirement: Measurement binding param defaults to Sensor value
 When adding or refreshing a console device binding for a Measurement-class device (temperature, pressure, humidity, illuminance, flow, metering, electrical measurement, and the same set the console already treats as measurement for display), the param picker MUST offer Sensor value as the primary reading and MUST NOT leave an unmatched Status option selected merely because the dialog defaulted to `status`. If the previous param is not in that device’s catalog, the dialog MUST select the first catalog parameter instead of injecting the unmatched value as selected.

@@ -34,3 +34,14 @@ The arc gauge center value text MUST use a font size 15% smaller than the previo
 #### Scenario: Arc value is smaller
 - **WHEN** a binding uses view style gauge with type arc
 - **THEN** the center value text uses the reduced arc font size
+
+### Requirement: Binary sensor icon view style
+For Binary Input / Binary Output / Binary Value (and BACnet binary) device bindings, the binding MUST support view style `default` or `icon` instead of gauge. When view style is `icon`, the binding MUST store an icon id from the Material Design Icons set used by Home Assistant (`mdi:…`). In view mode the console MUST render that icon (not an On/Off switch); ON/1 MUST use the active (yellow) icon color and OFF/0 MUST use a muted theme color.
+
+#### Scenario: Binary icon persists
+- **WHEN** an editor saves a binaryInput binding with view style `icon` and icon `mdi:pump`
+- **THEN** after reboot that binding still has those fields and view mode shows the pump icon
+
+#### Scenario: Binary does not use gauge
+- **WHEN** a binaryInput binding is edited
+- **THEN** View style offers Default and Icon and does not offer Gauge
