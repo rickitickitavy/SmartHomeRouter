@@ -19,3 +19,12 @@
 ## 4. Integration check
 
 - [x] 4.1 Smoke: defaults match old layout; icon On/Off/automation still toggle; showTitle false + titlePosition bottom + iconScale 1.25 survive page reload — verify: observed on Place and user pages
+
+## 5. Content align for all view styles
+
+- [x] 5.1 Persist `alignH` / `alignV` on device and automation bindings (legacy `iconAlign` → `alignH`); emit non-defaults in console JSON — verify: Default-view On/Off with left/top survives reload
+- [x] 5.2 Show Horizontal and Vertical align in the binding dialog for Default/Icon/Gauge; remove Icon-only Icon align; save/restore via dialog body — verify: Default On/Off dialog shows both fields and reopens saved values
+- [x] 5.3 Apply align classes on Place, user, and editor preview for all view styles; CSS for cell/slot alignment — verify: Default grid binding bottom-right differs from center
+- [x] 5.4 Bump `FIRMWARE_VERSION` build by 1 with this source change — verify: version string increased
+- [x] 5.5 When Show title is unchecked, Consoles edit preview still shows a muted registered device name (not Title, not IEEE) on the plate; load `/api/devices` when opening the editor so the name resolves — verify: Default On/Off with showTitle false shows e.g. “Light in birdbarn”, never the IEEE string
+- [x] 5.6 When Show title is checked, hide Horizontal align and keep classic row layout (title left/right, control on the same line); apply alignH only when title is hidden — verify: Default On/Off with title shows name and switch on one row

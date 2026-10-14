@@ -581,22 +581,32 @@
             return !(binding && binding.showTitle === false);
         }
 
+        function bindingContentAlignH(binding) {
+            if (binding && binding.alignH != null && binding.alignH !== "") {
+                return normalizeIconAlign(binding.alignH);
+            }
+            return normalizeIconAlign(binding && binding.iconAlign);
+        }
+
         function applyBindingTitleLayout(row, binding) {
             if (!row) {
                 return;
             }
-            if (!bindingShowsTitle(binding)) {
+            var showTitle = bindingShowsTitle(binding);
+            var alignH = bindingContentAlignH(binding);
+            var alignV = normalizeAlignV(binding && binding.alignV);
+            if (!showTitle) {
                 row.classList.add("console-device-row--no-title");
+                row.classList.add("console-device-row--align-h-" + alignH);
+                if (binding && binding.viewStyle === "icon") {
+                    row.classList.add("console-device-row--icon-align-" + alignH);
+                }
             } else {
                 row.classList.add(
                     "console-device-row--title-" + normalizeTitlePosition(binding && binding.titlePosition)
                 );
             }
-            if (binding && binding.viewStyle === "icon") {
-                row.classList.add(
-                    "console-device-row--icon-align-" + normalizeIconAlign(binding.iconAlign)
-                );
-            }
+            row.classList.add("console-device-row--align-v-" + alignV);
         }
 
         function appendBindingTitleElement(row, binding, fallbackText) {

@@ -165,6 +165,28 @@ The host MUST persist `iconScale`, `showTitle`, and `titlePosition` on bindings 
 - **WHEN** an editor saves an On/Off icon binding with `iconScale` `2`, `showTitle` false, and later an automation binding with `titlePosition` `top`
 - **THEN** after reboot those field values are unchanged
 
+### Requirement: Binding content horizontal and vertical align
+Every device and automation binding MUST support `alignH` (`left`, `center`, or `right`, default `center` when missing or invalid) and `alignV` (`top`, `center`, or `bottom`, default `center` when missing or invalid) for every view style including `default`. View mode MUST place the binding content in its viewport cell or slot according to those values when the title is hidden. When `showTitle` is true with title position left or right, view mode MUST keep the classic name-and-control single-row layout. When `alignH` is missing but legacy `iconAlign` is present, `alignH` MUST take that value. Spacer bindings keep their existing align fields and are unchanged by this requirement.
+
+#### Scenario: Default view honors horizontal align
+- **WHEN** an On/Off binding with view style `default` is saved with `showTitle` false and `alignH` `right`
+- **THEN** after reload view mode aligns that binding’s content to the right in its cell or slot
+
+#### Scenario: Default view honors vertical align
+- **WHEN** a device binding with view style `default` is saved with `alignV` `bottom` in a grid cell
+- **THEN** after reload view mode places that binding’s content toward the bottom of the cell
+
+#### Scenario: Legacy iconAlign maps to alignH
+- **WHEN** a stored icon binding has `iconAlign` `left` and no `alignH`
+- **THEN** after load view mode treats horizontal align as `left`
+
+### Requirement: Content align fields persist
+The host MUST persist `alignH` and `alignV` on device and automation bindings through save and reboot for every view style.
+
+#### Scenario: Align round-trip for default view
+- **WHEN** an editor saves a Default-view On/Off binding with `alignH` `left` and `alignV` `top`
+- **THEN** after reboot those field values are unchanged
+
 ### Requirement: Inactive consoles are hidden from users
 A console that is not active MUST NOT appear as a tab for simple users even if those users are assigned to it. Editors MUST still see inactive consoles in the Consoles table.
 

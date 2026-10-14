@@ -238,14 +238,24 @@ void ConsoleStore::appendBindingLayoutJson(String &json, const ConsoleBinding *b
         json += titlePositionJsonId(binding->titlePosition);
         json += "\"";
     }
+    if (binding->alignH != CONSOLE_ICON_ALIGN_CENTER) {
+        json += ",\"alignH\":\"";
+        json += iconAlignJsonId(binding->alignH);
+        json += "\"";
+    }
+    if (binding->alignV != CONSOLE_ALIGN_V_CENTER) {
+        json += ",\"alignV\":\"";
+        json += alignVJsonId(binding->alignV);
+        json += "\"";
+    }
     if (binding->viewStyle == CONSOLE_VIEW_STYLE_ICON) {
         if (binding->iconScale > 0.0f && binding->iconScale != 1.0f) {
             json += ",\"iconScale\":";
             json += String(binding->iconScale, 4);
         }
-        if (binding->iconAlign != CONSOLE_ICON_ALIGN_CENTER) {
+        if (binding->alignH != CONSOLE_ICON_ALIGN_CENTER) {
             json += ",\"iconAlign\":\"";
-            json += iconAlignJsonId(binding->iconAlign);
+            json += iconAlignJsonId(binding->alignH);
             json += "\"";
         }
     }
@@ -573,6 +583,8 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         String iconText;
         String titlePositionText;
         String iconAlignText;
+        String alignHText;
+        String alignVText;
         int channel = 1;
         int decimals = -1;
         int clusterValue = 0;
@@ -594,6 +606,8 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         extractJsonString(object.c_str(), "icon", iconText);
         extractJsonString(object.c_str(), "titlePosition", titlePositionText);
         extractJsonString(object.c_str(), "iconAlign", iconAlignText);
+        extractJsonString(object.c_str(), "alignH", alignHText);
+        extractJsonString(object.c_str(), "alignV", alignVText);
         extractJsonInt(object.c_str(), "channel", channel);
         extractJsonInt(object.c_str(), "decimals", decimals);
         extractJsonInt(object.c_str(), "cluster", clusterValue);
@@ -682,7 +696,13 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         binding->showTitle = showTitleValue;
         binding->titlePosition = parseTitlePositionId(titlePositionText.c_str());
         binding->iconScale = (float)iconScaleValue;
-        binding->iconAlign = parseIconAlignId(iconAlignText.c_str());
+        if (alignHText.length() > 0) {
+            binding->alignH = parseIconAlignId(alignHText.c_str());
+        } else {
+            binding->alignH = parseIconAlignId(iconAlignText.c_str());
+        }
+        binding->alignV = parseAlignVId(alignVText.c_str());
+        binding->iconAlign = binding->alignH;
         if (!isAutomation) {
             if (!parseGaugeConfig(object.c_str(), binding)) {
                 free(binding->ieeeText);
@@ -709,7 +729,6 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
             free(binding->icon);
             binding->icon = nullptr;
             binding->iconScale = 1.0f;
-            binding->iconAlign = CONSOLE_ICON_ALIGN_CENTER;
         }
         binding->next = nullptr;
         if (tail == nullptr) {

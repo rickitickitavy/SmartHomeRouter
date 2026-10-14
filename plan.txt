@@ -8,7 +8,3 @@
 8) historical chart
 9) buttons - icons
 
-1) top right cell in widget is empty (/home/dsporynkhin/Pictures/Screenshots/Screenshot\ from\ 2026-10-14\ 12-33-42.png) but if I click on it then in you can see Icon must to be /home/dsporynkhin/Pictures/Screenshots/Screenshot\ from\ 2026-10-14\
-    12-33-57.png
-2) I filled Text in empty cell (a- /home/dsporynkhin/Pictures/Screenshots/Screenshot\ from\ 2026-10-14\ 12-37-01.png, b-  /home/dsporynkhin/Pictures/Screenshots/Screenshot\ from\ 2026-10-14\ 12-37-18.png) but text has wrong vertical align in Console - /home/dsporynkhin/Pictures/Screenshots/Screenshot\ from\ 2026-10-14\ 12-37-42.png
-3) checkbox "show title" must be BEFORE input field "Title"
