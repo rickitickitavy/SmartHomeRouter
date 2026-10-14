@@ -507,12 +507,28 @@
             return upper === "ON" || upper === "1" || upper === "TRUE";
         }
 
-        function buildConsoleIconElement(binding, stateText) {
+        function buildConsoleIconElement(binding, stateText, options) {
+            var iconOptions = options || {};
             var iconId = normalizeMdiIconId(binding && binding.icon);
-            var wrap = document.createElement("span");
+            var interactive = !!iconOptions.interactive;
+            var wrap = document.createElement(interactive ? "button" : "span");
+            if (interactive) {
+                wrap.type = "button";
+            }
             wrap.className = "console-binary-icon"
-                + (isBinaryStateOn(stateText) ? " is-on" : " is-off");
+                + (interactive ? " console-binary-icon--control" : "")
+                + (isBinaryStateOn(stateText) ? " is-on" : " is-off")
+                + (iconOptions.disabled ? " is-disabled" : "");
             wrap.title = stateText ? String(stateText) : iconId;
+            if (iconOptions.ariaLabel) {
+                wrap.setAttribute("aria-label", iconOptions.ariaLabel);
+            }
+            if (iconOptions.disabled) {
+                wrap.disabled = true;
+            }
+            if (typeof iconOptions.onclick === "function") {
+                wrap.onclick = iconOptions.onclick;
+            }
             var icon = document.createElement("i");
             icon.className = "mdi " + mdiIconClassName(iconId);
             icon.setAttribute("aria-hidden", "true");
@@ -1014,26 +1030,40 @@
                 var automationName = binding.automation;
                 var known = Object.prototype.hasOwnProperty.call(automationStatusByName, automationName);
                 var automationOn = known && !!automationStatusByName[automationName];
-                var automationSwitch = document.createElement("button");
-                automationSwitch.type = "button";
-                automationSwitch.className = "console-switch"
-                    + (automationOn ? " is-on" : "")
-                    + (known ? "" : " is-disabled");
-                automationSwitch.setAttribute("aria-label", "Automation on off");
-                if (!known) {
-                    automationSwitch.disabled = true;
+                var automationToggle = (function (name, currentlyOn) {
+                    return function () {
+                        setAutomationActive(name, !currentlyOn).then(function () {
+                            refreshConsoleControls();
+                        }).catch(function () {
+                            refreshConsoleControls();
+                        });
+                    };
+                })(automationName, automationOn);
+                if (binding.viewStyle === "icon") {
+                    controls.appendChild(buildConsoleIconElement(
+                        binding,
+                        automationOn ? "ON" : "OFF",
+                        {
+                            interactive: true,
+                            disabled: !known,
+                            ariaLabel: "Automation on off",
+                            onclick: known ? automationToggle : null
+                        }
+                    ));
                 } else {
-                    automationSwitch.onclick = (function (name, currentlyOn) {
-                        return function () {
-                            setAutomationActive(name, !currentlyOn).then(function () {
-                                refreshConsoleControls();
-                            }).catch(function () {
-                                refreshConsoleControls();
-                            });
-                        };
-                    })(automationName, automationOn);
+                    var automationSwitch = document.createElement("button");
+                    automationSwitch.type = "button";
+                    automationSwitch.className = "console-switch"
+                        + (automationOn ? " is-on" : "")
+                        + (known ? "" : " is-disabled");
+                    automationSwitch.setAttribute("aria-label", "Automation on off");
+                    if (!known) {
+                        automationSwitch.disabled = true;
+                    } else {
+                        automationSwitch.onclick = automationToggle;
+                    }
+                    controls.appendChild(automationSwitch);
                 }
-                controls.appendChild(automationSwitch);
                 row.appendChild(controls);
                 return row;
             }
@@ -1053,17 +1083,31 @@
                 || param === ""
                 || (typeId === "windowCovering" && param === "position");
             if (showTypeControls && typeId === "onOff") {
-                var onOffSwitch = document.createElement("button");
-                onOffSwitch.type = "button";
                 var onState = onOffStateForBinding(device, binding);
-                onOffSwitch.className = "console-switch" + (String(onState).toUpperCase() === "ON" ? " is-on" : "");
-                onOffSwitch.onclick = (function (ieee, ch, currentOn) {
+                var onOffIsOn = String(onState).toUpperCase() === "ON";
+                var onOffToggle = (function (ieee, ch, currentOn) {
                     return function () {
                         sendDeviceCommand(ieee, currentOn ? "OFF" : "ON", ch);
                         window.setTimeout(refreshConsoleControls, 300);
                     };
-                })(device.ieee, channel, String(onState).toUpperCase() === "ON");
-                controls.appendChild(onOffSwitch);
+                })(device.ieee, channel, onOffIsOn);
+                if (binding.viewStyle === "icon") {
+                    controls.appendChild(buildConsoleIconElement(
+                        binding,
+                        onOffIsOn ? "ON" : "OFF",
+                        {
+                            interactive: true,
+                            ariaLabel: "Device on off",
+                            onclick: onOffToggle
+                        }
+                    ));
+                } else {
+                    var onOffSwitch = document.createElement("button");
+                    onOffSwitch.type = "button";
+                    onOffSwitch.className = "console-switch" + (onOffIsOn ? " is-on" : "");
+                    onOffSwitch.onclick = onOffToggle;
+                    controls.appendChild(onOffSwitch);
+                }
             } else if (isBinarySensorDeviceType(typeId) && binding.viewStyle === "icon") {
                 controls.appendChild(buildConsoleIconElement(
                     binding,

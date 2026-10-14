@@ -2777,12 +2777,28 @@
             return upper === "ON" || upper === "1" || upper === "TRUE";
         }
 
-        function buildConsoleIconElement(binding, stateText) {
+        function buildConsoleIconElement(binding, stateText, options) {
+            var iconOptions = options || {};
             var iconId = normalizeMdiIconId(binding && binding.icon);
-            var wrap = document.createElement("span");
+            var interactive = !!iconOptions.interactive;
+            var wrap = document.createElement(interactive ? "button" : "span");
+            if (interactive) {
+                wrap.type = "button";
+            }
             wrap.className = "console-binary-icon"
-                + (isBinaryStateOn(stateText) ? " is-on" : " is-off");
+                + (interactive ? " console-binary-icon--control" : "")
+                + (isBinaryStateOn(stateText) ? " is-on" : " is-off")
+                + (iconOptions.disabled ? " is-disabled" : "");
             wrap.title = stateText ? String(stateText) : iconId;
+            if (iconOptions.ariaLabel) {
+                wrap.setAttribute("aria-label", iconOptions.ariaLabel);
+            }
+            if (iconOptions.disabled) {
+                wrap.disabled = true;
+            }
+            if (typeof iconOptions.onclick === "function") {
+                wrap.onclick = iconOptions.onclick;
+            }
             var icon = document.createElement("i");
             icon.className = "mdi " + mdiIconClassName(iconId);
             icon.setAttribute("aria-hidden", "true");
@@ -4640,25 +4656,43 @@
             if (binding && binding.automation) {
                 var automationName = binding.automation;
                 var automationOn = !!placeAutomationStatusByName[automationName];
-                var automationSwitch = document.createElement("button");
-                automationSwitch.type = "button";
-                automationSwitch.className = "console-switch" + (automationOn ? " is-on" : "");
-                automationSwitch.setAttribute("aria-label", "Automation on off");
-                if (!Object.prototype.hasOwnProperty.call(placeAutomationStatusByName, automationName)) {
-                    automationSwitch.disabled = true;
-                    automationSwitch.className += " is-disabled";
+                var automationKnown = Object.prototype.hasOwnProperty.call(
+                    placeAutomationStatusByName,
+                    automationName
+                );
+                var automationToggle = (function (name, currentlyOn) {
+                    return function () {
+                        setPlaceAutomationActive(name, !currentlyOn).then(function () {
+                            refreshPlaceConsolesIfActive();
+                        }).catch(function () {
+                            refreshPlaceConsolesIfActive();
+                        });
+                    };
+                })(automationName, automationOn);
+                if (binding.viewStyle === "icon") {
+                    controls.appendChild(buildConsoleIconElement(
+                        binding,
+                        automationOn ? "ON" : "OFF",
+                        {
+                            interactive: true,
+                            disabled: !automationKnown,
+                            ariaLabel: "Automation on off",
+                            onclick: automationKnown ? automationToggle : null
+                        }
+                    ));
                 } else {
-                    automationSwitch.onclick = (function (name, currentlyOn) {
-                        return function () {
-                            setPlaceAutomationActive(name, !currentlyOn).then(function () {
-                                refreshPlaceConsolesIfActive();
-                            }).catch(function () {
-                                refreshPlaceConsolesIfActive();
-                            });
-                        };
-                    })(automationName, automationOn);
+                    var automationSwitch = document.createElement("button");
+                    automationSwitch.type = "button";
+                    automationSwitch.className = "console-switch" + (automationOn ? " is-on" : "");
+                    automationSwitch.setAttribute("aria-label", "Automation on off");
+                    if (!automationKnown) {
+                        automationSwitch.disabled = true;
+                        automationSwitch.className += " is-disabled";
+                    } else {
+                        automationSwitch.onclick = automationToggle;
+                    }
+                    controls.appendChild(automationSwitch);
                 }
-                controls.appendChild(automationSwitch);
                 row.appendChild(controls);
                 return row;
             }
@@ -4678,17 +4712,31 @@
                 || param === ""
                 || (typeId === "windowCovering" && param === "position");
             if (showTypeControls && typeId === "onOff") {
-                var onOffSwitch = document.createElement("button");
-                onOffSwitch.type = "button";
                 var onState = placeOnOffState(device, binding);
-                onOffSwitch.className = "console-switch" + (String(onState).toUpperCase() === "ON" ? " is-on" : "");
-                onOffSwitch.onclick = (function (ieee, ch, currentOn) {
+                var onOffIsOn = String(onState).toUpperCase() === "ON";
+                var onOffToggle = (function (ieee, ch, currentOn) {
                     return function () {
                         placeSendCommand(ieee, currentOn ? "OFF" : "ON", ch);
                         window.setTimeout(refreshPlaceConsolesIfActive, 300);
                     };
-                })(device.ieee, channel, String(onState).toUpperCase() === "ON");
-                controls.appendChild(onOffSwitch);
+                })(device.ieee, channel, onOffIsOn);
+                if (binding.viewStyle === "icon") {
+                    controls.appendChild(buildConsoleIconElement(
+                        binding,
+                        onOffIsOn ? "ON" : "OFF",
+                        {
+                            interactive: true,
+                            ariaLabel: "Device on off",
+                            onclick: onOffToggle
+                        }
+                    ));
+                } else {
+                    var onOffSwitch = document.createElement("button");
+                    onOffSwitch.type = "button";
+                    onOffSwitch.className = "console-switch" + (onOffIsOn ? " is-on" : "");
+                    onOffSwitch.onclick = onOffToggle;
+                    controls.appendChild(onOffSwitch);
+                }
             } else if (isBinarySensorDeviceType(typeId) && binding.viewStyle === "icon") {
                 controls.appendChild(buildConsoleIconElement(
                     binding,
@@ -7884,16 +7932,45 @@
             } else if (binding && binding.automation) {
                 var previewControls = document.createElement("div");
                 previewControls.className = "console-device-row-controls";
-                var previewSwitch = document.createElement("button");
-                previewSwitch.type = "button";
-                previewSwitch.disabled = true;
                 var previewOn = !!placeAutomationStatusByName[binding.automation];
-                previewSwitch.className = "console-switch"
-                    + (previewOn ? " is-on" : "")
-                    + " is-disabled";
-                previewSwitch.setAttribute("aria-label", "Automation on off");
-                previewControls.appendChild(previewSwitch);
+                if (binding.viewStyle === "icon") {
+                    previewControls.appendChild(buildConsoleIconElement(
+                        binding,
+                        previewOn ? "ON" : "OFF",
+                        {
+                            interactive: true,
+                            disabled: true,
+                            ariaLabel: "Automation on off"
+                        }
+                    ));
+                } else {
+                    var previewSwitch = document.createElement("button");
+                    previewSwitch.type = "button";
+                    previewSwitch.disabled = true;
+                    previewSwitch.className = "console-switch"
+                        + (previewOn ? " is-on" : "")
+                        + " is-disabled";
+                    previewSwitch.setAttribute("aria-label", "Automation on off");
+                    previewControls.appendChild(previewSwitch);
+                }
                 row.appendChild(previewControls);
+            } else if (binding && binding.viewStyle === "icon" && binding.ieee) {
+                var previewDevice = findRegisteredDevice(binding.ieee);
+                if (previewDevice && (previewDevice.type || "") === "onOff") {
+                    var onOffPreviewControls = document.createElement("div");
+                    onOffPreviewControls.className = "console-device-row-controls";
+                    var previewOnState = placeOnOffState(previewDevice, binding);
+                    onOffPreviewControls.appendChild(buildConsoleIconElement(
+                        binding,
+                        String(previewOnState).toUpperCase() === "ON" ? "ON" : "OFF",
+                        {
+                            interactive: true,
+                            disabled: true,
+                            ariaLabel: "Device on off"
+                        }
+                    ));
+                    row.appendChild(onOffPreviewControls);
+                }
             }
             return row;
         }
@@ -8136,9 +8213,7 @@
                 setHidden(document.getElementById("consoleDeviceAttrField"), true);
                 setHidden(document.getElementById("consoleDeviceUnitField"), true);
                 setHidden(document.getElementById("consoleDeviceDecimalsField"), true);
-                setHidden(document.getElementById("consoleDeviceViewStyleField"), true);
-                setHidden(document.getElementById("consoleDeviceGaugeGroup"), true);
-                setHidden(document.getElementById("consoleDeviceIconGroup"), true);
+                refreshConsoleDeviceGaugeFields();
             } else {
                 refreshConsoleDeviceParamFields();
             }
@@ -8323,12 +8398,17 @@
         }
 
         function refreshConsoleDeviceGaugeFields() {
+            var target = document.getElementById("consoleBindingTarget");
+            var isAutomation = !!(target && target.value === "automation");
             var device = consoleDialogSelectedDevice();
             var paramSelect = document.getElementById("consoleDeviceParam");
             var paramValue = paramSelect ? paramSelect.value : "";
             var isBinary = !!(device && isBinarySensorDeviceType(device.type || ""));
-            var allowsGauge = !isBinary && consoleBindingAllowsGauge(device, paramValue);
-            var allowsIconStyle = isBinary;
+            var onOffSwitchEligible = !!(device
+                && (device.type || "") === "onOff"
+                && (paramValue === "status" || paramValue === ""));
+            var allowsGauge = !isAutomation && !isBinary && consoleBindingAllowsGauge(device, paramValue);
+            var allowsIconStyle = isAutomation || isBinary || onOffSwitchEligible;
             var viewStyleField = document.getElementById("consoleDeviceViewStyleField");
             var viewStyleSelect = document.getElementById("consoleDeviceViewStyle");
             var gaugeGroup = document.getElementById("consoleDeviceGaugeGroup");
@@ -8610,13 +8690,21 @@
         function readConsoleDeviceDialogBody() {
             var target = document.getElementById("consoleBindingTarget");
             var title = document.getElementById("consoleDeviceTitle").value;
+            var viewStyleSelect = document.getElementById("consoleDeviceViewStyle");
             if (target && target.value === "automation") {
                 var automationSelect = document.getElementById("consoleAutomationSelect");
                 var automationName = automationSelect ? automationSelect.value : "";
-                return {
+                var automationBody = {
                     automation: automationName,
                     title: title || automationName
                 };
+                if (viewStyleSelect && viewStyleSelect.value === "icon") {
+                    automationBody.viewStyle = "icon";
+                    automationBody.icon = normalizeMdiIconId(consoleDeviceIconDraft);
+                } else {
+                    automationBody.viewStyle = "default";
+                }
+                return automationBody;
             }
             var deviceSelect = document.getElementById("consoleDeviceSelect");
             var channelSelect = document.getElementById("consoleDeviceChannel");
@@ -8624,7 +8712,6 @@
             var unitSelect = document.getElementById("consoleDeviceUnit");
             var decimalsSelect = document.getElementById("consoleDeviceDecimals");
             var decimalsField = document.getElementById("consoleDeviceDecimalsField");
-            var viewStyleSelect = document.getElementById("consoleDeviceViewStyle");
             var decimals = -1;
             if (decimalsSelect && decimalsField && !decimalsField.hidden) {
                 decimals = parseInt(decimalsSelect.value, 10);
@@ -8654,7 +8741,11 @@
             }
             var device = consoleDialogSelectedDevice();
             var isBinary = !!(device && isBinarySensorDeviceType(device.type || ""));
-            if (isBinary
+            var onOffSwitchEligible = !!(device
+                && (device.type || "") === "onOff"
+                && (body.param === "status" || body.param === ""));
+            var allowsIconStyle = isBinary || onOffSwitchEligible;
+            if (allowsIconStyle
                 && viewStyleSelect
                 && viewStyleSelect.value === "icon") {
                 body.viewStyle = "icon";

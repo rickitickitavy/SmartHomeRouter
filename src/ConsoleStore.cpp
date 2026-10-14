@@ -505,8 +505,6 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
             ieeeText = "";
             unit = "";
             paramText = "";
-            viewStyleText = "";
-            iconText = "";
             decimals = -1;
             channel = 1;
             clusterValue = 0;
@@ -525,13 +523,13 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         binding->param = (!isAutomation && paramText.length() > 0)
             ? duplicateBoundedString(paramText.c_str(), CONSOLE_PARAM_MAX - 1)
             : nullptr;
-        binding->icon = (!isAutomation && iconText.length() > 0)
+        binding->icon = (iconText.length() > 0)
             ? duplicateBoundedString(iconText.c_str(), CONSOLE_ICON_MAX - 1)
             : nullptr;
         if (binding->ieeeText == nullptr || binding->title == nullptr || binding->unit == nullptr
             || (isAutomation && binding->automationName == nullptr)
             || (!isAutomation && paramText.length() > 0 && binding->param == nullptr)
-            || (!isAutomation && iconText.length() > 0 && binding->icon == nullptr)) {
+            || (iconText.length() > 0 && binding->icon == nullptr)) {
             free(binding->ieeeText);
             free(binding->automationName);
             free(binding->title);
@@ -546,7 +544,10 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         binding->decimals = (int8_t)decimals;
         binding->cluster = isAutomation ? 0 : (uint16_t)clusterValue;
         binding->attrId = isAutomation ? -1 : (int32_t)attrValue;
-        binding->viewStyle = isAutomation ? CONSOLE_VIEW_STYLE_DEFAULT : parseViewStyleId(viewStyleText.c_str());
+        binding->viewStyle = parseViewStyleId(viewStyleText.c_str());
+        if (isAutomation && binding->viewStyle == CONSOLE_VIEW_STYLE_GAUGE) {
+            binding->viewStyle = CONSOLE_VIEW_STYLE_DEFAULT;
+        }
         if (!isAutomation) {
             if (!parseGaugeConfig(object.c_str(), binding)) {
                 free(binding->ieeeText);
@@ -565,10 +566,13 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
                 freeGaugeRanges(binding->gaugeRanges);
                 binding->hasGauge = false;
             }
-            if (binding->viewStyle != CONSOLE_VIEW_STYLE_ICON) {
-                free(binding->icon);
-                binding->icon = nullptr;
-            }
+        } else {
+            freeGaugeRanges(binding->gaugeRanges);
+            binding->hasGauge = false;
+        }
+        if (binding->viewStyle != CONSOLE_VIEW_STYLE_ICON) {
+            free(binding->icon);
+            binding->icon = nullptr;
         }
         binding->next = nullptr;
         if (tail == nullptr) {
@@ -1032,6 +1036,14 @@ void ConsoleStore::appendConsoleFull(String &json, const ConsoleRecord *console)
                     json += "\",\"title\":\"";
                     appendJsonEscaped(json, binding->title != nullptr ? binding->title : "", CONSOLE_BINDING_TITLE_MAX);
                     json += "\"";
+                    if (binding->viewStyle == CONSOLE_VIEW_STYLE_ICON) {
+                        json += ",\"viewStyle\":\"icon\"";
+                        if (binding->icon != nullptr && binding->icon[0] != '\0') {
+                            json += ",\"icon\":\"";
+                            appendJsonEscaped(json, binding->icon, CONSOLE_ICON_MAX);
+                            json += "\"";
+                        }
+                    }
                 } else {
                     json += "\"ieee\":\"";
                     appendJsonEscaped(json, binding->ieeeText != nullptr ? binding->ieeeText : "", IEEE_TEXT_MAX);
