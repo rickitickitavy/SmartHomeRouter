@@ -160,6 +160,107 @@ const char *ConsoleStore::viewStyleJsonId(uint8_t viewStyle) {
     return "default";
 }
 
+uint8_t ConsoleStore::parseTitlePositionId(const char *text) {
+    if (text != nullptr && strcmp(text, "right") == 0) {
+        return CONSOLE_TITLE_POS_RIGHT;
+    }
+    if (text != nullptr && strcmp(text, "top") == 0) {
+        return CONSOLE_TITLE_POS_TOP;
+    }
+    if (text != nullptr && strcmp(text, "bottom") == 0) {
+        return CONSOLE_TITLE_POS_BOTTOM;
+    }
+    return CONSOLE_TITLE_POS_LEFT;
+}
+
+const char *ConsoleStore::titlePositionJsonId(uint8_t titlePosition) {
+    if (titlePosition == CONSOLE_TITLE_POS_RIGHT) {
+        return "right";
+    }
+    if (titlePosition == CONSOLE_TITLE_POS_TOP) {
+        return "top";
+    }
+    if (titlePosition == CONSOLE_TITLE_POS_BOTTOM) {
+        return "bottom";
+    }
+    return "left";
+}
+
+uint8_t ConsoleStore::parseIconAlignId(const char *text) {
+    if (text != nullptr && strcmp(text, "left") == 0) {
+        return CONSOLE_ICON_ALIGN_LEFT;
+    }
+    if (text != nullptr && strcmp(text, "right") == 0) {
+        return CONSOLE_ICON_ALIGN_RIGHT;
+    }
+    return CONSOLE_ICON_ALIGN_CENTER;
+}
+
+const char *ConsoleStore::iconAlignJsonId(uint8_t iconAlign) {
+    if (iconAlign == CONSOLE_ICON_ALIGN_LEFT) {
+        return "left";
+    }
+    if (iconAlign == CONSOLE_ICON_ALIGN_RIGHT) {
+        return "right";
+    }
+    return "center";
+}
+
+uint8_t ConsoleStore::parseAlignVId(const char *text) {
+    if (text != nullptr && strcmp(text, "top") == 0) {
+        return CONSOLE_ALIGN_V_TOP;
+    }
+    if (text != nullptr && strcmp(text, "bottom") == 0) {
+        return CONSOLE_ALIGN_V_BOTTOM;
+    }
+    return CONSOLE_ALIGN_V_CENTER;
+}
+
+const char *ConsoleStore::alignVJsonId(uint8_t alignV) {
+    if (alignV == CONSOLE_ALIGN_V_TOP) {
+        return "top";
+    }
+    if (alignV == CONSOLE_ALIGN_V_BOTTOM) {
+        return "bottom";
+    }
+    return "center";
+}
+
+void ConsoleStore::appendBindingLayoutJson(String &json, const ConsoleBinding *binding) {
+    if (binding == nullptr) {
+        return;
+    }
+    if (!binding->showTitle) {
+        json += ",\"showTitle\":false";
+    }
+    if (binding->titlePosition != CONSOLE_TITLE_POS_LEFT) {
+        json += ",\"titlePosition\":\"";
+        json += titlePositionJsonId(binding->titlePosition);
+        json += "\"";
+    }
+    if (binding->alignH != CONSOLE_ICON_ALIGN_CENTER) {
+        json += ",\"alignH\":\"";
+        json += iconAlignJsonId(binding->alignH);
+        json += "\"";
+    }
+    if (binding->alignV != CONSOLE_ALIGN_V_CENTER) {
+        json += ",\"alignV\":\"";
+        json += alignVJsonId(binding->alignV);
+        json += "\"";
+    }
+    if (binding->viewStyle == CONSOLE_VIEW_STYLE_ICON) {
+        if (binding->iconScale > 0.0f && binding->iconScale != 1.0f) {
+            json += ",\"iconScale\":";
+            json += String(binding->iconScale, 4);
+        }
+        if (binding->alignH != CONSOLE_ICON_ALIGN_CENTER) {
+            json += ",\"iconAlign\":\"";
+            json += iconAlignJsonId(binding->alignH);
+            json += "\"";
+        }
+    }
+}
+
 uint8_t ConsoleStore::parseGaugeTypeId(const char *text) {
     if (text != nullptr && strcmp(text, "linear") == 0) {
         return CONSOLE_GAUGE_TYPE_LINEAR;
@@ -419,16 +520,42 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         memset(binding, 0, sizeof(*binding));
         binding->attrId = -1;
         binding->viewStyle = CONSOLE_VIEW_STYLE_DEFAULT;
+        binding->iconScale = 1.0f;
+        binding->iconAlign = CONSOLE_ICON_ALIGN_CENTER;
+        binding->fontScale = 1.0f;
+        binding->alignH = CONSOLE_ICON_ALIGN_CENTER;
+        binding->alignV = CONSOLE_ALIGN_V_CENTER;
+        binding->showTitle = true;
+        binding->titlePosition = CONSOLE_TITLE_POS_LEFT;
         bool isSpacer = false;
         extractJsonBool(object.c_str(), "spacer", isSpacer);
         if (isSpacer) {
             binding->isSpacer = true;
+            String spacerText;
+            String alignHText;
+            String alignVText;
+            double fontScaleValue = 1.0;
+            extractJsonString(object.c_str(), "text", spacerText);
+            extractJsonString(object.c_str(), "alignH", alignHText);
+            extractJsonString(object.c_str(), "alignV", alignVText);
+            if (!extractJsonDouble(object.c_str(), "fontScale", fontScaleValue)
+                || fontScaleValue <= 0.0
+                || fontScaleValue != fontScaleValue) {
+                fontScaleValue = 1.0;
+            }
             binding->ieeeText = duplicateBoundedString("", IEEE_TEXT_MAX - 1);
-            binding->title = duplicateBoundedString("", CONSOLE_BINDING_TITLE_MAX - 1);
+            binding->title = duplicateBoundedString(spacerText.c_str(), CONSOLE_BINDING_TITLE_MAX - 1);
             binding->unit = duplicateBoundedString("", CONSOLE_UNIT_MAX - 1);
             binding->channel = 1;
             binding->decimals = -1;
             binding->attrId = -1;
+            binding->iconScale = 1.0f;
+            binding->iconAlign = CONSOLE_ICON_ALIGN_CENTER;
+            binding->fontScale = (float)fontScaleValue;
+            binding->alignH = parseIconAlignId(alignHText.c_str());
+            binding->alignV = parseAlignVId(alignVText.c_str());
+            binding->showTitle = true;
+            binding->titlePosition = CONSOLE_TITLE_POS_LEFT;
             if (binding->ieeeText == nullptr || binding->title == nullptr || binding->unit == nullptr) {
                 free(binding->ieeeText);
                 free(binding->title);
@@ -454,10 +581,16 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         String paramText;
         String viewStyleText;
         String iconText;
+        String titlePositionText;
+        String iconAlignText;
+        String alignHText;
+        String alignVText;
         int channel = 1;
         int decimals = -1;
         int clusterValue = 0;
         int attrValue = -1;
+        double iconScaleValue = 1.0;
+        bool showTitleValue = true;
         extractJsonString(object.c_str(), "automation", automationName);
         if (automationName.length() == 0) {
             extractJsonString(object.c_str(), "automationName", automationName);
@@ -471,11 +604,23 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         extractJsonString(object.c_str(), "param", paramText);
         extractJsonString(object.c_str(), "viewStyle", viewStyleText);
         extractJsonString(object.c_str(), "icon", iconText);
+        extractJsonString(object.c_str(), "titlePosition", titlePositionText);
+        extractJsonString(object.c_str(), "iconAlign", iconAlignText);
+        extractJsonString(object.c_str(), "alignH", alignHText);
+        extractJsonString(object.c_str(), "alignV", alignVText);
         extractJsonInt(object.c_str(), "channel", channel);
         extractJsonInt(object.c_str(), "decimals", decimals);
         extractJsonInt(object.c_str(), "cluster", clusterValue);
         if (!extractJsonInt(object.c_str(), "attrId", attrValue)) {
             attrValue = -1;
+        }
+        if (!extractJsonDouble(object.c_str(), "iconScale", iconScaleValue)
+            || iconScaleValue <= 0.0
+            || iconScaleValue != iconScaleValue) {
+            iconScaleValue = 1.0;
+        }
+        if (!extractJsonBool(object.c_str(), "showTitle", showTitleValue)) {
+            showTitleValue = true;
         }
         if (channel < 1) {
             channel = 1;
@@ -505,8 +650,6 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
             ieeeText = "";
             unit = "";
             paramText = "";
-            viewStyleText = "";
-            iconText = "";
             decimals = -1;
             channel = 1;
             clusterValue = 0;
@@ -525,13 +668,13 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         binding->param = (!isAutomation && paramText.length() > 0)
             ? duplicateBoundedString(paramText.c_str(), CONSOLE_PARAM_MAX - 1)
             : nullptr;
-        binding->icon = (!isAutomation && iconText.length() > 0)
+        binding->icon = (iconText.length() > 0)
             ? duplicateBoundedString(iconText.c_str(), CONSOLE_ICON_MAX - 1)
             : nullptr;
         if (binding->ieeeText == nullptr || binding->title == nullptr || binding->unit == nullptr
             || (isAutomation && binding->automationName == nullptr)
             || (!isAutomation && paramText.length() > 0 && binding->param == nullptr)
-            || (!isAutomation && iconText.length() > 0 && binding->icon == nullptr)) {
+            || (iconText.length() > 0 && binding->icon == nullptr)) {
             free(binding->ieeeText);
             free(binding->automationName);
             free(binding->title);
@@ -546,7 +689,20 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         binding->decimals = (int8_t)decimals;
         binding->cluster = isAutomation ? 0 : (uint16_t)clusterValue;
         binding->attrId = isAutomation ? -1 : (int32_t)attrValue;
-        binding->viewStyle = isAutomation ? CONSOLE_VIEW_STYLE_DEFAULT : parseViewStyleId(viewStyleText.c_str());
+        binding->viewStyle = parseViewStyleId(viewStyleText.c_str());
+        if (isAutomation && binding->viewStyle == CONSOLE_VIEW_STYLE_GAUGE) {
+            binding->viewStyle = CONSOLE_VIEW_STYLE_DEFAULT;
+        }
+        binding->showTitle = showTitleValue;
+        binding->titlePosition = parseTitlePositionId(titlePositionText.c_str());
+        binding->iconScale = (float)iconScaleValue;
+        if (alignHText.length() > 0) {
+            binding->alignH = parseIconAlignId(alignHText.c_str());
+        } else {
+            binding->alignH = parseIconAlignId(iconAlignText.c_str());
+        }
+        binding->alignV = parseAlignVId(alignVText.c_str());
+        binding->iconAlign = binding->alignH;
         if (!isAutomation) {
             if (!parseGaugeConfig(object.c_str(), binding)) {
                 free(binding->ieeeText);
@@ -565,10 +721,14 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
                 freeGaugeRanges(binding->gaugeRanges);
                 binding->hasGauge = false;
             }
-            if (binding->viewStyle != CONSOLE_VIEW_STYLE_ICON) {
-                free(binding->icon);
-                binding->icon = nullptr;
-            }
+        } else {
+            freeGaugeRanges(binding->gaugeRanges);
+            binding->hasGauge = false;
+        }
+        if (binding->viewStyle != CONSOLE_VIEW_STYLE_ICON) {
+            free(binding->icon);
+            binding->icon = nullptr;
+            binding->iconScale = 1.0f;
         }
         binding->next = nullptr;
         if (tail == nullptr) {
@@ -1026,12 +1186,40 @@ void ConsoleStore::appendConsoleFull(String &json, const ConsoleRecord *console)
                 json += "{";
                 if (binding->isSpacer) {
                     json += "\"spacer\":true";
+                    if (binding->title != nullptr && binding->title[0] != '\0') {
+                        json += ",\"text\":\"";
+                        appendJsonEscaped(json, binding->title, CONSOLE_BINDING_TITLE_MAX);
+                        json += "\"";
+                    }
+                    if (binding->alignH != CONSOLE_ICON_ALIGN_CENTER) {
+                        json += ",\"alignH\":\"";
+                        json += iconAlignJsonId(binding->alignH);
+                        json += "\"";
+                    }
+                    if (binding->alignV != CONSOLE_ALIGN_V_CENTER) {
+                        json += ",\"alignV\":\"";
+                        json += alignVJsonId(binding->alignV);
+                        json += "\"";
+                    }
+                    if (binding->fontScale > 0.0f && binding->fontScale != 1.0f) {
+                        json += ",\"fontScale\":";
+                        json += String(binding->fontScale, 4);
+                    }
                 } else if (binding->automationName != nullptr && binding->automationName[0] != '\0') {
                     json += "\"automation\":\"";
                     appendJsonEscaped(json, binding->automationName, AUTOMATION_NAME_MAX);
                     json += "\",\"title\":\"";
                     appendJsonEscaped(json, binding->title != nullptr ? binding->title : "", CONSOLE_BINDING_TITLE_MAX);
                     json += "\"";
+                    if (binding->viewStyle == CONSOLE_VIEW_STYLE_ICON) {
+                        json += ",\"viewStyle\":\"icon\"";
+                        if (binding->icon != nullptr && binding->icon[0] != '\0') {
+                            json += ",\"icon\":\"";
+                            appendJsonEscaped(json, binding->icon, CONSOLE_ICON_MAX);
+                            json += "\"";
+                        }
+                    }
+                    appendBindingLayoutJson(json, binding);
                 } else {
                     json += "\"ieee\":\"";
                     appendJsonEscaped(json, binding->ieeeText != nullptr ? binding->ieeeText : "", IEEE_TEXT_MAX);
@@ -1067,6 +1255,7 @@ void ConsoleStore::appendConsoleFull(String &json, const ConsoleRecord *console)
                             json += "\"";
                         }
                     }
+                    appendBindingLayoutJson(json, binding);
                 }
                 json += "}";
             }

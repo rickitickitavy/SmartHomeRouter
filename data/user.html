@@ -507,12 +507,144 @@
             return upper === "ON" || upper === "1" || upper === "TRUE";
         }
 
-        function buildConsoleIconElement(binding, stateText) {
+        function normalizeIconScale(value) {
+            var scale = parseFloat(value);
+            if (isNaN(scale) || scale <= 0) {
+                return 1;
+            }
+            return scale;
+        }
+
+        function normalizeTitlePosition(value) {
+            if (value === "right" || value === "top" || value === "bottom") {
+                return value;
+            }
+            return "left";
+        }
+
+        function normalizeIconAlign(value) {
+            if (value === "left" || value === "right") {
+                return value;
+            }
+            return "center";
+        }
+
+        function normalizeAlignV(value) {
+            if (value === "top" || value === "bottom") {
+                return value;
+            }
+            return "center";
+        }
+
+        function normalizeFontScale(value) {
+            return normalizeIconScale(value);
+        }
+
+        function spacerBindingText(binding) {
+            if (!binding) {
+                return "";
+            }
+            if (binding.text != null && binding.text !== undefined) {
+                return String(binding.text);
+            }
+            return binding.title ? String(binding.title) : "";
+        }
+
+        function applySpacerCellLayout(row, binding) {
+            if (!row || !binding) {
+                return;
+            }
+            var text = spacerBindingText(binding).trim();
+            row.classList.add(
+                "console-device-row--spacer-align-h-" + normalizeIconAlign(binding.alignH)
+            );
+            row.classList.add(
+                "console-device-row--spacer-align-v-" + normalizeAlignV(binding.alignV)
+            );
+            if (text) {
+                row.classList.add("has-spacer-text");
+                row.removeAttribute("aria-hidden");
+                var label = document.createElement("span");
+                label.className = "console-spacer-text";
+                label.style.setProperty(
+                    "--console-spacer-font-scale",
+                    String(normalizeFontScale(binding.fontScale))
+                );
+                label.textContent = text;
+                row.appendChild(label);
+            } else {
+                row.setAttribute("aria-hidden", "true");
+            }
+        }
+
+        function bindingShowsTitle(binding) {
+            return !(binding && binding.showTitle === false);
+        }
+
+        function bindingContentAlignH(binding) {
+            if (binding && binding.alignH != null && binding.alignH !== "") {
+                return normalizeIconAlign(binding.alignH);
+            }
+            return normalizeIconAlign(binding && binding.iconAlign);
+        }
+
+        function applyBindingTitleLayout(row, binding) {
+            if (!row) {
+                return;
+            }
+            var showTitle = bindingShowsTitle(binding);
+            var alignH = bindingContentAlignH(binding);
+            var alignV = normalizeAlignV(binding && binding.alignV);
+            if (!showTitle) {
+                row.classList.add("console-device-row--no-title");
+                row.classList.add("console-device-row--align-h-" + alignH);
+                if (binding && binding.viewStyle === "icon") {
+                    row.classList.add("console-device-row--icon-align-" + alignH);
+                }
+            } else {
+                row.classList.add(
+                    "console-device-row--title-" + normalizeTitlePosition(binding && binding.titlePosition)
+                );
+            }
+            row.classList.add("console-device-row--align-v-" + alignV);
+        }
+
+        function appendBindingTitleElement(row, binding, fallbackText) {
+            if (!bindingShowsTitle(binding)) {
+                return null;
+            }
+            var title = document.createElement("span");
+            title.className = "console-device-row-title";
+            title.textContent = (binding && (binding.title || binding.automation || binding.ieee))
+                || fallbackText
+                || "Device";
+            row.appendChild(title);
+            return title;
+        }
+
+        function buildConsoleIconElement(binding, stateText, options) {
+            var iconOptions = options || {};
             var iconId = normalizeMdiIconId(binding && binding.icon);
-            var wrap = document.createElement("span");
+            var interactive = !!iconOptions.interactive;
+            var wrap = document.createElement(interactive ? "button" : "span");
+            if (interactive) {
+                wrap.type = "button";
+            }
             wrap.className = "console-binary-icon"
-                + (isBinaryStateOn(stateText) ? " is-on" : " is-off");
+                + (interactive ? " console-binary-icon--control" : "")
+                + (isBinaryStateOn(stateText) ? " is-on" : " is-off")
+                + (iconOptions.disabled ? " is-disabled" : "");
+            wrap.style.setProperty("--console-icon-scale", String(normalizeIconScale(binding && binding.iconScale)));
             wrap.title = stateText ? String(stateText) : iconId;
+            if (iconOptions.ariaLabel) {
+                wrap.setAttribute("aria-label", iconOptions.ariaLabel);
+            }
+            if (iconOptions.disabled) {
+                wrap.disabled = true;
+            }
+            if (typeof iconOptions.onclick === "function") {
+                wrap.onclick = iconOptions.onclick;
+            }
             var icon = document.createElement("i");
             icon.className = "mdi " + mdiIconClassName(iconId);
             icon.setAttribute("aria-hidden", "true");
@@ -1000,40 +1132,52 @@
             var row = document.createElement("div");
             if (binding && binding.spacer) {
                 row.className = "console-device-row console-device-row--empty";
-                row.setAttribute("aria-hidden", "true");
+                applySpacerCellLayout(row, binding);
                 return row;
             }
             row.className = "console-device-row";
-            var title = document.createElement("span");
-            title.className = "console-device-row-title";
-            title.textContent = binding.title || binding.automation || binding.ieee || "Device";
-            row.appendChild(title);
+            applyBindingTitleLayout(row, binding);
+            appendBindingTitleElement(row, binding, "Device");
             var controls = document.createElement("div");
             controls.className = "console-device-row-controls";
             if (binding && binding.automation) {
                 var automationName = binding.automation;
                 var known = Object.prototype.hasOwnProperty.call(automationStatusByName, automationName);
                 var automationOn = known && !!automationStatusByName[automationName];
-                var automationSwitch = document.createElement("button");
-                automationSwitch.type = "button";
-                automationSwitch.className = "console-switch"
-                    + (automationOn ? " is-on" : "")
-                    + (known ? "" : " is-disabled");
-                automationSwitch.setAttribute("aria-label", "Automation on off");
-                if (!known) {
-                    automationSwitch.disabled = true;
+                var automationToggle = (function (name, currentlyOn) {
+                    return function () {
+                        setAutomationActive(name, !currentlyOn).then(function () {
+                            refreshConsoleControls();
+                        }).catch(function () {
+                            refreshConsoleControls();
+                        });
+                    };
+                })(automationName, automationOn);
+                if (binding.viewStyle === "icon") {
+                    controls.appendChild(buildConsoleIconElement(
+                        binding,
+                        automationOn ? "ON" : "OFF",
+                        {
+                            interactive: true,
+                            disabled: !known,
+                            ariaLabel: "Automation on off",
+                            onclick: known ? automationToggle : null
+                        }
+                    ));
                 } else {
-                    automationSwitch.onclick = (function (name, currentlyOn) {
-                        return function () {
-                            setAutomationActive(name, !currentlyOn).then(function () {
-                                refreshConsoleControls();
-                            }).catch(function () {
-                                refreshConsoleControls();
-                            });
-                        };
-                    })(automationName, automationOn);
+                    var automationSwitch = document.createElement("button");
+                    automationSwitch.type = "button";
+                    automationSwitch.className = "console-switch"
+                        + (automationOn ? " is-on" : "")
+                        + (known ? "" : " is-disabled");
+                    automationSwitch.setAttribute("aria-label", "Automation on off");
+                    if (!known) {
+                        automationSwitch.disabled = true;
+                    } else {
+                        automationSwitch.onclick = automationToggle;
+                    }
+                    controls.appendChild(automationSwitch);
                 }
-                controls.appendChild(automationSwitch);
                 row.appendChild(controls);
                 return row;
             }
@@ -1053,17 +1197,31 @@
                 || param === ""
                 || (typeId === "windowCovering" && param === "position");
             if (showTypeControls && typeId === "onOff") {
-                var onOffSwitch = document.createElement("button");
-                onOffSwitch.type = "button";
                 var onState = onOffStateForBinding(device, binding);
-                onOffSwitch.className = "console-switch" + (String(onState).toUpperCase() === "ON" ? " is-on" : "");
-                onOffSwitch.onclick = (function (ieee, ch, currentOn) {
+                var onOffIsOn = String(onState).toUpperCase() === "ON";
+                var onOffToggle = (function (ieee, ch, currentOn) {
                     return function () {
                         sendDeviceCommand(ieee, currentOn ? "OFF" : "ON", ch);
                         window.setTimeout(refreshConsoleControls, 300);
                     };
-                })(device.ieee, channel, String(onState).toUpperCase() === "ON");
-                controls.appendChild(onOffSwitch);
+                })(device.ieee, channel, onOffIsOn);
+                if (binding.viewStyle === "icon") {
+                    controls.appendChild(buildConsoleIconElement(
+                        binding,
+                        onOffIsOn ? "ON" : "OFF",
+                        {
+                            interactive: true,
+                            ariaLabel: "Device on off",
+                            onclick: onOffToggle
+                        }
+                    ));
+                } else {
+                    var onOffSwitch = document.createElement("button");
+                    onOffSwitch.type = "button";
+                    onOffSwitch.className = "console-switch" + (onOffIsOn ? " is-on" : "");
+                    onOffSwitch.onclick = onOffToggle;
+                    controls.appendChild(onOffSwitch);
+                }
             } else if (isBinarySensorDeviceType(typeId) && binding.viewStyle === "icon") {
                 controls.appendChild(buildConsoleIconElement(
                     binding,

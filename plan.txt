@@ -1,10 +1,10 @@
-1) hardware Watchdog
+1) hardware brownout
 
-3) MQTT like zigbee
+
 4) long simple user session
 5) new action: HTTP request
 6) HTTP devices
 7) Add for MQTT device flag "zigbee like" what means that this MQTT device will send and receive it's data like zigbee devices in style cl=xx,attr=YY,val=ZZ,ep=W. Such device will use topics like the specified in config without postfix independently of channels number
 8) historical chart
-
+9) buttons - icons
 

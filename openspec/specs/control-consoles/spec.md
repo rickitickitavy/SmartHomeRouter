@@ -96,15 +96,96 @@ The arc gauge center value text MUST use a font size 15% smaller than the previo
 - **THEN** the center value text uses the reduced arc font size
 
 ### Requirement: Binary sensor icon view style
-For Binary Input / Binary Output / Binary Value (and BACnet binary) device bindings, the binding MUST support view style `default` or `icon` instead of gauge. When view style is `icon`, the binding MUST store an icon id from the Material Design Icons set used by Home Assistant (`mdi:…`). In view mode the console MUST render that icon (not an On/Off switch); ON/1 MUST use the active (yellow) icon color and OFF/0 MUST use a muted theme color.
+For Binary Input / Binary Output / Binary Value (and BACnet binary) device bindings, and for On/Off device bindings and automation bindings, the binding MUST support view style `default` or `icon`. When view style is `icon`, the binding MUST store an icon id from the Material Design Icons set used by Home Assistant (`mdi:…`). Missing view style MUST behave as `default`. Binary sensor types MUST NOT offer gauge. On/Off and automation `default` MUST keep the existing switch control.
 
 #### Scenario: Binary icon persists
 - **WHEN** an editor saves a binaryInput binding with view style `icon` and icon `mdi:pump`
 - **THEN** after reboot that binding still has those fields and view mode shows the pump icon
 
+#### Scenario: On/Off icon persists
+- **WHEN** an editor saves an On/Off binding with view style `icon` and icon `mdi:lightbulb`
+- **THEN** after reboot that binding still has those fields
+
+#### Scenario: Automation icon persists
+- **WHEN** an editor saves an automation binding with view style `icon` and icon `mdi:timer`
+- **THEN** after reboot that binding still has those fields
+
 #### Scenario: Binary does not use gauge
 - **WHEN** a binaryInput binding is edited
 - **THEN** View style offers Default and Icon and does not offer Gauge
+
+### Requirement: Icon view style is interactive for On/Off and automations
+When view style is `icon` for an On/Off or automation binding, view mode MUST show the selected icon (not a switch) and MUST toggle the device ON/OFF or the automation `active` flag when the user activates the icon, using the same path as today’s switch. Binary sensor icons MAY stay display-only. ON/active MUST use yellow; OFF/inactive MUST use the muted theme color.
+
+#### Scenario: User toggles On/Off via icon
+- **WHEN** a simple user taps an On/Off binding shown as an icon while the device is OFF
+- **THEN** the host sends ON for that device and channel the same way the switch would
+
+#### Scenario: User toggles automation via icon
+- **WHEN** a simple user taps an automation binding shown as an icon while the automation is active
+- **THEN** that automation becomes inactive on the host
+
+### Requirement: Editor icon preview is display-only for On/Off and automations
+Editor preview of an On/Off or automation icon binding MUST NOT send device commands or change automation `active`.
+
+#### Scenario: Editor icon is display-only
+- **WHEN** an editor taps an On/Off or automation icon in the Consoles edit preview
+- **THEN** no device command is sent and no automation `active` flag changes
+
+### Requirement: Binding icon scale multiplies viewport fit
+When a binding uses view style `icon`, the binding MUST store an optional numeric `iconScale` (default `1` when missing or invalid). In view mode the rendered icon size MUST equal the size produced by the widget viewport fit scale (grid cell, horizontal slot, or vertical row) **multiplied by** `iconScale`. `iconScale` MUST NOT replace or disable the viewport fit scale. Values less than or equal to zero MUST behave as `1`.
+
+#### Scenario: Default icon scale is one
+- **WHEN** an icon binding is saved without `iconScale`
+- **THEN** after reload the icon uses only the viewport fit size (effective multiplier `1`)
+
+#### Scenario: Icon scale multiplies grid fit
+- **WHEN** an icon binding in a grid cell has `iconScale` `1.5` and the cell fit would make the icon 20px tall
+- **THEN** the icon renders at 30px tall (1.5 × fit), not 1.5× some fixed base that ignores the cell
+
+### Requirement: Binding show title and title position
+Every device and automation binding MUST support `showTitle` (boolean, default `true` when missing) and `titlePosition` (`left`, `right`, `top`, or `bottom`, default `left` when missing or invalid). When `showTitle` is `false`, view mode MUST NOT show the binding title text. When `showTitle` is `true`, view mode MUST place the title relative to the binding controls according to `titlePosition`. Spacer bindings MUST ignore these fields.
+
+#### Scenario: Hide title
+- **WHEN** a binding is saved with `showTitle` false
+- **THEN** after reload view mode shows the control or icon without a title label
+
+#### Scenario: Title below control
+- **WHEN** a binding is saved with `showTitle` true and `titlePosition` `bottom`
+- **THEN** view mode places the title under the control or icon
+
+#### Scenario: Defaults match today’s layout
+- **WHEN** a binding has no `showTitle` or `titlePosition` fields
+- **THEN** view mode shows the title to the left of the controls as today
+
+### Requirement: Icon scale and title fields persist
+The host MUST persist `iconScale`, `showTitle`, and `titlePosition` on bindings through save and reboot. Automation bindings MUST persist `showTitle` and `titlePosition` the same way as device bindings. `iconScale` MUST persist for icon-styled bindings (binary, On/Off, or automation with view style `icon`).
+
+#### Scenario: Round-trip after reboot
+- **WHEN** an editor saves an On/Off icon binding with `iconScale` `2`, `showTitle` false, and later an automation binding with `titlePosition` `top`
+- **THEN** after reboot those field values are unchanged
+
+### Requirement: Binding content horizontal and vertical align
+Every device and automation binding MUST support `alignH` (`left`, `center`, or `right`, default `center` when missing or invalid) and `alignV` (`top`, `center`, or `bottom`, default `center` when missing or invalid) for every view style including `default`. View mode MUST place the binding content in its viewport cell or slot according to those values when the title is hidden. When `showTitle` is true with title position left or right, view mode MUST keep the classic name-and-control single-row layout. When `alignH` is missing but legacy `iconAlign` is present, `alignH` MUST take that value. Spacer bindings keep their existing align fields and are unchanged by this requirement.
+
+#### Scenario: Default view honors horizontal align
+- **WHEN** an On/Off binding with view style `default` is saved with `showTitle` false and `alignH` `right`
+- **THEN** after reload view mode aligns that binding’s content to the right in its cell or slot
+
+#### Scenario: Default view honors vertical align
+- **WHEN** a device binding with view style `default` is saved with `alignV` `bottom` in a grid cell
+- **THEN** after reload view mode places that binding’s content toward the bottom of the cell
+
+#### Scenario: Legacy iconAlign maps to alignH
+- **WHEN** a stored icon binding has `iconAlign` `left` and no `alignH`
+- **THEN** after load view mode treats horizontal align as `left`
+
+### Requirement: Content align fields persist
+The host MUST persist `alignH` and `alignV` on device and automation bindings through save and reboot for every view style.
+
+#### Scenario: Align round-trip for default view
+- **WHEN** an editor saves a Default-view On/Off binding with `alignH` `left` and `alignV` `top`
+- **THEN** after reboot those field values are unchanged
 
 ### Requirement: Inactive consoles are hidden from users
 A console that is not active MUST NOT appear as a tab for simple users even if those users are assigned to it. Editors MUST still see inactive consoles in the Consoles table.

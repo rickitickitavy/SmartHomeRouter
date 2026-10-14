@@ -23,6 +23,13 @@ struct ConsoleBinding {
     int32_t attrId;
     uint8_t viewStyle;
     char *icon;
+    float iconScale;
+    uint8_t iconAlign;
+    float fontScale;
+    uint8_t alignH;
+    uint8_t alignV;
+    bool showTitle;
+    uint8_t titlePosition;
     uint8_t gaugeType;
     float gaugeMin;
     float gaugeMax;
@@ -113,6 +120,13 @@ private:
     static const char *viewportJsonId(uint8_t viewport);
     static uint8_t parseViewStyleId(const char *text);
     static const char *viewStyleJsonId(uint8_t viewStyle);
+    static uint8_t parseTitlePositionId(const char *text);
+    static const char *titlePositionJsonId(uint8_t titlePosition);
+    static uint8_t parseIconAlignId(const char *text);
+    static const char *iconAlignJsonId(uint8_t iconAlign);
+    static uint8_t parseAlignVId(const char *text);
+    static const char *alignVJsonId(uint8_t alignV);
     static uint8_t parseGaugeTypeId(const char *text);
     static const char *gaugeTypeJsonId(uint8_t gaugeType);
+    static void appendBindingLayoutJson(String &json, const ConsoleBinding *binding);
 };
