@@ -2479,6 +2479,23 @@
             return "Zigbee";
         }
 
+        function applyMqttPublishControls() {
+            var publishField = document.getElementById("devicePublishToMqttField");
+            var topicFields = document.getElementById("deviceMqttTopicFields");
+            var publishInput = document.getElementById("devicePublishToMqtt");
+            var mqttDevice = parameterDialogTransport == "mqtt";
+            if (publishField) {
+                publishField.hidden = mqttDevice;
+            }
+            if (topicFields) {
+                topicFields.hidden = !mqttDevice && !(publishInput && publishInput.checked);
+            }
+        }
+
+        function onPublishToMqttChange() {
+            applyMqttPublishControls();
+        }
+
         function applyParameterTypeControls() {
             var typeReadonlyField = document.getElementById("deviceTypeReadonlyField");
             var typeSelectField = document.getElementById("deviceTypeSelectField");
@@ -2508,6 +2525,7 @@
                     typeSelect.value = parameterDialogTypeId || "unknown";
                 }
             }
+            applyMqttPublishControls();
         }
 
         function findFoundDevice(ieee) {
@@ -3970,6 +3988,17 @@
             if (debugInput) {
                 debugInput.checked = !!device.debug;
             }
+            var publishInput = document.getElementById("devicePublishToMqtt");
+            if (publishInput) {
+                if (parameterDialogTransport == "mqtt") {
+                    publishInput.checked = true;
+                } else if (parameterDialogIsEdit) {
+                    publishInput.checked = device.publishToMqtt !== false;
+                } else {
+                    publishInput.checked = device.publishToMqtt === true;
+                }
+            }
+            applyMqttPublishControls();
             document.getElementById("parameterDialogError").hidden = true;
             document.getElementById("parameterDialog").hidden = false;
             parameterDialogBaseline = readParameterDialogDraft();
@@ -4020,6 +4049,7 @@
             var channelsSelect = document.getElementById("deviceChannels");
             var fullControlInput = document.getElementById("deviceFullControl");
             var debugInput = document.getElementById("deviceDebug");
+            var publishInput = document.getElementById("devicePublishToMqtt");
             var typeSelect = document.getElementById("deviceTypeSelect");
             return {
                 ieee: document.getElementById("deviceIeee").value,
@@ -4030,6 +4060,9 @@
                 channels: channelsSelect ? channelsSelect.value : "1",
                 fullControl: fullControlInput ? !!fullControlInput.checked : false,
                 debug: debugInput ? !!debugInput.checked : false,
+                publishToMqtt: parameterDialogTransport == "mqtt"
+                    ? true
+                    : (publishInput ? !!publishInput.checked : false),
                 type: parameterDialogTransport == "mqtt" && typeSelect
                     ? typeSelect.value
                     : parameterDialogTypeId
@@ -4045,6 +4078,7 @@
                 && left.channels === right.channels
                 && left.fullControl === right.fullControl
                 && left.debug === right.debug
+                && left.publishToMqtt === right.publishToMqtt
                 && left.type === right.type;
         }
 
@@ -4291,6 +4325,10 @@
                 type: typeId || "unknown",
                 transport: parameterDialogTransport || "zigbee"
             };
+            if (parameterDialogTransport != "mqtt") {
+                body.publishToMqtt = !!(document.getElementById("devicePublishToMqtt")
+                    && document.getElementById("devicePublishToMqtt").checked);
+            }
             if (ieeeText) {
                 body.ieee = ieeeText;
             }
@@ -9999,17 +10037,26 @@
                                 <option value="16">16</option>
                             </select>
                         </div>
-                        <div class="field">
-                            <label for="deviceStateTopic">STATE</label>
-                            <input id="deviceStateTopic" type="text" autocomplete="off">
-                        </div>
-                        <div class="field">
-                            <label for="deviceCommandTopic">COMMAND</label>
-                            <input id="deviceCommandTopic" type="text" autocomplete="off">
-                        </div>
-                        <div class="field">
-                            <label for="deviceAvailabilityTopic">AVAILABILITY</label>
-                            <input id="deviceAvailabilityTopic" type="text" autocomplete="off">
+                        <div id="deviceMqttGroup" class="form-section">
+                            <h3 class="group-title">MQTT</h3>
+                            <div class="field field-check" id="devicePublishToMqttField">
+                                <input id="devicePublishToMqtt" type="checkbox" onchange="onPublishToMqttChange()">
+                                <label for="devicePublishToMqtt">Publish to MQTT</label>
+                            </div>
+                            <div id="deviceMqttTopicFields" class="mqtt-topic-fields">
+                                <div class="field field-inline">
+                                    <label for="deviceStateTopic">STATE</label>
+                                    <input id="deviceStateTopic" type="text" autocomplete="off">
+                                </div>
+                                <div class="field field-inline">
+                                    <label for="deviceCommandTopic">COMMAND</label>
+                                    <input id="deviceCommandTopic" type="text" autocomplete="off">
+                                </div>
+                                <div class="field field-inline">
+                                    <label for="deviceAvailabilityTopic">AVAILABILITY</label>
+                                    <input id="deviceAvailabilityTopic" type="text" autocomplete="off">
+                                </div>
+                            </div>
                         </div>
                         <div class="field field-check">
                             <input id="deviceFullControl" type="checkbox">

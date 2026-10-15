@@ -14,11 +14,22 @@ struct DeviceTopicEntry {
     uint8_t channelCount;
     uint8_t fullControl;
     uint8_t debug;
+    uint8_t publishToMqtt;
     uint8_t zigbeeType;
     uint8_t transport;
     uint8_t used;
     DeviceTopicEntry *next;
 };
+
+inline bool devicePublishesToMqtt(const DeviceTopicEntry *entry) {
+    if (entry == nullptr || !entry->used) {
+        return false;
+    }
+    if (clampDeviceTransport(entry->transport) == DeviceTransportMqtt) {
+        return true;
+    }
+    return entry->publishToMqtt != 0;
+}
 
 inline const char *deviceTopicCStr(const char *value) {
     return value != nullptr ? value : "";

@@ -206,24 +206,32 @@ void MqttClient::subscribeDeviceCommands() {
             continue;
         }
 
-        if (entry->transport != DeviceTransportMqtt && !deviceTopicEmpty(entry->commandTopic)) {
+        if (entry->transport == DeviceTransportMqtt) {
+            if (!deviceTopicEmpty(entry->stateTopic)) {
+                keepOrSubscribe(String(entry->stateTopic));
+            }
+            if (!deviceTopicEmpty(entry->availabilityTopic)) {
+                keepOrSubscribe(String(entry->availabilityTopic));
+            }
+            continue;
+        }
+
+        if (!devicePublishesToMqtt(entry)) {
+            continue;
+        }
+
+        if (!deviceTopicEmpty(entry->commandTopic)) {
             keepOrSubscribe(String(entry->commandTopic));
             if (DeviceTopicMap::usesTopicSuffix(entry->channelCount)) {
                 keepOrSubscribe(String(entry->commandTopic) + "/+");
             }
         }
 
-        if (!deviceTopicEmpty(entry->stateTopic)
-            && (entry->transport == DeviceTransportMqtt
-                || zigbeeDeviceTypeIsMeasurement(entry->zigbeeType))) {
+        if (!deviceTopicEmpty(entry->stateTopic) && zigbeeDeviceTypeIsMeasurement(entry->zigbeeType)) {
             keepOrSubscribe(String(entry->stateTopic));
-            if (entry->transport != DeviceTransportMqtt
-                && DeviceTopicMap::usesTopicSuffix(entry->channelCount)) {
+            if (DeviceTopicMap::usesTopicSuffix(entry->channelCount)) {
                 keepOrSubscribe(String(entry->stateTopic) + "/+");
             }
-        }
-        if (entry->transport == DeviceTransportMqtt && !deviceTopicEmpty(entry->availabilityTopic)) {
-            keepOrSubscribe(String(entry->availabilityTopic));
         }
     }
 
@@ -439,6 +447,9 @@ void MqttClient::publishDeviceState(const DeviceTopicEntry *entry, const char *m
         return;
     }
     if (entry->transport == DeviceTransportMqtt) {
+        return;
+    }
+    if (!devicePublishesToMqtt(entry)) {
         return;
     }
     if (message == nullptr) {

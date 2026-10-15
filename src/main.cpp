@@ -173,6 +173,8 @@ static void applyDeviceConfigPayload(const char *payload) {
         LOGGER.error("Bad IEEE in config/device");
         return;
     }
+    DeviceTopicEntry *existing = topicMap->findByIeee(ieee);
+    const bool isEdit = existing != nullptr && existing->used;
     DeviceTopicEntry *entry = topicMap->upsert(
         ieee,
         friendlyName.c_str(),
@@ -192,6 +194,14 @@ static void applyDeviceConfigPayload(const char *payload) {
     bool parsedDebug = false;
     if (extractJsonBool(payload, "debug", parsedDebug)) {
         entry->debug = parsedDebug ? 1 : 0;
+    }
+    if (clampDeviceTransport(entry->transport) != DeviceTransportMqtt) {
+        bool parsedPublishToMqtt = false;
+        if (extractJsonBool(payload, "publishToMqtt", parsedPublishToMqtt)) {
+            entry->publishToMqtt = parsedPublishToMqtt ? 1 : 0;
+        } else if (!isEdit) {
+            entry->publishToMqtt = 0;
+        }
     }
     mqttClient->subscribeDeviceCommands();
     persistHostDeviceList();
@@ -576,6 +586,7 @@ static void applyMeasurementMqttState(const char *topic, const char *payload) {
     DeviceTopicEntry *entry = topicMap->findByStateTopic(topic, &topicEndpoint);
     if (entry == nullptr
         || entry->transport == DeviceTransportMqtt
+        || !devicePublishesToMqtt(entry)
         || !zigbeeDeviceTypeIsMeasurement(entry->zigbeeType)) {
         return;
     }
@@ -637,6 +648,9 @@ static void onMqttLogicalMessage(const char *topic, const char *payload) {
     uint8_t topicEndpoint = 0;
     DeviceTopicEntry *entry = topicMap->findByCommandTopic(topic, &topicEndpoint);
     if (entry == nullptr) {
+        return;
+    }
+    if (entry->transport != DeviceTransportMqtt && !devicePublishesToMqtt(entry)) {
         return;
     }
     if (entry->transport == DeviceTransportMqtt) {
