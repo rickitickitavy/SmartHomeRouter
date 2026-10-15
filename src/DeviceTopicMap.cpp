@@ -104,6 +104,7 @@ bool DeviceTopicMap::cloneEntry(DeviceTopicEntry *destination, const DeviceTopic
     destination->channelCount = source->channelCount;
     destination->fullControl = source->fullControl;
     destination->debug = source->debug;
+    destination->publishToMqtt = source->publishToMqtt;
     destination->zigbeeType = source->zigbeeType;
     destination->transport = source->transport;
     destination->used = source->used;
@@ -689,11 +690,13 @@ DeviceTopicEntry *DeviceTopicMap::upsert(
     DeviceTopicEntry *entry = findByIeee(ieee);
     uint8_t preservedFullControl = 0;
     uint8_t preservedDebug = 0;
+    uint8_t preservedPublishToMqtt = 0;
     uint8_t preservedZigbeeType = ZigbeeDeviceTypeUnknown;
     uint8_t preservedTransport = DeviceTransportZigbee;
     if (entry != nullptr && entry->used) {
         preservedFullControl = entry->fullControl;
         preservedDebug = entry->debug;
+        preservedPublishToMqtt = entry->publishToMqtt;
         preservedZigbeeType = entry->zigbeeType;
         preservedTransport = clampDeviceTransport(entry->transport);
     }
@@ -710,6 +713,7 @@ DeviceTopicEntry *DeviceTopicMap::upsert(
     entry->channelCount = normalizeChannelCount(channelCount);
     entry->fullControl = preservedFullControl;
     entry->debug = preservedDebug;
+    entry->publishToMqtt = preservedPublishToMqtt;
     entry->zigbeeType = preservedZigbeeType;
     entry->transport = preservedTransport;
     return entry;
@@ -734,6 +738,7 @@ DeviceTopicEntry *DeviceTopicMap::upsertFromEntry(const DeviceTopicEntry *source
         entry->fullControl = source->fullControl ? 1 : 0;
     }
     entry->debug = source->debug ? 1 : 0;
+    entry->publishToMqtt = source->publishToMqtt ? 1 : 0;
     if (source->zigbeeType != ZigbeeDeviceTypeUnknown) {
         entry->zigbeeType = source->zigbeeType;
     }
@@ -896,6 +901,14 @@ void DeviceTopicMap::replaceFromJson(const String &json) {
                     entry->transport = deviceTransportFromJsonId(transportText.c_str());
                 } else {
                     entry->transport = DeviceTransportZigbee;
+                }
+                if (clampDeviceTransport(entry->transport) != DeviceTransportMqtt) {
+                    bool parsedPublishToMqtt = false;
+                    if (extractJsonBool(object.c_str(), "publishToMqtt", parsedPublishToMqtt)) {
+                        entry->publishToMqtt = parsedPublishToMqtt ? 1 : 0;
+                    } else {
+                        entry->publishToMqtt = 1;
+                    }
                 }
             }
         }
@@ -1112,6 +1125,10 @@ static void appendDeviceListEntryJson(
     json += "\",\"transport\":\"";
     json += deviceTransportJsonId(deviceEntry->transport);
     json += "\"";
+    if (clampDeviceTransport(deviceEntry->transport) != DeviceTransportMqtt) {
+        json += ",\"publishToMqtt\":";
+        json += deviceEntry->publishToMqtt ? "true" : "false";
+    }
     if (isOnline != nullptr) {
         json += ",\"online\":";
         json += isOnline(deviceEntry->ieee) ? "true" : "false";

@@ -2253,6 +2253,14 @@ void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
     } else if (!isEdit) {
         entry->debug = 0;
     }
+    if (transport != DeviceTransportMqtt) {
+        bool parsedPublishToMqtt = false;
+        if (extractJsonBool(body.c_str(), "publishToMqtt", parsedPublishToMqtt)) {
+            entry->publishToMqtt = parsedPublishToMqtt ? 1 : 0;
+        } else if (!isEdit) {
+            entry->publishToMqtt = 0;
+        }
+    }
     String typeText;
     const bool haveType = extractJsonString(body.c_str(), "type", typeText);
     if (transport == DeviceTransportMqtt) {
