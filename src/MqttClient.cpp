@@ -380,6 +380,21 @@ void MqttClient::dispatch(bool staConnected) {
     reconnect();
 }
 
+void MqttClient::pumpNetwork() {
+    if (publishPumpInProgress) {
+        return;
+    }
+    publishPumpInProgress = true;
+    if (usesLocalBroker()) {
+        if (localBroker != nullptr) {
+            localBroker->pump();
+        }
+    } else if (client != nullptr && client->connected()) {
+        client->loop();
+    }
+    publishPumpInProgress = false;
+}
+
 bool MqttClient::publishMessage(const char *topic, const char *payload, bool retained, bool logInfo) {
     if (!isConnected() || topic == nullptr || topic[0] == '\0') {
         return false;

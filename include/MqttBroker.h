@@ -11,6 +11,7 @@ public:
 
     void setLocalMessageHandler(LocalMessageFn handler);
     void dispatch(bool wifiHasAddress);
+    void pump();
     void reloadFromSettings();
     bool isListening() const;
     int connectionCount() const;
