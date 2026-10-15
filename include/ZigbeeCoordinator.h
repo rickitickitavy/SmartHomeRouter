@@ -182,7 +182,6 @@ private:
 
     struct StatusAnswerHold {
         bool used = false;
-        bool fromStatusRead = false;
         uint8_t ieee[8]{};
         uint8_t endpoint = 0;
         uint16_t clusterId = 0;
@@ -190,14 +189,6 @@ private:
         unsigned long answeredMs = 0;
         unsigned long untilMs = 0;
         StatusAnswerHold *next = nullptr;
-    };
-
-    struct EndpointCommandStamp {
-        bool used = false;
-        uint8_t ieee[8]{};
-        uint8_t endpoint = 0;
-        unsigned long atMs = 0;
-        EndpointCommandStamp *next = nullptr;
     };
 
     struct DestCommandSlot {
@@ -242,13 +233,11 @@ private:
     StatusReadItem *statusReadHead = nullptr;
     StatusIssuedItem *statusIssuedHead = nullptr;
     StatusAnswerHold *statusAnswerHead = nullptr;
-    EndpointCommandStamp *endpointCommandHead = nullptr;
     DestCommandSlot *destFlightHead = nullptr;
     DescriptorProbe *descriptorProbeHead = nullptr;
     int statusReadCount = 0;
     int statusIssuedCount = 0;
     int statusAnswerCount = 0;
-    int endpointCommandCount = 0;
     int destFlightCount = 0;
     int descriptorProbeCount = 0;
     int boundDeviceCount = 0;
@@ -347,15 +336,11 @@ private:
     void releaseStatusRead(StatusReadItem *item);
     StatusIssuedItem *allocateStatusIssued();
     StatusAnswerHold *allocateStatusAnswer();
-    EndpointCommandStamp *allocateEndpointCommandStamp();
     DestCommandSlot *allocateDestFlight();
     DescriptorProbe *allocateDescriptorProbe(uint16_t shortAddr);
     void releaseDescriptorProbe(DescriptorProbe *probe);
     bool ieeeHasInFlightStatusRead(const uint8_t ieee[8]) const;
     void completeStatusRead(const uint8_t ieee[8], uint16_t clusterId, uint8_t endpoint);
-    bool ieeeHasStatusRead(const uint8_t ieee[8]) const;
-    void noteEndpointCommand(const uint8_t ieee[8], uint8_t endpoint);
-    bool endpointCommandAfter(const uint8_t ieee[8], uint8_t endpoint, unsigned long answeredMs) const;
     bool suppressStatusReplacement(
         const uint8_t ieee[8],
         uint8_t endpoint,
