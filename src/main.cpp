@@ -263,6 +263,9 @@ static void pumpWifiDeviceCommands() {
             continue;
         }
         ZIGBEE_SPI_PROXY.notePacketSent();
+        // Drain MQTT I/O between automation/action bursts so a tight queue flush
+        // does not fill the TCP send buffer and fail later publishes.
+        mqttClient->pumpNetwork();
     }
 }
 

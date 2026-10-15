@@ -72,6 +72,12 @@ bool MqttBroker::publishFromHost(const char *topic, const char *payload, bool re
     return server->publish(topic, data, (uint8_t)0, retained);
 }
 
+void MqttBroker::pump() {
+    if (server != nullptr) {
+        server->loop();
+    }
+}
+
 void MqttBroker::reloadFromSettings() {
     if (server == nullptr) {
         return;

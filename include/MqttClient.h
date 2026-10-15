@@ -21,6 +21,7 @@ public:
     void begin(void (*rawCallback)(char *topic, byte *payload, unsigned int length));
     void onMessage(char *topic, byte *payload, unsigned int length);
     void dispatch(bool staConnected);
+    void pumpNetwork();
     void reloadFromSettings();
     bool isConnected() const;
     void publishStatus(const char *payload);
@@ -55,6 +56,7 @@ private:
     bool bornBootAnnounceDone = false;
     volatile bool connectInProgress = false;
     volatile bool remoteSessionAttachPending = false;
+    bool publishPumpInProgress = false;
     TaskHandle_t connectTaskHandle = nullptr;
 
     String topicStatus;

@@ -371,20 +371,6 @@ ZigbeeCoordinator::StatusAnswerHold *ZigbeeCoordinator::allocateStatusAnswer() {
     return hold;
 }
 
-ZigbeeCoordinator::EndpointCommandStamp *ZigbeeCoordinator::allocateEndpointCommandStamp() {
-    if (endpointCommandCount >= kMaxStatusAnswers) {
-        return nullptr;
-    }
-    EndpointCommandStamp *stamp = (EndpointCommandStamp *)calloc(1, sizeof(EndpointCommandStamp));
-    if (stamp == nullptr) {
-        return nullptr;
-    }
-    stamp->next = endpointCommandHead;
-    endpointCommandHead = stamp;
-    endpointCommandCount++;
-    return stamp;
-}
-
 ZigbeeCoordinator::DestCommandSlot *ZigbeeCoordinator::allocateDestFlight() {
     for (DestCommandSlot *existing = destFlightHead; existing != nullptr; existing = existing->next) {
         if (existing->occupied) {
@@ -1416,8 +1402,6 @@ bool ZigbeeCoordinator::controlOnOff(const uint8_t ieee[8], const char *command,
         && actionLower != "0" && actionLower != "false" && actionLower != "toggle") {
         return true;
     }
-    noteEndpointCommand(device->ieee, targetEndpoint);
-
     DestCommandSlot *slot = destSlotFor(device->ieee, targetEndpoint, true);
     if (slot == nullptr) {
         return false;
@@ -1710,57 +1694,6 @@ void ZigbeeCoordinator::pumpStatusReads() {
     }
 }
 
-bool ZigbeeCoordinator::ieeeHasStatusRead(const uint8_t ieee[8]) const {
-    if (ieee == nullptr) {
-        return false;
-    }
-    for (StatusReadItem *item = statusReadHead; item != nullptr; item = item->next) {
-        if (item->used && memcmp(item->ieee, ieee, 8) == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
-void ZigbeeCoordinator::noteEndpointCommand(const uint8_t ieee[8], uint8_t endpoint) {
-    if (ieee == nullptr || !DeviceTopicMap::isUsableEndpoint(endpoint)) {
-        return;
-    }
-    const unsigned long nowMs = millis();
-    for (EndpointCommandStamp *stamp = endpointCommandHead; stamp != nullptr; stamp = stamp->next) {
-        if (!stamp->used || stamp->endpoint != endpoint || memcmp(stamp->ieee, ieee, 8) != 0) {
-            continue;
-        }
-        stamp->atMs = nowMs;
-        return;
-    }
-    EndpointCommandStamp *stamp = allocateEndpointCommandStamp();
-    if (stamp == nullptr) {
-        return;
-    }
-    stamp->used = true;
-    memcpy(stamp->ieee, ieee, 8);
-    stamp->endpoint = endpoint;
-    stamp->atMs = nowMs;
-}
-
-bool ZigbeeCoordinator::endpointCommandAfter(
-    const uint8_t ieee[8],
-    uint8_t endpoint,
-    unsigned long answeredMs
-) const {
-    if (ieee == nullptr) {
-        return false;
-    }
-    for (const EndpointCommandStamp *stamp = endpointCommandHead; stamp != nullptr; stamp = stamp->next) {
-        if (!stamp->used || stamp->endpoint != endpoint || memcmp(stamp->ieee, ieee, 8) != 0) {
-            continue;
-        }
-        return (long)(stamp->atMs - answeredMs) >= 0;
-    }
-    return false;
-}
-
 bool ZigbeeCoordinator::suppressStatusReplacement(
     const uint8_t ieee[8],
     uint8_t endpoint,
@@ -1771,7 +1704,6 @@ bool ZigbeeCoordinator::suppressStatusReplacement(
         return false;
     }
     const unsigned long nowMs = millis();
-    const bool statusReadActive = ieeeHasStatusRead(ieee);
     for (StatusAnswerHold *hold = statusAnswerHead; hold != nullptr; hold = hold->next) {
         if (!hold->used || hold->endpoint != endpoint || hold->clusterId != clusterId) {
             continue;
@@ -1784,29 +1716,26 @@ bool ZigbeeCoordinator::suppressStatusReplacement(
             break;
         }
         if (hold->value == value) {
-            return false;
-        }
-        if (endpointCommandAfter(ieee, endpoint, hold->answeredMs)) {
-            hold->used = false;
-            break;
-        }
-        hold->fromStatusRead = hold->fromStatusRead || statusReadActive;
-        if (registeredMap != nullptr) {
-            const DeviceTopicEntry *entry = registeredMap->findByIeee(ieee);
-            if (entry == nullptr || entry->debug != 0) {
+            if (registeredMap != nullptr) {
+                const DeviceTopicEntry *entry = registeredMap->findByIeee(ieee);
+                if (entry == nullptr || entry->debug != 0) {
+                    LOGGER.info("Kept channel status ep=" + String(endpoint) + "; ignored a later reply");
+                }
+            } else {
                 LOGGER.info("Kept channel status ep=" + String(endpoint) + "; ignored a later reply");
             }
-        } else {
-            LOGGER.info("Kept channel status ep=" + String(endpoint) + "; ignored a later reply");
+            return true;
         }
-        return true;
+        hold->value = value;
+        hold->answeredMs = nowMs;
+        hold->untilMs = nowMs + kStatusReadGiveUpMs;
+        return false;
     }
     StatusAnswerHold *hold = allocateStatusAnswer();
     if (hold == nullptr) {
         return false;
     }
     hold->used = true;
-    hold->fromStatusRead = statusReadActive;
     memcpy(hold->ieee, ieee, 8);
     hold->endpoint = endpoint;
     hold->clusterId = clusterId;

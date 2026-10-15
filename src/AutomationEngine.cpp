@@ -398,7 +398,7 @@ bool AutomationEngine::isMinTriggerIntervalBlocking(const AutomationRecord *auto
     return elapsed < (unsigned long)automation->minTriggerIntervalSec;
 }
 
-void AutomationEngine::evaluateAndMaybeRun(AutomationRecord *automation) {
+void AutomationEngine::evaluateAndMaybeRun(AutomationRecord *automation, bool requireConditionRisingEdge) {
     if (automation == nullptr || !automation->active || store == nullptr) {
         return;
     }
@@ -442,8 +442,14 @@ void AutomationEngine::evaluateAndMaybeRun(AutomationRecord *automation) {
         return;
     }
     const bool conditionTrue = evaluateCondition(automation->condition, automation);
+    const bool risingEdge = conditionTrue && !automation->lastConditionTrue;
     automation->lastConditionTrue = conditionTrue;
     if (!conditionTrue) {
+        return;
+    }
+    // Status/listener triggers re-fire on every matching report while the condition
+    // stays true (e.g. repeated UP). Require false→true unless this is a timer tick.
+    if (requireConditionRisingEdge && !risingEdge) {
         return;
     }
     LOGGER.info(String("Automation ran: ") + (automation->name != nullptr ? automation->name : "?"));
@@ -562,7 +568,7 @@ void AutomationEngine::evaluateMatching(
             break;
         }
         if (matched) {
-            evaluateAndMaybeRun(automation);
+            evaluateAndMaybeRun(automation, true);
         }
     }
 }
@@ -609,7 +615,7 @@ void AutomationEngine::onStatusChanged(
             break;
         }
         if (matched) {
-            evaluateAndMaybeRun(automation);
+            evaluateAndMaybeRun(automation, true);
         }
     }
 }
