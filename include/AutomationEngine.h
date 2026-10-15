@@ -29,7 +29,7 @@ private:
     void applyStartOnBootTimers();
     void evaluateCurrentTimeAutomations();
     void evaluateMatching(const char *ieeeText, uint8_t endpoint, uint16_t clusterOr0, bool fromTimer, AutomationRecord *only);
-    void evaluateAndMaybeRun(AutomationRecord *automation);
+    void evaluateAndMaybeRun(AutomationRecord *automation, bool requireConditionRisingEdge = false);
     bool isMinTriggerIntervalBlocking(const AutomationRecord *automation) const;
     bool evaluateCondition(const AutomationCondition *condition, const AutomationRecord *automation) const;
     bool evaluateComparison(const AutomationCondition *condition, const AutomationRecord *automation) const;

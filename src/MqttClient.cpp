@@ -389,8 +389,12 @@ void MqttClient::pumpNetwork() {
         if (localBroker != nullptr) {
             localBroker->pump();
         }
-    } else if (client != nullptr && client->connected()) {
-        client->loop();
+    } else {
+        // Do not call PubSubClient::loop() between burst publishes: its blocking
+        // readByte/yield path can hit a torn-down NetworkClient RX buffer and
+        // LoadProhibited. Yield so lwIP can drain the TCP send queue instead.
+        yield();
+        delay(1);
     }
     publishPumpInProgress = false;
 }

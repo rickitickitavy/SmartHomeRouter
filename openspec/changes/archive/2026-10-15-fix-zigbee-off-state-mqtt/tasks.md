@@ -13,7 +13,7 @@
 
 ## 3. Integration check
 
-- [ ] 3.1 On device: toggle a registered Zigbee `onOff` switch ON/OFF several times within a few seconds; verify host logs show `MQTT send … data=ON` and `MQTT send … data=OFF` for each state **change**, and that back-to-back duplicate same-state reports within ~8s may be omitted
+- [x] 3.1 On device: toggle a registered Zigbee `onOff` switch ON/OFF several times within a few seconds; verify host logs show `MQTT send … data=ON` and `MQTT send … data=OFF` for each state **change**, and that back-to-back duplicate same-state reports within ~8s may be omitted
 
 ## Workflow follow-up
 
