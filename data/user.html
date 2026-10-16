@@ -57,6 +57,9 @@
                             return;
                         }
                         if (awaitingPong) {
+                            if (document.hidden) {
+                                return;
+                            }
                             try {
                                 socket.close();
                             } catch (closeError) {
@@ -74,6 +77,9 @@
                             return;
                         }
                         pongTimer = window.setTimeout(function () {
+                            if (document.hidden) {
+                                return;
+                            }
                             if (awaitingPong && activeSocket === socket) {
                                 try {
                                     socket.close();
@@ -2019,6 +2025,72 @@
             openConsolesLiveSocket();
         }
 
+        function recoverWantedLiveSocket(wanted, socket, setSocket, liveness, reconnectTimer, setReconnectTimer, openFn) {
+            if (!wanted) {
+                return;
+            }
+            if (reconnectTimer != null) {
+                window.clearTimeout(reconnectTimer);
+                setReconnectTimer(null);
+            }
+            if (socket != null
+                && socket.readyState !== WebSocket.OPEN
+                && socket.readyState !== WebSocket.CONNECTING) {
+                liveness.stop();
+                try {
+                    socket.onclose = null;
+                    socket.close();
+                } catch (closeError) {
+                }
+                setSocket(null);
+                socket = null;
+            }
+            if (socket != null && socket.readyState === WebSocket.OPEN) {
+                liveness.bind(socket);
+                return;
+            }
+            openFn();
+        }
+
+        function recoverConsoleLiveLinks() {
+            if (!signedInUser || firmwareRebootWaitActive) {
+                return;
+            }
+            recoverWantedLiveSocket(
+                devicesLiveWanted,
+                devicesLiveSocket,
+                function (nextSocket) {
+                    devicesLiveSocket = nextSocket;
+                },
+                devicesLiveLiveness,
+                devicesLiveReconnectTimer,
+                function (nextTimer) {
+                    devicesLiveReconnectTimer = nextTimer;
+                },
+                openDevicesLiveSocket
+            );
+            recoverWantedLiveSocket(
+                consolesLiveWanted,
+                consolesLiveSocket,
+                function (nextSocket) {
+                    consolesLiveSocket = nextSocket;
+                },
+                consolesLiveLiveness,
+                consolesLiveReconnectTimer,
+                function (nextTimer) {
+                    consolesLiveReconnectTimer = nextTimer;
+                },
+                openConsolesLiveSocket
+            );
+            startSessionWatch();
+            if (devicesLiveWanted) {
+                loadDevices();
+            }
+            if (consolesLiveWanted) {
+                loadUserConsoles();
+            }
+        }
+
         function loadDevices() {
             fetch("/api/devices", { cache: "no-store" }).then(function (response) {
                 return response.text().then(function (text) {
@@ -2056,6 +2128,14 @@
                 overlay.addEventListener("mousedown", onDialogOverlayPointerDown);
             }
             applyThemeToDocument("dark");
+            document.addEventListener("visibilitychange", function () {
+                if (document.visibilityState === "visible") {
+                    recoverConsoleLiveLinks();
+                }
+            });
+            window.addEventListener("pageshow", function () {
+                recoverConsoleLiveLinks();
+            });
             checkSession();
         };
     </script>
