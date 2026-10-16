@@ -2270,6 +2270,9 @@
                             return;
                         }
                         if (awaitingPong) {
+                            if (document.hidden) {
+                                return;
+                            }
                             try {
                                 socket.close();
                             } catch (closeError) {
@@ -2287,6 +2290,9 @@
                             return;
                         }
                         pongTimer = window.setTimeout(function () {
+                            if (document.hidden) {
+                                return;
+                            }
                             if (awaitingPong && activeSocket === socket) {
                                 try {
                                     socket.close();
@@ -3711,6 +3717,99 @@
         function startConsolesLive() {
             consolesLiveWanted = true;
             openConsolesLiveSocket();
+        }
+
+        function recoverWantedLiveSocket(wanted, socket, setSocket, liveness, reconnectTimer, setReconnectTimer, openFn) {
+            if (!wanted) {
+                return;
+            }
+            if (reconnectTimer != null) {
+                window.clearTimeout(reconnectTimer);
+                setReconnectTimer(null);
+            }
+            if (socket != null
+                && socket.readyState !== WebSocket.OPEN
+                && socket.readyState !== WebSocket.CONNECTING) {
+                liveness.stop();
+                try {
+                    socket.onclose = null;
+                    socket.close();
+                } catch (closeError) {
+                }
+                setSocket(null);
+                socket = null;
+            }
+            if (socket != null && socket.readyState === WebSocket.OPEN) {
+                liveness.bind(socket);
+                return;
+            }
+            openFn();
+        }
+
+        function recoverConsoleLiveLinks() {
+            if (!signedInUser || firmwareRebootWaitActive) {
+                return;
+            }
+            recoverWantedLiveSocket(
+                devicesLiveWanted,
+                devicesLiveSocket,
+                function (nextSocket) {
+                    devicesLiveSocket = nextSocket;
+                },
+                devicesLiveLiveness,
+                devicesLiveReconnectTimer,
+                function (nextTimer) {
+                    devicesLiveReconnectTimer = nextTimer;
+                },
+                openDevicesLiveSocket
+            );
+            recoverWantedLiveSocket(
+                consolesLiveWanted,
+                consolesLiveSocket,
+                function (nextSocket) {
+                    consolesLiveSocket = nextSocket;
+                },
+                consolesLiveLiveness,
+                consolesLiveReconnectTimer,
+                function (nextTimer) {
+                    consolesLiveReconnectTimer = nextTimer;
+                },
+                openConsolesLiveSocket
+            );
+            startSessionWatch();
+            var statusSection = document.getElementById("section-status");
+            if (statusSection && statusSection.classList.contains("active")) {
+                startStatusPolling();
+            }
+            var systemSection = document.getElementById("section-system");
+            var logTab = document.getElementById("system-tab-log");
+            if (systemSection && systemSection.classList.contains("active")
+                && logTab && logTab.classList.contains("active")) {
+                startLogPolling();
+            }
+            var automationSection = document.getElementById("section-automation");
+            if (automationSection && automationSection.classList.contains("active")) {
+                startAutomationsLive();
+            }
+            if (pairingSessionActive) {
+                startFoundPolling();
+                startPairingPolling();
+            }
+            if (devicesLiveWanted) {
+                loadDevices();
+            }
+            var consolesSection = document.getElementById("section-consoles");
+            if (consolesSection && consolesSection.classList.contains("active")) {
+                loadConsoles();
+            }
+            var placeSection = document.getElementById("section-place");
+            if (placeSection && placeSection.classList.contains("active")) {
+                loadPlaceConsoles();
+            }
+            var securitySection = document.getElementById("section-security");
+            if (securitySection && securitySection.classList.contains("active")) {
+                loadUsers();
+            }
         }
 
         function resumePairingDialog() {
@@ -10557,6 +10656,14 @@
             }
             applyThemeToDocument("dark");
             armAllFeedbackPlates();
+            document.addEventListener("visibilitychange", function () {
+                if (document.visibilityState === "visible") {
+                    recoverConsoleLiveLinks();
+                }
+            });
+            window.addEventListener("pageshow", function () {
+                recoverConsoleLiveLinks();
+            });
             checkSession();
         };
     </script>
