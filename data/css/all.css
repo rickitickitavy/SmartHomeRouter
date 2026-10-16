@@ -859,6 +859,10 @@ html, body {
     display: none;
 }
 
+#deviceUserDataFieldsSection[hidden] {
+    display: none !important;
+}
+
 #deviceMqttGroup .field-inline {
     flex-direction: row;
     align-items: center;
@@ -891,6 +895,52 @@ html, body {
     padding: 0.5rem 0.6rem;
     border-bottom: 1px solid var(--border);
     word-break: break-all;
+}
+
+.data-table th.col-check,
+.data-table td.col-check {
+    width: 5.5rem;
+    min-width: 5.5rem;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.user-data-field-actions {
+    white-space: nowrap;
+    width: 1%;
+}
+
+.user-data-field-actions .console-widget-move-btn,
+.user-data-field-actions .console-widget-delete-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    min-width: 2rem;
+    min-height: 2rem;
+    margin-right: 0.25rem;
+    vertical-align: middle;
+    grid-column: auto;
+    grid-row: auto;
+    background: var(--surface);
+    color: var(--text);
+    border-color: var(--border);
+    opacity: 1;
+}
+
+.user-data-field-actions .console-widget-move-btn:hover:not(:disabled),
+.user-data-field-actions .console-widget-delete-btn:hover:not(:disabled) {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+.user-data-field-actions .console-widget-move-btn:disabled,
+.user-data-field-actions .console-widget-delete-btn:disabled {
+    color: var(--muted);
+    background: var(--chrome-idle);
+    opacity: 0.45;
+    cursor: default;
 }
 
 .data-table th {

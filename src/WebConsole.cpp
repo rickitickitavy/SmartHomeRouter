@@ -2281,6 +2281,18 @@ void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
     } else if (foundDevices != nullptr) {
         entry->zigbeeType = foundDevices->zigbeeTypeForIeee(ieee);
     }
+    free(entry->userDataFieldsJson);
+    entry->userDataFieldsJson = nullptr;
+    if (zigbeeDeviceTypeIsUserData(entry->zigbeeType)) {
+        String fieldsSlice;
+        if (extractJsonKeyedSlice(body.c_str(), "userDataFields", '[', fieldsSlice)
+            && fieldsSlice.length() > 0) {
+            entry->userDataFieldsJson =
+                DeviceTopicMap::duplicateBoundedString(fieldsSlice.c_str(), 768);
+        } else {
+            entry->userDataFieldsJson = DeviceTopicMap::duplicateBoundedString("[]", 768);
+        }
+    }
     if (foundDevices != nullptr) {
         foundDevices->removeIeee(ieee);
     }
