@@ -450,6 +450,115 @@
             return String(device.battery);
         }
 
+        function splitUserDataBraceSlots(braceText) {
+            var body = String(braceText || "").trim();
+            if (body.charAt(0) === "{") {
+                body = body.substring(1);
+            }
+            if (body.charAt(body.length - 1) === "}") {
+                body = body.substring(0, body.length - 1);
+            }
+            var slots = [];
+            var current = "";
+            var inString = false;
+            var escape = false;
+            var index;
+            for (index = 0; index < body.length; index++) {
+                var character = body.charAt(index);
+                if (inString) {
+                    current += character;
+                    if (escape) {
+                        escape = false;
+                        continue;
+                    }
+                    if (character === "\\") {
+                        escape = true;
+                        continue;
+                    }
+                    if (character === "\"") {
+                        inString = false;
+                    }
+                    continue;
+                }
+                if (character === "\"") {
+                    inString = true;
+                    current += character;
+                    continue;
+                }
+                if (character === ",") {
+                    slots.push(current.trim());
+                    current = "";
+                    continue;
+                }
+                current += character;
+            }
+            slots.push(current.trim());
+            return slots;
+        }
+
+        function userDataBraceStateText(device) {
+            if (!device) {
+                return "";
+            }
+            return measurementStateForBinding(device, { channel: 1 }) || "";
+        }
+
+        function userDataSlotDisplayToken(device, slotIndex) {
+            var stateText = userDataBraceStateText(device);
+            if (!stateText) {
+                return "";
+            }
+            var braceText = stateText;
+            var valAt = stateText.indexOf("val=");
+            if (valAt >= 0) {
+                braceText = stateText.substring(valAt + 4);
+            }
+            var slots = splitUserDataBraceSlots(braceText);
+            if (slotIndex < 0 || slotIndex >= slots.length) {
+                return "";
+            }
+            var token = slots[slotIndex];
+            if (!token || token.toUpperCase() === "NULL") {
+                return "";
+            }
+            if (token.charAt(0) === "\"" && token.charAt(token.length - 1) === "\"") {
+                token = token.substring(1, token.length - 1);
+            }
+            var fields = Array.isArray(device.userDataFields) ? device.userDataFields : [];
+            var fieldType = fields[slotIndex] && fields[slotIndex].type
+                ? fields[slotIndex].type
+                : "string";
+            if (fieldType === "bool") {
+                var lower = token.toLowerCase();
+                if (lower === "true" || lower === "on") {
+                    return "ON";
+                }
+                if (lower === "false" || lower === "off") {
+                    return "OFF";
+                }
+            }
+            return token;
+        }
+
+        function userDataFieldValueFromState(device, fieldName) {
+            if (!device || !fieldName) {
+                return "";
+            }
+            var fields = Array.isArray(device.userDataFields) ? device.userDataFields : [];
+            var fieldIndex = -1;
+            var index;
+            for (index = 0; index < fields.length; index++) {
+                if (fields[index] && String(fields[index].name || "").trim() === fieldName) {
+                    fieldIndex = index;
+                    break;
+                }
+            }
+            if (fieldIndex < 0) {
+                return "";
+            }
+            return userDataSlotDisplayToken(device, fieldIndex);
+        }
+
         function bindingResolvedState(device, binding) {
             var param = bindingParamId(binding);
             if (param === "battery") {
@@ -463,6 +572,15 @@
                 if (coveringEntry && coveringEntry.position) {
                     return String(coveringEntry.position);
                 }
+            }
+            if (device && device.type === "userData") {
+                if (param === "custom") {
+                    return userDataBraceStateText(device);
+                }
+                if (!param || param === "status") {
+                    return userDataSlotDisplayToken(device, 0);
+                }
+                return userDataFieldValueFromState(device, param);
             }
             if (isMeasurementDeviceType(device && device.type ? device.type : "")) {
                 return measurementStateForBinding(device, binding);

@@ -863,6 +863,49 @@ html, body {
     display: none !important;
 }
 
+#deviceUserDataFieldsTable td {
+    padding: 0.25rem 0.45rem;
+}
+
+#deviceUserDataFieldsTable .user-data-field-name,
+#deviceUserDataFieldsTable .user-data-field-type {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    font-family: inherit;
+    font-size: 0.875rem;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+
+#deviceUserDataFieldsTable .user-data-field-name {
+    min-height: 33px;
+    padding: 0.3rem 0.55rem;
+}
+
+#deviceUserDataFieldsTable .user-data-field-type {
+    /* 3/4 of the usual 44px dialog select height */
+    min-height: 33px;
+    height: 33px;
+    padding: 0.2rem 0.45rem;
+    appearance: menulist;
+    -webkit-appearance: menulist;
+}
+
+#deviceUserDataFieldsSection #deviceUserDataFieldAddBtn {
+    background: var(--surface);
+    color: var(--text);
+    border-color: var(--border);
+}
+
+#deviceUserDataFieldsSection #deviceUserDataFieldAddBtn:hover:not(:disabled) {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
 #deviceMqttGroup .field-inline {
     flex-direction: row;
     align-items: center;
@@ -924,7 +967,7 @@ html, body {
     grid-row: auto;
     background: var(--surface);
     color: var(--text);
-    border-color: var(--border);
+    border: 1px solid var(--border);
     opacity: 1;
 }
 

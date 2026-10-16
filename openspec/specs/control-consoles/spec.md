@@ -53,7 +53,7 @@ Each widget MUST have a viewport of `vertical` (default), `grid`, or `composite`
 - **THEN** view mode stacks those three bindings vertically (legacy horizontal is treated as vertical)
 
 ### Requirement: Device binding parameter selection
-A device binding (not an automation binding) MUST allow selecting the displayed or commanded parameter using the same fields and dependent behavior as automation “device to trigger”: registered device, channel when multi-channel, param from the device’s parameter list, and when param is `custom`, cluster and attrId (hex). Missing param on load MUST default to the current channel/status behavior used today for that device class. Automation bindings MUST NOT require these parameter fields.
+A device binding (not an automation binding) MUST allow selecting the displayed or commanded parameter using the same fields and dependent behavior as automation “device to trigger”: registered device, channel when multi-channel, param from the device’s parameter list, and when param is `custom`, cluster and attrId (hex). For a device with type `userData`, the param list MUST be the logical names from that device’s `userDataFields` (schema order) plus `custom`. Missing param on load MUST default to the current channel/status behavior used today for that device class; for `userData` with a non-empty schema and missing param, the host MAY default to the first field name. Automation bindings MUST NOT require these parameter fields.
 
 #### Scenario: Custom attribute binding
 - **WHEN** the editor saves a device binding with param `custom`, cluster, and attrId
@@ -62,6 +62,10 @@ A device binding (not an automation binding) MUST allow selecting the displayed 
 #### Scenario: Default param omitted
 - **WHEN** an older console binding has ieee and channel but no param
 - **THEN** the host still loads it and view mode behaves as before this change
+
+#### Scenario: User data field dropdown
+- **WHEN** the editor binds a `userData` device whose schema includes `temp` and `label`
+- **THEN** the param control lists those names and Save can store param `temp`
 
 ### Requirement: Numeric binding view style and gauge
 For a device binding whose selected parameter is numeric, the binding MUST support view style `default` (current text/control presentation) or `gauge`. Numeric parameters MUST include: `sensorValue` for Measurement-class device types (at least temperature, pressure, humidity, illuminance, flow, metering, and electrical measurement), `battery`, `position`, `lightLevel`, and `custom` when the operator intends a numeric attribute. Missing view style MUST behave as `default`. When view style is `gauge`, the binding MUST store gauge type `arc` (default) or `linear`, numeric min and max, and an ordered list of color ranges. Each range MUST have a top limit and a color; the bottom of the first range MUST be the gauge min; each later range’s bottom MUST be the previous range’s top. Non-numeric bindings (On/Off status, covering move status, automation) MUST ignore gauge settings and keep their existing controls.
