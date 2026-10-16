@@ -121,23 +121,58 @@ const char *ConsoleStore::findJsonObjectEnd(const char *objectStart) {
 }
 
 uint8_t ConsoleStore::parseViewportId(const char *text) {
-    if (text != nullptr && strcmp(text, "horizontal") == 0) {
-        return CONSOLE_VIEWPORT_HORIZONTAL;
-    }
     if (text != nullptr && strcmp(text, "grid") == 0) {
         return CONSOLE_VIEWPORT_GRID;
     }
+    if (text != nullptr && strcmp(text, "composite") == 0) {
+        return CONSOLE_VIEWPORT_COMPOSITE;
+    }
+    // Legacy "horizontal" and unknown values load as vertical.
     return CONSOLE_VIEWPORT_VERTICAL;
 }
 
 const char *ConsoleStore::viewportJsonId(uint8_t viewport) {
-    if (viewport == CONSOLE_VIEWPORT_HORIZONTAL) {
-        return "horizontal";
-    }
     if (viewport == CONSOLE_VIEWPORT_GRID) {
         return "grid";
     }
+    if (viewport == CONSOLE_VIEWPORT_COMPOSITE) {
+        return "composite";
+    }
     return "vertical";
+}
+
+uint8_t ConsoleStore::parseSizeUnitId(const char *text) {
+    if (text != nullptr && strcmp(text, "cm") == 0) {
+        return CONSOLE_SIZE_UNIT_CM;
+    }
+    return CONSOLE_SIZE_UNIT_U;
+}
+
+const char *ConsoleStore::sizeUnitJsonId(uint8_t sizeUnit) {
+    if (sizeUnit == CONSOLE_SIZE_UNIT_CM) {
+        return "cm";
+    }
+    return "u";
+}
+
+uint8_t ConsoleStore::parseCellContentId(const char *text) {
+    if (text != nullptr && strcmp(text, "text") == 0) {
+        return CONSOLE_CELL_CONTENT_TEXT;
+    }
+    if (text != nullptr && strcmp(text, "device") == 0) {
+        return CONSOLE_CELL_CONTENT_DEVICE;
+    }
+    return CONSOLE_CELL_CONTENT_EMPTY;
+}
+
+const char *ConsoleStore::cellContentJsonId(uint8_t content) {
+    if (content == CONSOLE_CELL_CONTENT_TEXT) {
+        return "text";
+    }
+    if (content == CONSOLE_CELL_CONTENT_DEVICE) {
+        return "device";
+    }
+    return "empty";
 }
 
 uint8_t ConsoleStore::parseViewStyleId(const char *text) {
@@ -275,11 +310,37 @@ const char *ConsoleStore::gaugeTypeJsonId(uint8_t gaugeType) {
     return "arc";
 }
 
+void ConsoleStore::freeCompositeCellList(ConsoleCompositeCell *&listHead) {
+    while (listHead != nullptr) {
+        ConsoleCompositeCell *next = listHead->next;
+        free(listHead->text);
+        if (listHead->binding != nullptr) {
+            ConsoleBinding *binding = listHead->binding;
+            listHead->binding = nullptr;
+            freeBindingList(binding);
+        }
+        free(listHead);
+        listHead = next;
+    }
+    listHead = nullptr;
+}
+
+void ConsoleStore::freeCompositeRowList(ConsoleCompositeRow *&listHead) {
+    while (listHead != nullptr) {
+        ConsoleCompositeRow *next = listHead->next;
+        freeCompositeCellList(listHead->cells);
+        free(listHead);
+        listHead = next;
+    }
+    listHead = nullptr;
+}
+
 void ConsoleStore::freeWidgetList(ConsoleWidget *&listHead) {
     while (listHead != nullptr) {
         ConsoleWidget *next = listHead->next;
         free(listHead->title);
         freeBindingList(listHead->bindings);
+        freeCompositeRowList(listHead->compositeRows);
         free(listHead);
         listHead = next;
     }
@@ -742,6 +803,193 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
     return true;
 }
 
+bool ConsoleStore::parseOneBindingObject(const char *bindingObjectJson, ConsoleBinding **outBinding) {
+    if (outBinding == nullptr || bindingObjectJson == nullptr) {
+        return false;
+    }
+    *outBinding = nullptr;
+    String wrapper = "{\"devices\":[";
+    wrapper += bindingObjectJson;
+    wrapper += "]}";
+    ConsoleBinding *list = nullptr;
+    if (!parseBindings(wrapper.c_str(), &list)) {
+        return false;
+    }
+    if (list == nullptr) {
+        return false;
+    }
+    *outBinding = list;
+    if (list->next != nullptr) {
+        freeBindingList(list->next);
+        list->next = nullptr;
+    }
+    return true;
+}
+
+bool ConsoleStore::parseCompositeRows(const char *widgetJson, ConsoleCompositeRow **outRows) {
+    if (outRows == nullptr) {
+        return false;
+    }
+    *outRows = nullptr;
+    String rowsJson;
+    if (!extractJsonKeyedSlice(widgetJson, "compositeRows", '[', rowsJson)) {
+        return true;
+    }
+    ConsoleCompositeRow *rowTail = nullptr;
+    int rowCount = 0;
+    const char *cursor = rowsJson.c_str();
+    while (cursor != nullptr && *cursor != '\0') {
+        const char *objectStart = strchr(cursor, '{');
+        if (objectStart == nullptr) {
+            break;
+        }
+        const char *objectEnd = findJsonObjectEnd(objectStart);
+        if (objectEnd == nullptr) {
+            freeCompositeRowList(*outRows);
+            return false;
+        }
+        if (rowCount >= CONSOLE_COMPOSITE_ROWS_MAX) {
+            freeCompositeRowList(*outRows);
+            return false;
+        }
+        String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
+        if (!heapAllowsAllocation(sizeof(ConsoleCompositeRow))) {
+            freeCompositeRowList(*outRows);
+            return false;
+        }
+        ConsoleCompositeRow *row = (ConsoleCompositeRow *)malloc(sizeof(ConsoleCompositeRow));
+        if (row == nullptr) {
+            freeCompositeRowList(*outRows);
+            return false;
+        }
+        memset(row, 0, sizeof(*row));
+        row->height = 1.0f;
+        row->heightUnit = CONSOLE_SIZE_UNIT_U;
+        double heightValue = 1.0;
+        String heightUnitText;
+        extractJsonDouble(object.c_str(), "height", heightValue);
+        extractJsonString(object.c_str(), "heightUnit", heightUnitText);
+        if (heightValue <= 0.0 || heightValue != heightValue) {
+            heightValue = 1.0;
+        }
+        row->height = (float)heightValue;
+        row->heightUnit = parseSizeUnitId(heightUnitText.c_str());
+        String cellsJson;
+        ConsoleCompositeCell *cellTail = nullptr;
+        int cellCount = 0;
+        if (extractJsonKeyedSlice(object.c_str(), "cells", '[', cellsJson)) {
+            const char *cellCursor = cellsJson.c_str();
+            while (cellCursor != nullptr && *cellCursor != '\0') {
+                const char *cellStart = strchr(cellCursor, '{');
+                if (cellStart == nullptr) {
+                    break;
+                }
+                const char *cellEnd = findJsonObjectEnd(cellStart);
+                if (cellEnd == nullptr) {
+                    freeCompositeCellList(row->cells);
+                    free(row);
+                    freeCompositeRowList(*outRows);
+                    return false;
+                }
+                if (cellCount >= CONSOLE_COMPOSITE_CELLS_MAX) {
+                    freeCompositeCellList(row->cells);
+                    free(row);
+                    freeCompositeRowList(*outRows);
+                    return false;
+                }
+                String cellObject = String(cellStart).substring(0, (unsigned int)(cellEnd - cellStart + 1));
+                if (!heapAllowsAllocation(sizeof(ConsoleCompositeCell))) {
+                    freeCompositeCellList(row->cells);
+                    free(row);
+                    freeCompositeRowList(*outRows);
+                    return false;
+                }
+                ConsoleCompositeCell *cell = (ConsoleCompositeCell *)malloc(sizeof(ConsoleCompositeCell));
+                if (cell == nullptr) {
+                    freeCompositeCellList(row->cells);
+                    free(row);
+                    freeCompositeRowList(*outRows);
+                    return false;
+                }
+                memset(cell, 0, sizeof(*cell));
+                cell->width = 1.0f;
+                cell->widthUnit = CONSOLE_SIZE_UNIT_U;
+                cell->content = CONSOLE_CELL_CONTENT_EMPTY;
+                cell->alignH = CONSOLE_ICON_ALIGN_CENTER;
+                cell->alignV = CONSOLE_ALIGN_V_CENTER;
+                double widthValue = 1.0;
+                String widthUnitText;
+                String contentText;
+                String cellText;
+                String alignHText;
+                String alignVText;
+                bool contour = false;
+                extractJsonDouble(cellObject.c_str(), "width", widthValue);
+                extractJsonString(cellObject.c_str(), "widthUnit", widthUnitText);
+                extractJsonString(cellObject.c_str(), "content", contentText);
+                extractJsonString(cellObject.c_str(), "text", cellText);
+                extractJsonString(cellObject.c_str(), "alignH", alignHText);
+                extractJsonString(cellObject.c_str(), "alignV", alignVText);
+                extractJsonBool(cellObject.c_str(), "contour", contour);
+                if (widthValue <= 0.0 || widthValue != widthValue) {
+                    widthValue = 1.0;
+                }
+                cell->width = (float)widthValue;
+                cell->widthUnit = parseSizeUnitId(widthUnitText.c_str());
+                cell->contour = contour;
+                cell->content = parseCellContentId(contentText.c_str());
+                cell->alignH = parseIconAlignId(alignHText.c_str());
+                cell->alignV = parseAlignVId(alignVText.c_str());
+                if (cell->content == CONSOLE_CELL_CONTENT_TEXT) {
+                    cell->text = duplicateBoundedString(cellText.c_str(), CONSOLE_COMPOSITE_TEXT_MAX - 1);
+                    if (cell->text == nullptr) {
+                        free(cell);
+                        freeCompositeCellList(row->cells);
+                        free(row);
+                        freeCompositeRowList(*outRows);
+                        return false;
+                    }
+                } else if (cell->content == CONSOLE_CELL_CONTENT_DEVICE) {
+                    String bindingJson;
+                    if (!extractJsonKeyedSlice(cellObject.c_str(), "binding", '{', bindingJson)) {
+                        free(cell);
+                        freeCompositeCellList(row->cells);
+                        free(row);
+                        freeCompositeRowList(*outRows);
+                        return false;
+                    }
+                    if (!parseOneBindingObject(bindingJson.c_str(), &cell->binding) || cell->binding == nullptr) {
+                        free(cell);
+                        freeCompositeCellList(row->cells);
+                        free(row);
+                        freeCompositeRowList(*outRows);
+                        return false;
+                    }
+                }
+                cell->next = nullptr;
+                if (cellTail == nullptr) {
+                    row->cells = cell;
+                } else {
+                    cellTail->next = cell;
+                }
+                cellTail = cell;
+                cellCount++;
+                cellCursor = cellEnd + 1;
+            }
+        }
+        row->next = nullptr;
+        if (rowTail == nullptr) {
+            *outRows = row;
+        } else {
+            rowTail->next = row;
+        }
+        rowTail = row;
+        rowCount++;
+        cursor = objectEnd + 1;
+    }
+    return true;
+}
+
 bool ConsoleStore::parseWidgets(const char *objectJson, ConsoleWidget **outWidgets) {
     if (outWidgets == nullptr) {
         return false;
@@ -758,47 +1006,19 @@ bool ConsoleStore::parseWidgets(const char *objectJson, ConsoleWidget **outWidge
         if (objectStart == nullptr) {
             break;
         }
-        int depth = 0;
-        bool inString = false;
-        bool escape = false;
-        const char *objectEnd = nullptr;
-        for (const char *scan = objectStart; *scan != '\0'; scan++) {
-            const char character = *scan;
-            if (inString) {
-                if (escape) {
-                    escape = false;
-                    continue;
-                }
-                if (character == '\\') {
-                    escape = true;
-                    continue;
-                }
-                if (character == '"') {
-                    inString = false;
-                }
-                continue;
-            }
-            if (character == '"') {
-                inString = true;
-                continue;
-            }
-            if (character == '{') {
-                depth++;
-                continue;
-            }
-            if (character == '}') {
-                depth--;
-                if (depth == 0) {
-                    objectEnd = scan;
-                    break;
-                }
-            }
-        }
+        const char *objectEnd = findJsonObjectEnd(objectStart);
         if (objectEnd == nullptr) {
             freeWidgetList(*outWidgets);
             return false;
         }
         String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
+        // Root-depth only: nested devices[].spacer must not mark the whole widget a spacer.
+        bool isSpacer = false;
+        extractJsonBoolRoot(object.c_str(), "spacer", isSpacer);
+        if (isSpacer) {
+            cursor = objectEnd + 1;
+            continue;
+        }
         if (!heapAllowsAllocation(sizeof(ConsoleWidget))) {
             freeWidgetList(*outWidgets);
             return false;
@@ -812,16 +1032,23 @@ bool ConsoleStore::parseWidgets(const char *objectJson, ConsoleWidget **outWidge
         widget->viewport = CONSOLE_VIEWPORT_VERTICAL;
         widget->gridColumns = CONSOLE_WIDGET_GRID_DEFAULT;
         widget->gridRows = CONSOLE_WIDGET_GRID_DEFAULT;
+        widget->fullWidth = false;
+        widget->showTitle = true;
         String title;
         String viewportText;
         int gridColumns = CONSOLE_WIDGET_GRID_DEFAULT;
         int gridRows = CONSOLE_WIDGET_GRID_DEFAULT;
-        extractJsonBool(object.c_str(), "spacer", widget->isSpacer);
-        extractJsonString(object.c_str(), "title", title);
-        extractJsonBool(object.c_str(), "showGroupOnOff", widget->showGroupOnOff);
-        extractJsonString(object.c_str(), "viewport", viewportText);
-        extractJsonInt(object.c_str(), "gridColumns", gridColumns);
-        extractJsonInt(object.c_str(), "gridRows", gridRows);
+        bool fullWidth = false;
+        bool showTitle = true;
+        extractJsonStringRoot(object.c_str(), "title", title);
+        extractJsonBoolRoot(object.c_str(), "showGroupOnOff", widget->showGroupOnOff);
+        extractJsonBoolRoot(object.c_str(), "fullWidth", fullWidth);
+        if (!extractJsonBoolRoot(object.c_str(), "showTitle", showTitle)) {
+            showTitle = true;
+        }
+        extractJsonStringRoot(object.c_str(), "viewport", viewportText);
+        extractJsonIntRoot(object.c_str(), "gridColumns", gridColumns);
+        extractJsonIntRoot(object.c_str(), "gridRows", gridRows);
         if (gridColumns < 1) {
             gridColumns = CONSOLE_WIDGET_GRID_DEFAULT;
         }
@@ -837,18 +1064,22 @@ bool ConsoleStore::parseWidgets(const char *objectJson, ConsoleWidget **outWidge
         widget->viewport = parseViewportId(viewportText.c_str());
         widget->gridColumns = (uint8_t)gridColumns;
         widget->gridRows = (uint8_t)gridRows;
-        if (widget->isSpacer) {
-            widget->showGroupOnOff = false;
-            widget->viewport = CONSOLE_VIEWPORT_VERTICAL;
-            title = "";
-        }
+        widget->fullWidth = fullWidth;
+        widget->showTitle = showTitle;
+        widget->isSpacer = false;
         widget->title = duplicateBoundedString(title.c_str(), CONSOLE_WIDGET_TITLE_MAX - 1);
         if (widget->title == nullptr) {
             free(widget);
             freeWidgetList(*outWidgets);
             return false;
         }
-        if (widget->isSpacer) {
+        if (widget->viewport == CONSOLE_VIEWPORT_COMPOSITE) {
+            if (!parseCompositeRows(object.c_str(), &widget->compositeRows)) {
+                free(widget->title);
+                free(widget);
+                freeWidgetList(*outWidgets);
+                return false;
+            }
             widget->bindings = nullptr;
         } else if (!parseBindings(object.c_str(), &widget->bindings)) {
             free(widget->title);
@@ -1142,6 +1373,134 @@ ConsoleWriteResult ConsoleStore::deleteConsole(const char *consoleId) {
     return ConsoleWriteNotFound;
 }
 
+void ConsoleStore::appendOneBindingJson(String &json, const ConsoleBinding *binding) {
+    if (binding == nullptr) {
+        return;
+    }
+    json += "{";
+    if (binding->isSpacer) {
+        json += "\"spacer\":true";
+        if (binding->title != nullptr && binding->title[0] != '\0') {
+            json += ",\"text\":\"";
+            appendJsonEscaped(json, binding->title, CONSOLE_BINDING_TITLE_MAX);
+            json += "\"";
+        }
+        if (binding->alignH != CONSOLE_ICON_ALIGN_CENTER) {
+            json += ",\"alignH\":\"";
+            json += iconAlignJsonId(binding->alignH);
+            json += "\"";
+        }
+        if (binding->alignV != CONSOLE_ALIGN_V_CENTER) {
+            json += ",\"alignV\":\"";
+            json += alignVJsonId(binding->alignV);
+            json += "\"";
+        }
+        if (binding->fontScale > 0.0f && binding->fontScale != 1.0f) {
+            json += ",\"fontScale\":";
+            json += String(binding->fontScale, 4);
+        }
+    } else if (binding->automationName != nullptr && binding->automationName[0] != '\0') {
+        json += "\"automation\":\"";
+        appendJsonEscaped(json, binding->automationName, AUTOMATION_NAME_MAX);
+        json += "\",\"title\":\"";
+        appendJsonEscaped(json, binding->title != nullptr ? binding->title : "", CONSOLE_BINDING_TITLE_MAX);
+        json += "\"";
+        if (binding->viewStyle == CONSOLE_VIEW_STYLE_ICON) {
+            json += ",\"viewStyle\":\"icon\"";
+            if (binding->icon != nullptr && binding->icon[0] != '\0') {
+                json += ",\"icon\":\"";
+                appendJsonEscaped(json, binding->icon, CONSOLE_ICON_MAX);
+                json += "\"";
+            }
+        }
+        appendBindingLayoutJson(json, binding);
+    } else {
+        json += "\"ieee\":\"";
+        appendJsonEscaped(json, binding->ieeeText != nullptr ? binding->ieeeText : "", IEEE_TEXT_MAX);
+        json += "\",\"channel\":";
+        json += String(binding->channel);
+        json += ",\"title\":\"";
+        appendJsonEscaped(json, binding->title != nullptr ? binding->title : "", CONSOLE_BINDING_TITLE_MAX);
+        json += "\",\"unit\":\"";
+        appendJsonEscaped(json, binding->unit != nullptr ? binding->unit : "", CONSOLE_UNIT_MAX);
+        json += "\",\"decimals\":";
+        json += String((int)binding->decimals);
+        if (binding->param != nullptr && binding->param[0] != '\0') {
+            json += ",\"param\":\"";
+            appendJsonEscaped(json, binding->param, CONSOLE_PARAM_MAX);
+            json += "\"";
+        }
+        if (binding->cluster > 0) {
+            json += ",\"cluster\":";
+            json += String((unsigned int)binding->cluster);
+        }
+        if (binding->attrId >= 0) {
+            json += ",\"attrId\":";
+            json += String((long)binding->attrId);
+        }
+        if (binding->viewStyle == CONSOLE_VIEW_STYLE_GAUGE) {
+            json += ",\"viewStyle\":\"gauge\"";
+            appendGaugeJson(json, binding);
+        } else if (binding->viewStyle == CONSOLE_VIEW_STYLE_ICON) {
+            json += ",\"viewStyle\":\"icon\"";
+            if (binding->icon != nullptr && binding->icon[0] != '\0') {
+                json += ",\"icon\":\"";
+                appendJsonEscaped(json, binding->icon, CONSOLE_ICON_MAX);
+                json += "\"";
+            }
+        }
+        appendBindingLayoutJson(json, binding);
+    }
+    json += "}";
+}
+
+void ConsoleStore::appendCompositeRowsJson(String &json, const ConsoleCompositeRow *rows) {
+    json += ",\"compositeRows\":[";
+    bool firstRow = true;
+    for (const ConsoleCompositeRow *row = rows; row != nullptr; row = row->next) {
+        if (!firstRow) {
+            json += ",";
+        }
+        firstRow = false;
+        json += "{\"height\":";
+        json += String(row->height, 4);
+        json += ",\"heightUnit\":\"";
+        json += sizeUnitJsonId(row->heightUnit);
+        json += "\",\"cells\":[";
+        bool firstCell = true;
+        for (const ConsoleCompositeCell *cell = row->cells; cell != nullptr; cell = cell->next) {
+            if (!firstCell) {
+                json += ",";
+            }
+            firstCell = false;
+            json += "{\"width\":";
+            json += String(cell->width, 4);
+            json += ",\"widthUnit\":\"";
+            json += sizeUnitJsonId(cell->widthUnit);
+            json += "\",\"contour\":";
+            json += cell->contour ? "true" : "false";
+            json += ",\"alignH\":\"";
+            json += iconAlignJsonId(cell->alignH);
+            json += "\",\"alignV\":\"";
+            json += alignVJsonId(cell->alignV);
+            json += "\",\"content\":\"";
+            json += cellContentJsonId(cell->content);
+            json += "\"";
+            if (cell->content == CONSOLE_CELL_CONTENT_TEXT) {
+                json += ",\"text\":\"";
+                appendJsonEscaped(json, cell->text != nullptr ? cell->text : "", CONSOLE_COMPOSITE_TEXT_MAX);
+                json += "\"";
+            } else if (cell->content == CONSOLE_CELL_CONTENT_DEVICE && cell->binding != nullptr) {
+                json += ",\"binding\":";
+                appendOneBindingJson(json, cell->binding);
+            }
+            json += "}";
+        }
+        json += "]}";
+    }
+    json += "]";
+}
+
 void ConsoleStore::appendConsoleFull(String &json, const ConsoleRecord *console) {
     json += "{\"id\":\"";
     appendJsonEscaped(json, console->id, sizeof(console->id));
@@ -1154,6 +1513,9 @@ void ConsoleStore::appendConsoleFull(String &json, const ConsoleRecord *console)
     json += ",\"widgets\":[";
     bool firstWidget = true;
     for (const ConsoleWidget *widget = console->widgets; widget != nullptr; widget = widget->next) {
+        if (widget->isSpacer) {
+            continue;
+        }
         if (!firstWidget) {
             json += ",";
         }
@@ -1162,105 +1524,36 @@ void ConsoleStore::appendConsoleFull(String &json, const ConsoleRecord *console)
         appendJsonEscaped(json, widget->title != nullptr ? widget->title : "", CONSOLE_WIDGET_TITLE_MAX);
         json += "\",\"showGroupOnOff\":";
         json += widget->showGroupOnOff ? "true" : "false";
-        json += ",\"spacer\":";
-        json += widget->isSpacer ? "true" : "false";
-        if (!widget->isSpacer) {
-            json += ",\"viewport\":\"";
-            json += viewportJsonId(widget->viewport);
-            json += "\"";
-            if (widget->viewport == CONSOLE_VIEWPORT_GRID) {
-                json += ",\"gridColumns\":";
-                json += String((unsigned int)(widget->gridColumns > 0 ? widget->gridColumns : CONSOLE_WIDGET_GRID_DEFAULT));
-                json += ",\"gridRows\":";
-                json += String((unsigned int)(widget->gridRows > 0 ? widget->gridRows : CONSOLE_WIDGET_GRID_DEFAULT));
-            }
+        if (!widget->showTitle) {
+            json += ",\"showTitle\":false";
         }
-        json += ",\"devices\":[";
-        bool firstBinding = true;
-        if (!widget->isSpacer) {
+        json += ",\"fullWidth\":";
+        json += widget->fullWidth ? "true" : "false";
+        json += ",\"viewport\":\"";
+        json += viewportJsonId(widget->viewport);
+        json += "\"";
+        if (widget->viewport == CONSOLE_VIEWPORT_GRID) {
+            json += ",\"gridColumns\":";
+            json += String((unsigned int)(widget->gridColumns > 0 ? widget->gridColumns : CONSOLE_WIDGET_GRID_DEFAULT));
+            json += ",\"gridRows\":";
+            json += String((unsigned int)(widget->gridRows > 0 ? widget->gridRows : CONSOLE_WIDGET_GRID_DEFAULT));
+        }
+        if (widget->viewport == CONSOLE_VIEWPORT_COMPOSITE) {
+            appendCompositeRowsJson(json, widget->compositeRows);
+            json += ",\"devices\":[]";
+        } else {
+            json += ",\"devices\":[";
+            bool firstBinding = true;
             for (const ConsoleBinding *binding = widget->bindings; binding != nullptr; binding = binding->next) {
                 if (!firstBinding) {
                     json += ",";
                 }
                 firstBinding = false;
-                json += "{";
-                if (binding->isSpacer) {
-                    json += "\"spacer\":true";
-                    if (binding->title != nullptr && binding->title[0] != '\0') {
-                        json += ",\"text\":\"";
-                        appendJsonEscaped(json, binding->title, CONSOLE_BINDING_TITLE_MAX);
-                        json += "\"";
-                    }
-                    if (binding->alignH != CONSOLE_ICON_ALIGN_CENTER) {
-                        json += ",\"alignH\":\"";
-                        json += iconAlignJsonId(binding->alignH);
-                        json += "\"";
-                    }
-                    if (binding->alignV != CONSOLE_ALIGN_V_CENTER) {
-                        json += ",\"alignV\":\"";
-                        json += alignVJsonId(binding->alignV);
-                        json += "\"";
-                    }
-                    if (binding->fontScale > 0.0f && binding->fontScale != 1.0f) {
-                        json += ",\"fontScale\":";
-                        json += String(binding->fontScale, 4);
-                    }
-                } else if (binding->automationName != nullptr && binding->automationName[0] != '\0') {
-                    json += "\"automation\":\"";
-                    appendJsonEscaped(json, binding->automationName, AUTOMATION_NAME_MAX);
-                    json += "\",\"title\":\"";
-                    appendJsonEscaped(json, binding->title != nullptr ? binding->title : "", CONSOLE_BINDING_TITLE_MAX);
-                    json += "\"";
-                    if (binding->viewStyle == CONSOLE_VIEW_STYLE_ICON) {
-                        json += ",\"viewStyle\":\"icon\"";
-                        if (binding->icon != nullptr && binding->icon[0] != '\0') {
-                            json += ",\"icon\":\"";
-                            appendJsonEscaped(json, binding->icon, CONSOLE_ICON_MAX);
-                            json += "\"";
-                        }
-                    }
-                    appendBindingLayoutJson(json, binding);
-                } else {
-                    json += "\"ieee\":\"";
-                    appendJsonEscaped(json, binding->ieeeText != nullptr ? binding->ieeeText : "", IEEE_TEXT_MAX);
-                    json += "\",\"channel\":";
-                    json += String(binding->channel);
-                    json += ",\"title\":\"";
-                    appendJsonEscaped(json, binding->title != nullptr ? binding->title : "", CONSOLE_BINDING_TITLE_MAX);
-                    json += "\",\"unit\":\"";
-                    appendJsonEscaped(json, binding->unit != nullptr ? binding->unit : "", CONSOLE_UNIT_MAX);
-                    json += "\",\"decimals\":";
-                    json += String((int)binding->decimals);
-                    if (binding->param != nullptr && binding->param[0] != '\0') {
-                        json += ",\"param\":\"";
-                        appendJsonEscaped(json, binding->param, CONSOLE_PARAM_MAX);
-                        json += "\"";
-                    }
-                    if (binding->cluster > 0) {
-                        json += ",\"cluster\":";
-                        json += String((unsigned int)binding->cluster);
-                    }
-                    if (binding->attrId >= 0) {
-                        json += ",\"attrId\":";
-                        json += String((long)binding->attrId);
-                    }
-                    if (binding->viewStyle == CONSOLE_VIEW_STYLE_GAUGE) {
-                        json += ",\"viewStyle\":\"gauge\"";
-                        appendGaugeJson(json, binding);
-                    } else if (binding->viewStyle == CONSOLE_VIEW_STYLE_ICON) {
-                        json += ",\"viewStyle\":\"icon\"";
-                        if (binding->icon != nullptr && binding->icon[0] != '\0') {
-                            json += ",\"icon\":\"";
-                            appendJsonEscaped(json, binding->icon, CONSOLE_ICON_MAX);
-                            json += "\"";
-                        }
-                    }
-                    appendBindingLayoutJson(json, binding);
-                }
-                json += "}";
+                appendOneBindingJson(json, binding);
             }
+            json += "]";
         }
-        json += "]}";
+        json += "}";
     }
     json += "]}";
 }

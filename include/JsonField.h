@@ -25,6 +25,61 @@ inline void appendJsonEscaped(String &json, const char *value, size_t maxLength 
     }
 }
 
+// Find `"key"` only at object nesting depth 1 (root object's own fields).
+// Prevents nested keys (e.g. devices[].spacer) from shadowing parent fields.
+inline const char *findJsonKeyAtRootDepth(const char *json, const char *key) {
+    if (json == nullptr || key == nullptr || key[0] == '\0') {
+        return nullptr;
+    }
+    const size_t keyLength = strlen(key);
+    int depth = 0;
+    bool inString = false;
+    bool escape = false;
+    for (const char *scan = json; *scan != '\0'; scan++) {
+        const char character = *scan;
+        if (inString) {
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (character == '\\') {
+                escape = true;
+                continue;
+            }
+            if (character == '"') {
+                inString = false;
+            }
+            continue;
+        }
+        if (character == '"') {
+            if (depth == 1) {
+                if (strncmp(scan + 1, key, keyLength) == 0 && scan[1 + keyLength] == '"') {
+                    const char *afterKey = scan + 1 + keyLength + 1;
+                    while (*afterKey == ' ' || *afterKey == '\t' || *afterKey == '\n' || *afterKey == '\r') {
+                        afterKey++;
+                    }
+                    if (*afterKey == ':') {
+                        return scan;
+                    }
+                }
+            }
+            inString = true;
+            continue;
+        }
+        if (character == '{' || character == '[') {
+            depth++;
+            continue;
+        }
+        if (character == '}' || character == ']') {
+            depth--;
+            if (depth < 0) {
+                depth = 0;
+            }
+        }
+    }
+    return nullptr;
+}
+
 inline bool extractJsonString(const char *json, const char *key, String &out) {
     String pattern = String("\"") + key + "\"";
     const char *found = strstr(json, pattern.c_str());
@@ -32,6 +87,28 @@ inline bool extractJsonString(const char *json, const char *key, String &out) {
         return false;
     }
     const char *colon = strchr(found + pattern.length(), ':');
+    if (colon == nullptr) {
+        return false;
+    }
+    const char *quote = strchr(colon, '"');
+    if (quote == nullptr) {
+        return false;
+    }
+    quote++;
+    const char *end = strchr(quote, '"');
+    if (end == nullptr) {
+        return false;
+    }
+    out = String(quote).substring(0, (unsigned int)(end - quote));
+    return true;
+}
+
+inline bool extractJsonStringRoot(const char *json, const char *key, String &out) {
+    const char *found = findJsonKeyAtRootDepth(json, key);
+    if (found == nullptr) {
+        return false;
+    }
+    const char *colon = strchr(found, ':');
     if (colon == nullptr) {
         return false;
     }
@@ -73,6 +150,30 @@ inline bool extractJsonBool(const char *json, const char *key, bool &out) {
     return false;
 }
 
+inline bool extractJsonBoolRoot(const char *json, const char *key, bool &out) {
+    const char *found = findJsonKeyAtRootDepth(json, key);
+    if (found == nullptr) {
+        return false;
+    }
+    const char *colon = strchr(found, ':');
+    if (colon == nullptr) {
+        return false;
+    }
+    colon++;
+    while (*colon == ' ' || *colon == '\t' || *colon == '\n' || *colon == '\r') {
+        colon++;
+    }
+    if (strncmp(colon, "true", 4) == 0) {
+        out = true;
+        return true;
+    }
+    if (strncmp(colon, "false", 5) == 0) {
+        out = false;
+        return true;
+    }
+    return false;
+}
+
 inline bool extractJsonInt(const char *json, const char *key, int &out) {
     String pattern = String("\"") + key + "\"";
     const char *found = strstr(json, pattern.c_str());
@@ -85,6 +186,29 @@ inline bool extractJsonInt(const char *json, const char *key, int &out) {
     }
     colon++;
     while (*colon == ' ' || *colon == '\t') {
+        colon++;
+    }
+    if (*colon == '"') {
+        colon++;
+    }
+    if (*colon != '-' && (*colon < '0' || *colon > '9')) {
+        return false;
+    }
+    out = atoi(colon);
+    return true;
+}
+
+inline bool extractJsonIntRoot(const char *json, const char *key, int &out) {
+    const char *found = findJsonKeyAtRootDepth(json, key);
+    if (found == nullptr) {
+        return false;
+    }
+    const char *colon = strchr(found, ':');
+    if (colon == nullptr) {
+        return false;
+    }
+    colon++;
+    while (*colon == ' ' || *colon == '\t' || *colon == '\n' || *colon == '\r') {
         colon++;
     }
     if (*colon == '"') {

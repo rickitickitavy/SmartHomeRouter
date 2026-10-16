@@ -1302,31 +1302,617 @@ html, body {
 }
 
 .console-grid-view {
-    grid-template-columns: minmax(0, 1fr);
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    align-content: flex-start;
+    align-items: flex-start;
+    column-gap: 5mm;
+    row-gap: var(--gap);
     width: 100%;
+    max-width: 100%;
     box-sizing: border-box;
 }
 
-@container console-view (min-width: 13cm) {
-    .console-grid-view {
-        grid-template-columns: repeat(2, minmax(0, min(50%, 10cm)));
+.console-grid-view > .console-widget:not(.console-widget--full-width) {
+    flex: 0 0 auto;
+    width: min(100%, 10cm);
+    max-width: 10cm;
+    box-sizing: border-box;
+}
+
+.console-grid-view > .console-widget--full-width {
+    flex: 1 0 100%;
+    width: 100%;
+    max-width: none;
+    box-sizing: border-box;
+}
+
+/*
+ * 2+ non-full-width widgets: fixed 2-column track centered on screen.
+ * A lone widget on the last row stays in the left column (not centered alone).
+ */
+.console-grid-view.console-grid-view--multi {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 10cm));
+    justify-content: center;
+    justify-items: stretch;
+    align-content: start;
+    column-gap: 5mm;
+    row-gap: var(--gap);
+}
+
+.console-grid-view.console-grid-view--multi > .console-widget:not(.console-widget--full-width) {
+    width: 100%;
+    max-width: none;
+}
+
+.console-grid-view.console-grid-view--multi > .console-widget--full-width {
+    grid-column: 1 / -1;
+    width: 100%;
+    max-width: none;
+}
+
+@container console-view (max-width: 20.49cm) {
+    .console-grid-view.console-grid-view--multi {
+        grid-template-columns: minmax(0, 10cm);
         justify-content: start;
     }
 }
 
 @supports not (container-type: inline-size) {
-    @media (max-width: 12.99cm) {
-        .console-grid-view {
-            grid-template-columns: minmax(0, 1fr);
-        }
-    }
-
-    @media (min-width: 13cm) {
-        .console-grid-view {
-            grid-template-columns: repeat(2, minmax(0, min(50%, 10cm)));
+    @media (max-width: 20.49cm) {
+        .console-grid-view.console-grid-view--multi {
+            grid-template-columns: minmax(0, 10cm);
             justify-content: start;
         }
     }
+}
+
+.console-grid-editor-stack {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.console-widget--full-width {
+    width: 100%;
+    max-width: none;
+    box-sizing: border-box;
+}
+
+.console-composite {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    width: 100%;
+    box-sizing: border-box;
+    overflow: visible;
+}
+
+.console-composite-row {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 0.35rem;
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 0;
+    overflow: visible;
+}
+
+.console-composite-row-tools {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 0 0 auto;
+    align-items: stretch;
+    min-width: 7rem;
+    max-width: 9.5rem;
+}
+
+.console-composite-remove-row {
+    align-self: stretch;
+    white-space: nowrap;
+}
+
+.console-composite-field-line {
+    display: inline-flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.25rem;
+    margin: 0;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.console-composite-field-label {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    font-size: 0.8125rem;
+    color: var(--muted);
+}
+
+.console-composite-row-height {
+    display: inline-flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.2rem;
+    flex: 0 0 auto;
+    min-width: 0;
+    max-width: 100%;
+}
+
+.console-composite-row-height input {
+    width: 3.25rem;
+    min-height: 2rem;
+    box-sizing: border-box;
+}
+
+.console-composite-row-height select {
+    width: auto;
+    min-width: 3.5rem;
+    min-height: 2rem;
+    box-sizing: border-box;
+}
+
+.console-composite-cell-width input {
+    width: 3.25rem;
+    min-height: 2rem;
+    box-sizing: border-box;
+}
+
+.console-composite-cell-width select {
+    min-height: 2rem;
+    box-sizing: border-box;
+}
+
+.console-composite-content {
+    min-height: 2rem;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.console-composite-content,
+.console-composite-text,
+.console-composite-align select {
+    field-sizing: fixed;
+}
+
+.console-composite-cells {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 0.5rem;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: hidden;
+    overflow-y: hidden;
+}
+
+.console-composite-cells--scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+}
+
+.console-composite-cell-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    box-sizing: border-box;
+}
+
+.console-composite-cell-chrome {
+    display: flex;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 0.35rem;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.console-composite-chrome-top {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.35rem;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.console-composite-delete-cell {
+    flex: 0 0 auto;
+}
+
+.console-composite-cell-width {
+    display: flex;
+    flex-direction: row;
+    gap: 0.25rem;
+    align-items: center;
+    flex: 0 0 auto;
+    min-width: 0;
+}
+
+.console-composite-contour {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    margin: 0;
+    gap: 0.25rem;
+}
+
+.console-composite-cell {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    overflow: hidden;
+}
+
+.console-composite-cell-body {
+    box-sizing: border-box;
+    padding: 0.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    overflow: hidden;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    flex: 1 1 auto;
+}
+
+.console-composite-cell-body > .console-device-row,
+.console-composite-cell-body > .console-composite-device-preview,
+.console-composite-cell-body > .console-composite-text-view,
+.console-composite-cell-body > .console-composite-text,
+.console-composite-cell-body > .console-composite-content,
+.console-composite-cell-body > .console-composite-field-line {
+    flex: 0 1 auto;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    align-self: stretch;
+    box-sizing: border-box;
+}
+
+/*
+ * #consoleEditDialog select { width:100% } paints selects under inline labels.
+ * Composite edit chrome must size controls intrinsically and never overlap.
+ */
+#consoleEditDialog .console-composite--edit .console-composite-cells {
+    gap: 0.6rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+}
+
+#consoleEditDialog .console-composite--edit .console-composite-cell-col {
+    flex: 0 0 auto;
+    overflow: hidden;
+    min-width: 18.75rem;
+    max-width: none;
+    box-sizing: border-box;
+}
+
+#consoleEditDialog .console-composite--edit .console-composite-cell {
+    overflow: hidden;
+}
+
+#consoleEditDialog .console-composite--edit .console-composite-cell-chrome {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    gap: 0.4rem;
+}
+
+#consoleEditDialog .console-composite--edit .console-composite-chrome-top {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+#consoleEditDialog .console-composite--edit .console-composite-cell-width {
+    display: inline-flex;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: max-content;
+    max-width: none;
+}
+
+#consoleEditDialog .console-composite--edit .console-composite-cell-width input {
+    width: 3.25rem;
+    min-width: 3.25rem;
+    max-width: 3.25rem;
+    flex: 0 0 auto;
+    min-height: 2rem;
+    box-sizing: border-box;
+}
+
+#consoleEditDialog .console-composite--edit select.console-composite-width-unit,
+#consoleEditDialog .console-composite--edit select.console-composite-height-unit {
+    width: 4.25rem;
+    min-width: 4.25rem;
+    max-width: 4.25rem;
+    flex: 0 0 4.25rem;
+    min-height: 2rem;
+    padding: 0.2rem 0.25rem;
+    box-sizing: border-box;
+}
+
+#consoleEditDialog .console-composite--edit .console-composite-contour {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    margin: 0;
+}
+
+#consoleEditDialog .console-composite--edit .console-composite-align {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.55rem;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+#consoleEditDialog .console-composite--edit .console-composite-align .console-composite-field-line {
+    display: inline-flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.35rem;
+    flex: 0 0 auto;
+    width: auto;
+    min-width: max-content;
+    max-width: none;
+}
+
+#consoleEditDialog .console-composite--edit select.console-composite-align-h,
+#consoleEditDialog .console-composite--edit select.console-composite-align-v {
+    width: auto;
+    min-width: 5.75rem;
+    max-width: none;
+    flex: 0 0 auto;
+    min-height: 2rem;
+    padding: 0.2rem 0.4rem;
+    box-sizing: border-box;
+}
+
+#consoleEditDialog .console-composite--edit .console-composite-cell-body > .console-composite-field-line {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.2rem;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+}
+
+#consoleEditDialog .console-composite--edit .console-composite-cell-body > .console-composite-field-line .console-composite-content,
+#consoleEditDialog .console-composite--edit .console-composite-cell-body > .console-composite-field-line .console-composite-text {
+    width: 100%;
+    max-width: 100%;
+    flex: 0 0 auto;
+    min-width: 0;
+    min-height: 2rem;
+    box-sizing: border-box;
+}
+
+#consoleEditDialog .console-composite--edit select.console-composite-content {
+    width: 100%;
+    max-width: 100%;
+    min-height: 2rem;
+    padding: 0.2rem 0.4rem;
+    box-sizing: border-box;
+}
+
+.console-composite-cell-body > .console-device-row,
+.console-composite-cell-body > .console-composite-device-preview {
+    height: 100%;
+    min-height: 0;
+}
+
+.console-composite-device-preview .console-device-row,
+.console-composite-binding-preview {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.console-composite-binding-preview {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.35rem;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--chrome-idle);
+    min-height: 2rem;
+}
+
+.console-composite-cell-body .console-device-row--gauge {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    justify-content: center;
+}
+
+.console-composite-cell-body .console-gauge {
+    width: 100%;
+    max-width: 100%;
+    min-height: 0;
+}
+
+.console-composite-cell-body .console-gauge-arc-svg {
+    max-width: 100%;
+    width: min(100%, var(--composite-cell-w, 100%));
+    height: auto;
+}
+
+.console-composite-cell-body .console-binary-icon {
+    min-width: 0;
+    min-height: 0;
+}
+
+.console-composite-cell-body--align-h-left {
+    align-items: flex-start;
+    text-align: left;
+}
+
+.console-composite-cell-body--align-h-center {
+    align-items: center;
+    text-align: center;
+}
+
+.console-composite-cell-body--align-h-right {
+    align-items: flex-end;
+    text-align: right;
+}
+
+.console-composite-cell-body--align-v-top {
+    justify-content: flex-start;
+}
+
+.console-composite-cell-body--align-v-center {
+    justify-content: center;
+}
+
+.console-composite-cell-body--align-v-bottom {
+    justify-content: flex-end;
+}
+
+.console-composite-cell--contour {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--chrome-idle);
+}
+
+.console-composite-add-cell {
+    align-self: flex-start;
+    flex: 0 0 auto;
+    margin-top: 0.15rem;
+}
+
+.console-composite-text {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 2rem;
+    box-sizing: border-box;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.35rem 0.5rem;
+    font: inherit;
+    appearance: none;
+    -webkit-appearance: none;
+}
+
+#consoleEditDialog input.console-composite-text,
+#consoleEditDialog .console-composite-field-line input.console-composite-text {
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+}
+
+#consoleEditDialog input.console-composite-text:disabled,
+#consoleEditDialog input.console-composite-text[readonly] {
+    background: color-mix(in srgb, var(--bg) 72%, var(--muted) 28%);
+}
+
+.console-composite-align {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 0.55rem;
+    align-items: center;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.console-composite-align .console-composite-field-line {
+    flex: 0 0 auto;
+    min-width: max-content;
+    max-width: none;
+}
+
+.console-composite-align select {
+    flex: 0 0 auto;
+    min-height: 2rem;
+    min-width: 5.75rem;
+    max-width: none;
+    width: auto;
+    box-sizing: border-box;
+}
+
+.console-composite--edit .console-composite-cell-body {
+    width: 100%;
+    min-width: 0;
+}
+
+.console-composite-device-preview,
+.console-composite-text-view {
+    font-size: 0.95rem;
+    color: var(--text);
+    word-break: break-word;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.console-composite-device-preview.is-edit {
+    cursor: pointer;
+}
+
+.console-composite-device-preview.is-edit:hover {
+    outline: 1px solid var(--accent);
+    outline-offset: 1px;
+}
+
+#consoleEditDialog .console-widget {
+    overflow: visible;
+    min-height: 0;
+}
+
+#consoleEditDialog .console-composite--edit .console-composite-cell-body {
+    overflow: hidden;
+    border: 1px dashed var(--border);
+    border-radius: 3px;
 }
 
 .console-widget {
@@ -2250,6 +2836,24 @@ button.console-binary-icon--control:disabled {
     gap: 1px;
 }
 
+.console-widget-move-pad--vertical {
+    grid-template-columns: 1.35rem;
+    grid-template-rows: repeat(2, 1.35rem);
+}
+
+.console-widget-move-pad--vertical .console-widget-move-up,
+.console-widget-move-pad--vertical .console-widget-move-down {
+    grid-column: 1;
+}
+
+.console-widget-move-pad--vertical .console-widget-move-up {
+    grid-row: 1;
+}
+
+.console-widget-move-pad--vertical .console-widget-move-down {
+    grid-row: 2;
+}
+
 .console-widget-move-btn {
     min-height: 0;
     min-width: 0;
@@ -2298,10 +2902,19 @@ button.console-binary-icon--control:disabled {
 
 .console-widget-toolbar {
     display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.35rem;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.console-widget-toolbar-row {
+    display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 0.35rem;
-    flex: 1 1 auto;
+    width: 100%;
     min-width: 0;
 }
 
@@ -2309,6 +2922,32 @@ button.console-binary-icon--control:disabled {
     flex: 1 1 7rem;
     margin: 0;
     padding: 0.35rem 0.5rem;
+}
+
+.console-widget-title-field {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.console-widget-show-title {
+    flex: 0 0 auto;
+    margin: 0;
+    gap: 0;
+}
+
+.console-widget-show-title input[type="checkbox"] {
+    flex: 0 0 auto;
+    width: 1.25rem;
+    height: 1.25rem;
+    margin: 0;
+    accent-color: var(--accent);
+}
+
+.console-widget-title-field .console-widget-title-input {
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
 .console-device-row.is-edit {
