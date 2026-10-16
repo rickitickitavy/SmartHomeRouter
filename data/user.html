@@ -581,6 +581,10 @@
             return !(binding && binding.showTitle === false);
         }
 
+        function widgetShowsTitle(widget) {
+            return !(widget && widget.showTitle === false);
+        }
+
         function bindingContentAlignH(binding) {
             if (binding && binding.alignH != null && binding.alignH !== "") {
                 return normalizeIconAlign(binding.alignH);
@@ -833,7 +837,7 @@
         }
 
         function widgetGroupOnOffState(widget) {
-            var devices = widget && widget.devices;
+            var devices = widgetDeviceBindings(widget);
             if (!devices || !devices.length) {
                 return false;
             }
@@ -868,7 +872,7 @@
         function toggleGroupOnOff(widget) {
             var turnOn = !widgetGroupOnOffState(widget);
             var payload = turnOn ? "ON" : "OFF";
-            var devices = widget.devices || [];
+            var devices = widgetDeviceBindings(widget);
             var index;
             for (index = 0; index < devices.length; index++) {
                 var device = findRegisteredDevice(devices[index].ieee);
@@ -888,7 +892,6 @@
 
         function renderConsoleGrid(host, consoleLayout) {
             var grid = document.createElement("div");
-            grid.className = "console-grid console-grid-view";
             var widgets = consoleLayout && consoleLayout.widgets;
             if (!widgets || !widgets.length) {
                 var emptyWidget = document.createElement("p");
@@ -897,6 +900,19 @@
                 host.appendChild(emptyWidget);
                 return;
             }
+            var nonFullWidthCount = 0;
+            var countIndex;
+            for (countIndex = 0; countIndex < widgets.length; countIndex++) {
+                var countWidget = widgets[countIndex];
+                if (countWidget && countWidget.spacer) {
+                    continue;
+                }
+                if (!(countWidget && countWidget.fullWidth)) {
+                    nonFullWidthCount++;
+                }
+            }
+            grid.className = "console-grid console-grid-view"
+                + (nonFullWidthCount > 1 ? " console-grid-view--multi" : "");
             var widgetIndex;
             var hasVisible = false;
             for (widgetIndex = 0; widgetIndex < widgets.length; widgetIndex++) {
@@ -920,16 +936,19 @@
                 var spacer = document.createElement("div");
                 spacer.className = "console-widget console-widget-spacer console-widget-spacer-view";
                 spacer.setAttribute("aria-hidden", "true");
+                spacer.hidden = true;
                 return spacer;
             }
             var card = document.createElement("article");
-            card.className = "console-widget";
+            card.className = "console-widget" + (widget && widget.fullWidth ? " console-widget--full-width" : "");
             var header = document.createElement("div");
             header.className = "console-widget-header";
-            var title = document.createElement("h3");
-            title.className = "console-widget-title";
-            title.textContent = widget.title || "Widget";
-            header.appendChild(title);
+            if (widgetShowsTitle(widget)) {
+                var title = document.createElement("h3");
+                title.className = "console-widget-title";
+                title.textContent = widget.title || "Widget";
+                header.appendChild(title);
+            }
             if (widget.showGroupOnOff) {
                 var groupWrap = document.createElement("div");
                 groupWrap.className = "console-widget-group";
@@ -949,25 +968,549 @@
                 groupWrap.appendChild(groupSwitch);
                 header.appendChild(groupWrap);
             }
-            card.appendChild(header);
-            var list = document.createElement("div");
-            applyWidgetViewportListClass(list, widget);
-            var bindings = widget.devices || [];
-            var bindingIndex;
-            for (bindingIndex = 0; bindingIndex < bindings.length; bindingIndex++) {
-                list.appendChild(buildBindingRow(bindings[bindingIndex]));
+            if (header.childNodes.length) {
+                card.appendChild(header);
             }
-            card.appendChild(list);
+            if (widget && widget.viewport === "composite") {
+                card.appendChild(buildCompositeBody(widget, { live: true }));
+            } else {
+                var list = document.createElement("div");
+                applyWidgetViewportListClass(list, widget);
+                var bindings = widget.devices || [];
+                var bindingIndex;
+                for (bindingIndex = 0; bindingIndex < bindings.length; bindingIndex++) {
+                    list.appendChild(buildBindingRow(bindings[bindingIndex]));
+                }
+                card.appendChild(list);
+            }
             return card;
+        }
+
+        function consoleCmToPx(cmValue) {
+            return (Number(cmValue) || 0) * (96 / 2.54);
+        }
+
+        function ensureCompositeRows(widget) {
+            if (!widget.compositeRows || !Array.isArray(widget.compositeRows)) {
+                widget.compositeRows = [];
+            }
+            return widget.compositeRows;
+        }
+
+        function makeDefaultCompositeCell() {
+            return {
+                width: 1,
+                widthUnit: "u",
+                contour: false,
+                content: "empty",
+                alignH: "center",
+                alignV: "center",
+                text: "",
+                binding: null
+            };
+        }
+
+        function normalizeCompositeAlignH(value) {
+            if (value === "left" || value === "right") {
+                return value;
+            }
+            return "center";
+        }
+
+        function normalizeCompositeAlignV(value) {
+            if (value === "top" || value === "bottom") {
+                return value;
+            }
+            return "center";
+        }
+
+        function applyCompositeCellAlignClasses(bodyEl, cell) {
+            if (!bodyEl) {
+                return;
+            }
+            var alignH = normalizeCompositeAlignH(cell && cell.alignH);
+            var alignV = normalizeCompositeAlignV(cell && cell.alignV);
+            bodyEl.classList.remove(
+                "console-composite-cell-body--align-h-left",
+                "console-composite-cell-body--align-h-center",
+                "console-composite-cell-body--align-h-right",
+                "console-composite-cell-body--align-v-top",
+                "console-composite-cell-body--align-v-center",
+                "console-composite-cell-body--align-v-bottom"
+            );
+            bodyEl.classList.add("console-composite-cell-body--align-h-" + alignH);
+            bodyEl.classList.add("console-composite-cell-body--align-v-" + alignV);
+        }
+
+        function makeDefaultCompositeRow() {
+            return {
+                height: 0.1,
+                heightUnit: "u",
+                cells: [makeDefaultCompositeCell()]
+            };
+        }
+
+        function widgetDeviceBindings(widget) {
+            if (!widget) {
+                return [];
+            }
+            if ((widget.viewport || "vertical") === "composite") {
+                var devices = [];
+                var rows = widget.compositeRows || [];
+                var rowIndex;
+                for (rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+                    var cells = (rows[rowIndex] && rows[rowIndex].cells) || [];
+                    var cellIndex;
+                    for (cellIndex = 0; cellIndex < cells.length; cellIndex++) {
+                        var cell = cells[cellIndex];
+                        if (cell && cell.content === "device" && cell.binding) {
+                            devices.push(cell.binding);
+                        }
+                    }
+                }
+                return devices;
+            }
+            return widget.devices || [];
+        }
+
+        function applyCompositeLayoutSizes(root, widget) {
+            if (!root || !widget) {
+                return;
+            }
+            var isEdit = root.classList.contains("console-composite--edit");
+            var rowNodes = root.querySelectorAll(".console-composite-row");
+            var rows = widget.compositeRows || [];
+            var rowIndex;
+            for (rowIndex = 0; rowIndex < rowNodes.length && rowIndex < rows.length; rowIndex++) {
+                var row = rows[rowIndex];
+                var cells = row.cells || [];
+                var rowEl = rowNodes[rowIndex];
+                var cellsWrap = rowEl.querySelector(".console-composite-cells");
+                var availableWidthPx = cellsWrap
+                    ? (cellsWrap.clientWidth || cellsWrap.offsetWidth || 0)
+                    : 0;
+                if (!(availableWidthPx > 0)) {
+                    availableWidthPx = root.clientWidth || root.offsetWidth || 0;
+                }
+                if (!(availableWidthPx > 0)) {
+                    availableWidthPx = consoleCmToPx(10);
+                }
+                var sumCm = 0;
+                var sumU = 0;
+                var cellIndex;
+                for (cellIndex = 0; cellIndex < cells.length; cellIndex++) {
+                    var cell = cells[cellIndex];
+                    var widthValue = Number(cell.width);
+                    if (!(widthValue > 0)) {
+                        widthValue = 1;
+                    }
+                    if (cell.widthUnit === "cm") {
+                        sumCm += consoleCmToPx(widthValue);
+                    } else {
+                        sumU += widthValue;
+                    }
+                }
+                var unitPx = sumU > 0 ? (availableWidthPx - sumCm) / sumU : 0;
+                if (!(unitPx > 0)) {
+                    unitPx = Math.max(8, availableWidthPx * 0.05);
+                }
+                var heightValue = Number(row.height);
+                if (!(heightValue > 0)) {
+                    heightValue = isEdit ? 0.1 : 1;
+                }
+                var rowHeightPx = row.heightUnit === "cm"
+                    ? consoleCmToPx(heightValue)
+                    : unitPx * heightValue;
+                var minRowPx = isEdit ? 2 : 16;
+                var specifiedHeightPx = Math.max(minRowPx, rowHeightPx);
+                var bodyNodes = rowNodes[rowIndex].querySelectorAll(".console-composite-cell-body");
+                if (bodyNodes.length) {
+                    for (cellIndex = 0; cellIndex < bodyNodes.length; cellIndex++) {
+                        if (isEdit) {
+                            bodyNodes[cellIndex].style.minHeight = String(specifiedHeightPx) + "px";
+                            bodyNodes[cellIndex].style.height = "auto";
+                        } else {
+                            bodyNodes[cellIndex].style.height = String(specifiedHeightPx) + "px";
+                            bodyNodes[cellIndex].style.minHeight = String(specifiedHeightPx) + "px";
+                        }
+                    }
+                } else if (isEdit) {
+                    rowNodes[rowIndex].style.minHeight = String(specifiedHeightPx) + "px";
+                    rowNodes[rowIndex].style.height = "auto";
+                } else {
+                    rowNodes[rowIndex].style.height = String(specifiedHeightPx) + "px";
+                }
+                var cellCols = rowNodes[rowIndex].querySelectorAll(".console-composite-cell-col");
+                for (cellIndex = 0; cellIndex < cellCols.length && cellIndex < cells.length; cellIndex++) {
+                    var sizedCell = cells[cellIndex];
+                    var sizedWidth = Number(sizedCell.width);
+                    if (!(sizedWidth > 0)) {
+                        sizedWidth = 1;
+                    }
+                    var widthPx = sizedCell.widthUnit === "cm"
+                        ? consoleCmToPx(sizedWidth)
+                        : unitPx * sizedWidth;
+                    var minWidthPx = isEdit ? 2 : 16;
+                    var appliedWidth = String(Math.max(minWidthPx, widthPx)) + "px";
+                    cellCols[cellIndex].style.width = appliedWidth;
+                    cellCols[cellIndex].style.maxWidth = appliedWidth;
+                    cellCols[cellIndex].style.flex = "0 0 auto";
+                }
+            }
+            applyCompositeContentFit(root);
+        }
+
+        function applyCompositeContentFit(root) {
+            if (!root) {
+                return;
+            }
+            var bodyNodes = root.querySelectorAll(".console-composite-cell-body");
+            var bodyIndex;
+            for (bodyIndex = 0; bodyIndex < bodyNodes.length; bodyIndex++) {
+                var bodyEl = bodyNodes[bodyIndex];
+                var cellW = bodyEl.clientWidth || bodyEl.offsetWidth || 0;
+                var cellH = bodyEl.clientHeight || bodyEl.offsetHeight || 0;
+                var fitW = Math.max(24, cellW - 4);
+                var fitH = Math.max(24, cellH - 4);
+                bodyEl.style.setProperty("--composite-cell-w", String(fitW) + "px");
+                bodyEl.style.setProperty("--composite-cell-h", String(fitH) + "px");
+                var gaugeSvgs = bodyEl.querySelectorAll(".console-gauge-arc-svg");
+                var gIndex;
+                for (gIndex = 0; gIndex < gaugeSvgs.length; gIndex++) {
+                    var titleEl = bodyEl.querySelector(".console-device-row-title");
+                    var titleH = titleEl ? titleEl.offsetHeight + 4 : 0;
+                    var availH = Math.max(28, fitH - titleH);
+                    var byWidth = fitW;
+                    var byHeight = availH * (104 / 58);
+                    var gaugeSize = Math.max(36, Math.min(byWidth, byHeight));
+                    gaugeSvgs[gIndex].style.width = String(gaugeSize) + "px";
+                    gaugeSvgs[gIndex].style.maxWidth = "100%";
+                    gaugeSvgs[gIndex].style.height = "auto";
+                }
+                var icons = bodyEl.querySelectorAll(".console-binary-icon");
+                var iconIndex;
+                var iconFit = Math.max(16, Math.min(fitW, fitH));
+                var iconScale = Math.max(0.5, Math.min(4, iconFit / 32));
+                for (iconIndex = 0; iconIndex < icons.length; iconIndex++) {
+                    icons[iconIndex].style.setProperty("--console-icon-scale", String(iconScale));
+                    icons[iconIndex].style.minWidth = "0";
+                    icons[iconIndex].style.minHeight = "0";
+                }
+            }
+        }
+
+        function bindCompositeResize(root, widget) {
+            if (!root) {
+                return;
+            }
+            root.__compositeWidget = widget || null;
+            if (typeof ResizeObserver === "undefined") {
+                return;
+            }
+            if (root.__compositeRo) {
+                root.__compositeRo.disconnect();
+            }
+            root.__compositeRo = new ResizeObserver(function () {
+                var stored = root.__compositeWidget;
+                if (stored) {
+                    applyCompositeLayoutSizes(root, stored);
+                }
+            });
+            root.__compositeRo.observe(root);
+        }
+
+        function refreshAllCompositeLayouts() {
+            var roots = document.querySelectorAll(".console-composite");
+            var rootIndex;
+            for (rootIndex = 0; rootIndex < roots.length; rootIndex++) {
+                var root = roots[rootIndex];
+                if (root.__compositeWidget) {
+                    applyCompositeLayoutSizes(root, root.__compositeWidget);
+                }
+            }
+        }
+
+        if (!window.__consoleCompositeResizeBound) {
+            window.__consoleCompositeResizeBound = true;
+            window.addEventListener("resize", refreshAllCompositeLayouts);
+        }
+
+        function syncCompositeSizesFromDomAndApply(root) {
+            if (!root) {
+                return;
+            }
+            /* edit-only sizing sync; unused on user page */
+        }
+
+        function buildCompositeBody(widget, options) {
+            options = options || {};
+            var isEdit = !!options.isEdit;
+            var widgetIndex = options.widgetIndex;
+            var live = !!options.live;
+            var root = document.createElement("div");
+            root.className = "console-composite" + (isEdit ? " console-composite--edit" : "");
+            if (isEdit) {
+                root.setAttribute("data-widget-index", String(widgetIndex));
+            }
+            var rows = widget.compositeRows || [];
+            var rowIndex;
+            for (rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+                var row = rows[rowIndex];
+                var rowEl = document.createElement("div");
+                rowEl.className = "console-composite-row";
+                if (isEdit) {
+                    var heightCfg = document.createElement("div");
+                    heightCfg.className = "console-composite-row-height";
+                    var heightInput = document.createElement("input");
+                    heightInput.type = "number";
+                    heightInput.min = "0.1";
+                    heightInput.step = "0.1";
+                    heightInput.className = "console-composite-height";
+                    heightInput.setAttribute("data-widget-index", String(widgetIndex));
+                    heightInput.setAttribute("data-row-index", String(rowIndex));
+                    heightInput.value = String(row.height != null ? row.height : 0.1);
+                    var heightUnit = document.createElement("select");
+                    heightUnit.className = "console-composite-height-unit";
+                    heightUnit.setAttribute("data-widget-index", String(widgetIndex));
+                    heightUnit.setAttribute("data-row-index", String(rowIndex));
+                    [["u", "unit"], ["cm", "cm"]].forEach(function (pair) {
+                        var option = document.createElement("option");
+                        option.value = pair[0];
+                        option.textContent = pair[1];
+                        heightUnit.appendChild(option);
+                    });
+                    heightUnit.value = row.heightUnit === "cm" ? "cm" : "u";
+                    heightInput.oninput = function () {
+                        syncCompositeSizesFromDomAndApply(root);
+                    };
+                    heightUnit.onchange = function () {
+                        syncCompositeSizesFromDomAndApply(root);
+                    };
+                    heightCfg.appendChild(heightInput);
+                    heightCfg.appendChild(heightUnit);
+                    rowEl.appendChild(heightCfg);
+                }
+                var cellsWrap = document.createElement("div");
+                cellsWrap.className = "console-composite-cells";
+                var cells = row.cells || [];
+                var cellIndex;
+                for (cellIndex = 0; cellIndex < cells.length; cellIndex++) {
+                    var cell = cells[cellIndex];
+                    var cellCol = document.createElement("div");
+                    cellCol.className = "console-composite-cell-col";
+                    if (isEdit) {
+                        var chrome = document.createElement("div");
+                        chrome.className = "console-composite-cell-chrome";
+                        var widthCfg = document.createElement("div");
+                        widthCfg.className = "console-composite-cell-width";
+                        var widthInput = document.createElement("input");
+                        widthInput.type = "number";
+                        widthInput.min = "0.1";
+                        widthInput.step = "0.1";
+                        widthInput.className = "console-composite-width";
+                        widthInput.setAttribute("data-widget-index", String(widgetIndex));
+                        widthInput.setAttribute("data-row-index", String(rowIndex));
+                        widthInput.setAttribute("data-cell-index", String(cellIndex));
+                        widthInput.value = String(cell.width != null ? cell.width : 1);
+                        var widthUnit = document.createElement("select");
+                        widthUnit.className = "console-composite-width-unit";
+                        widthUnit.setAttribute("data-widget-index", String(widgetIndex));
+                        widthUnit.setAttribute("data-row-index", String(rowIndex));
+                        widthUnit.setAttribute("data-cell-index", String(cellIndex));
+                        [["u", "unit"], ["cm", "cm"]].forEach(function (pair) {
+                            var option = document.createElement("option");
+                            option.value = pair[0];
+                            option.textContent = pair[1];
+                            widthUnit.appendChild(option);
+                        });
+                        widthUnit.value = cell.widthUnit === "cm" ? "cm" : "u";
+                        widthInput.oninput = function () {
+                            syncCompositeSizesFromDomAndApply(root);
+                        };
+                        widthUnit.onchange = function () {
+                            syncCompositeSizesFromDomAndApply(root);
+                        };
+                        widthCfg.appendChild(widthInput);
+                        widthCfg.appendChild(widthUnit);
+                        chrome.appendChild(widthCfg);
+                        var contourLabel = document.createElement("label");
+                        contourLabel.className = "field-check console-composite-contour";
+                        var contourCheck = document.createElement("input");
+                        contourCheck.type = "checkbox";
+                        contourCheck.className = "console-composite-contour-cb";
+                        contourCheck.setAttribute("data-widget-index", String(widgetIndex));
+                        contourCheck.setAttribute("data-row-index", String(rowIndex));
+                        contourCheck.setAttribute("data-cell-index", String(cellIndex));
+                        contourCheck.checked = !!cell.contour;
+                        contourLabel.appendChild(contourCheck);
+                        contourLabel.appendChild(document.createTextNode("Contour"));
+                        chrome.appendChild(contourLabel);
+                        cellCol.appendChild(chrome);
+                    }
+                    var cellEl = document.createElement("div");
+                    cellEl.className = "console-composite-cell"
+                        + (cell.contour ? " console-composite-cell--contour" : "");
+                    if (isEdit) {
+                        contourCheck.onchange = (function (storedCellEl, wIndex, rIndex, cIndex) {
+                            return function () {
+                                syncConsoleEditorDraftFromDom();
+                                var targetCell = consoleEditorDraft.widgets[wIndex]
+                                    .compositeRows[rIndex].cells[cIndex];
+                                targetCell.contour = contourCheck.checked;
+                                storedCellEl.classList.toggle(
+                                    "console-composite-cell--contour",
+                                    contourCheck.checked
+                                );
+                            };
+                        })(cellEl, widgetIndex, rowIndex, cellIndex);
+                    }
+                    var cellBody = document.createElement("div");
+                    cellBody.className = "console-composite-cell-body";
+                    applyCompositeCellAlignClasses(cellBody, cell);
+                    if (isEdit) {
+                        var contentSelect = document.createElement("select");
+                        contentSelect.className = "console-composite-content";
+                        contentSelect.setAttribute("data-widget-index", String(widgetIndex));
+                        contentSelect.setAttribute("data-row-index", String(rowIndex));
+                        contentSelect.setAttribute("data-cell-index", String(cellIndex));
+                        [["empty", "Empty"], ["text", "Text"], ["device", "Device"]].forEach(function (pair) {
+                            var option = document.createElement("option");
+                            option.value = pair[0];
+                            option.textContent = pair[1];
+                            contentSelect.appendChild(option);
+                        });
+                        contentSelect.value = cell.content === "text" || cell.content === "device"
+                            ? cell.content
+                            : "empty";
+                        contentSelect.onchange = (function (wIndex, rIndex, cIndex) {
+                            return function () {
+                                syncConsoleEditorDraftFromDom();
+                                var target = consoleEditorDraft.widgets[wIndex].compositeRows[rIndex].cells[cIndex];
+                                target.content = contentSelect.value;
+                                if (target.content === "device" && !target.binding) {
+                                    openConsoleCompositeDeviceDialog(wIndex, rIndex, cIndex);
+                                    return;
+                                }
+                                renderConsoleEditor();
+                            };
+                        })(widgetIndex, rowIndex, cellIndex);
+                        cellBody.appendChild(contentSelect);
+                        if (cell.content === "text") {
+                            var textInput = document.createElement("input");
+                            textInput.type = "text";
+                            textInput.className = "console-composite-text";
+                            textInput.setAttribute("data-widget-index", String(widgetIndex));
+                            textInput.setAttribute("data-row-index", String(rowIndex));
+                            textInput.setAttribute("data-cell-index", String(cellIndex));
+                            textInput.value = cell.text || "";
+                            cellBody.appendChild(textInput);
+                        } else if (cell.content === "device") {
+                            var previewHost = document.createElement("div");
+                            previewHost.className = "console-composite-device-preview";
+                            if (cell.binding) {
+                                previewHost.appendChild(buildEditorBindingPreviewForBinding(cell.binding));
+                            } else {
+                                previewHost.textContent = "No device";
+                            }
+                            var editDeviceBtn = document.createElement("button");
+                            editDeviceBtn.type = "button";
+                            editDeviceBtn.className = "btn btn-secondary btn-inline";
+                            editDeviceBtn.textContent = "Edit device";
+                            editDeviceBtn.onclick = (function (wIndex, rIndex, cIndex) {
+                                return function (event) {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    openConsoleCompositeDeviceDialog(wIndex, rIndex, cIndex);
+                                };
+                            })(widgetIndex, rowIndex, cellIndex);
+                            cellBody.appendChild(previewHost);
+                            cellBody.appendChild(editDeviceBtn);
+                        }
+                    } else if (cell.content === "text") {
+                        var textSpan = document.createElement("div");
+                        textSpan.className = "console-composite-text-view";
+                        textSpan.textContent = cell.text || "";
+                        cellBody.appendChild(textSpan);
+                    } else if (cell.content === "device" && cell.binding) {
+                        if (live && typeof placeBuildDeviceRow === "function") {
+                            cellBody.appendChild(placeBuildDeviceRow(cell.binding));
+                        } else if (live && typeof buildBindingRow === "function") {
+                            cellBody.appendChild(buildBindingRow(cell.binding));
+                        } else {
+                            cellBody.appendChild(buildEditorBindingPreviewForBinding(cell.binding));
+                        }
+                    }
+                    cellEl.appendChild(cellBody);
+                    cellCol.appendChild(cellEl);
+                    cellsWrap.appendChild(cellCol);
+                }
+                if (isEdit) {
+                    var addCellBtn = document.createElement("button");
+                    addCellBtn.type = "button";
+                    addCellBtn.className = "btn btn-secondary btn-inline console-composite-add-cell";
+                    addCellBtn.textContent = "Add cell";
+                    addCellBtn.onclick = (function (wIndex, rIndex) {
+                        return function () {
+                            syncConsoleEditorDraftFromDom();
+                            var rowList = ensureCompositeRows(consoleEditorDraft.widgets[wIndex]);
+                            if (!rowList[rIndex].cells) {
+                                rowList[rIndex].cells = [];
+                            }
+                            if (rowList[rIndex].cells.length >= 8) {
+                                return;
+                            }
+                            rowList[rIndex].cells.push(makeDefaultCompositeCell());
+                            renderConsoleEditor();
+                        };
+                    })(widgetIndex, rowIndex);
+                    cellsWrap.appendChild(addCellBtn);
+                }
+                rowEl.appendChild(cellsWrap);
+                root.appendChild(rowEl);
+            }
+            bindCompositeResize(root, widget);
+            window.requestAnimationFrame(function () {
+                applyCompositeLayoutSizes(root, widget);
+            });
+            return root;
+        }
+
+        function buildEditorBindingPreviewForBinding(binding) {
+            var row = document.createElement("div");
+            row.className = "console-device-row is-edit console-composite-binding-preview";
+            var title = document.createElement("span");
+            title.className = "console-device-row-title";
+            if (binding && binding.automation) {
+                title.textContent = binding.title || binding.automation || "Automation";
+            } else if (binding && binding.ieee) {
+                var device = typeof findRegisteredDevice === "function"
+                    ? findRegisteredDevice(binding.ieee)
+                    : null;
+                title.textContent = binding.title || (device && device.name) || binding.ieee;
+            } else {
+                title.textContent = "Device";
+            }
+            row.appendChild(title);
+            return row;
+        }
+
+        function buildEditorBindingPreviewForBinding(binding) {
+            var row = document.createElement("div");
+            row.className = "console-device-row";
+            var title = document.createElement("span");
+            title.className = "console-device-row-title";
+            title.textContent = (binding && (binding.title || binding.automation || binding.ieee)) || "Device";
+            row.appendChild(title);
+            return row;
         }
 
         function applyWidgetViewportListClass(listElement, widget) {
             if (!listElement) {
                 return;
             }
-            var viewport = widget && widget.viewport === "horizontal"
-                ? "horizontal"
-                : (widget && widget.viewport === "grid" ? "grid" : "vertical");
+            var viewport = widget && widget.viewport === "grid"
+                ? "grid"
+                : (widget && widget.viewport === "composite" ? "composite" : "vertical");
             listElement.className = "console-device-list console-device-list--" + viewport;
             if (viewport === "grid") {
                 var columns = parseInt(widget && widget.gridColumns, 10);
