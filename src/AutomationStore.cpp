@@ -1235,6 +1235,169 @@ bool AutomationStore::replaceAllFromJson(const String &json) {
     return true;
 }
 
+bool AutomationStore::mergeAllFromJson(const String &json) {
+    // Pass 1: validate every object without mutating the live store.
+    int count = 0;
+    int newNameCount = 0;
+    const char *cursor = json.c_str();
+    while (cursor != nullptr && *cursor != '\0') {
+        const char *objectStart = strchr(cursor, '{');
+        if (objectStart == nullptr) {
+            break;
+        }
+        int depth = 0;
+        bool inString = false;
+        bool escape = false;
+        const char *objectEnd = nullptr;
+        for (const char *scan = objectStart; *scan != '\0'; scan++) {
+            const char character = *scan;
+            if (inString) {
+                if (escape) {
+                    escape = false;
+                    continue;
+                }
+                if (character == '\\') {
+                    escape = true;
+                    continue;
+                }
+                if (character == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (character == '"') {
+                inString = true;
+                continue;
+            }
+            if (character == '{') {
+                depth++;
+                continue;
+            }
+            if (character == '}') {
+                depth--;
+                if (depth == 0) {
+                    objectEnd = scan;
+                    break;
+                }
+            }
+        }
+        if (objectEnd == nullptr) {
+            LOGGER.error(
+                "Automation merge import failed: truncated JSON object at index " + String(count)
+            );
+            return false;
+        }
+        String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
+        AutomationRecord *parsed = nullptr;
+        const AutomationWriteResult parseResult = parseOneAutomation(object.c_str(), &parsed, false);
+        if (parseResult != AutomationWriteOk || parsed == nullptr) {
+            LOGGER.error(
+                String("Automation merge import failed at index ")
+                + String(count)
+                + ": "
+                + automationWriteResultText(parseResult)
+            );
+            return false;
+        }
+        if (parsed->name == nullptr || !validateAutomation(parsed)) {
+            freeAutomation(parsed);
+            LOGGER.error(
+                "Automation merge import failed at index " + String(count) + ": validation"
+            );
+            return false;
+        }
+        if (findByName(parsed->name) == nullptr) {
+            newNameCount++;
+        }
+        freeAutomation(parsed);
+        count++;
+        cursor = objectEnd + 1;
+    }
+    if (count == 0) {
+        LOGGER.error("Automation merge import failed: no automations in file");
+        return false;
+    }
+    if (storedCount + newNameCount > AUTOMATION_STORE_MAX) {
+        LOGGER.error("Automation merge import failed: store would exceed max");
+        return false;
+    }
+
+    // Pass 2: upsert after the file is known-good.
+    cursor = json.c_str();
+    int index = 0;
+    while (cursor != nullptr && *cursor != '\0' && index < count) {
+        const char *objectStart = strchr(cursor, '{');
+        if (objectStart == nullptr) {
+            break;
+        }
+        int depth = 0;
+        bool inString = false;
+        bool escape = false;
+        const char *objectEnd = nullptr;
+        for (const char *scan = objectStart; *scan != '\0'; scan++) {
+            const char character = *scan;
+            if (inString) {
+                if (escape) {
+                    escape = false;
+                    continue;
+                }
+                if (character == '\\') {
+                    escape = true;
+                    continue;
+                }
+                if (character == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (character == '"') {
+                inString = true;
+                continue;
+            }
+            if (character == '{') {
+                depth++;
+                continue;
+            }
+            if (character == '}') {
+                depth--;
+                if (depth == 0) {
+                    objectEnd = scan;
+                    break;
+                }
+            }
+        }
+        if (objectEnd == nullptr) {
+            LOGGER.error("Automation merge import apply failed: truncated object");
+            return false;
+        }
+        String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
+        String nameHint;
+        if (!extractJsonString(object.c_str(), "name", nameHint) || nameHint.length() == 0) {
+            LOGGER.error("Automation merge import apply failed: missing name");
+            return false;
+        }
+        const AutomationWriteResult writeResult =
+            replaceFromJson(nameHint.c_str(), object.c_str(), false);
+        if (writeResult != AutomationWriteOk) {
+            LOGGER.error(
+                String("Automation merge import apply failed at index ")
+                + String(index)
+                + " name="
+                + nameHint
+                + ": "
+                + automationWriteResultText(writeResult)
+            );
+            return false;
+        }
+        index++;
+        cursor = objectEnd + 1;
+    }
+    if (persistEnabled) {
+        requestPersist();
+    }
+    return true;
+}
+
 AutomationWriteResult AutomationStore::createAutomation(
     const char *name,
     const char *title,

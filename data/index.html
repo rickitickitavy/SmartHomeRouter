@@ -1468,27 +1468,14 @@
             if (errorLine) {
                 errorLine.hidden = true;
             }
-            fetch("/api/log/download", { cache: "no-store" }).then(function (response) {
-                return response.text().then(function (text) {
-                    if (!response.ok) {
-                        throw new Error("HTTP " + response.status);
-                    }
-                    var blob = new Blob([text || ""], { type: "text/plain;charset=utf-8" });
-                    var objectUrl = URL.createObjectURL(blob);
-                    var link = document.createElement("a");
-                    link.href = objectUrl;
-                    link.download = logDownloadFileName();
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                    URL.revokeObjectURL(objectUrl);
-                });
-            }).catch(function (error) {
-                if (errorLine) {
-                    errorLine.hidden = false;
-                    errorLine.textContent = error && error.message ? error.message : "Log download failed";
-                }
-            });
+            // Navigate download directly so the browser streams the full ring
+            // (fetch + response.text() can stall or truncate large PSRAM rings).
+            var link = document.createElement("a");
+            link.href = "/api/log/download?t=" + String(Date.now());
+            link.download = logDownloadFileName();
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
         }
 
         function loadWifi() {
@@ -6211,12 +6198,15 @@
             });
         }
 
-        function chooseAutomationsRestoreFile() {
+        var automationsRestoreMergeMode = false;
+
+        function chooseAutomationsRestoreFile(mergeMode) {
             clearStoreActionErrors("automationsSaveError");
             var fileInput = document.getElementById("automationsRestoreFile");
             if (!fileInput) {
                 return;
             }
+            automationsRestoreMergeMode = !!mergeMode;
             fileInput.value = "";
             fileInput.click();
         }
@@ -6227,7 +6217,13 @@
             if (!file) {
                 return;
             }
-            if (!window.confirm("Import replaces all automations with this file. Continue?")) {
+            var mergeMode = automationsRestoreMergeMode;
+            automationsRestoreMergeMode = false;
+            var confirmText = mergeMode
+                ? ("Import merges this file into existing automations: matching names are updated, "
+                    + "new names are added, and automations not in the file are kept. Continue?")
+                : "Import replaces all automations with this file. Continue?";
+            if (!window.confirm(confirmText)) {
                 return;
             }
             clearStoreActionErrors("automationsSaveError");
@@ -6248,7 +6244,8 @@
                     reportStoreActionError("automationsSaveError", null, "Selected file must be an automations JSON array");
                     return;
                 }
-                fetch("/api/automations/restore", {
+                var url = mergeMode ? "/api/automations/restore?merge=1" : "/api/automations/restore";
+                fetch(url, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: text
@@ -11447,7 +11444,7 @@
             <div class="dialog-actions">
                 <button type="button" class="btn btn-primary" onclick="createAutomationAndEdit()">Add</button>
                 <button type="button" class="btn btn-secondary" onclick="exportAllAutomations()">Export all</button>
-                <button type="button" class="btn btn-secondary" onclick="chooseAutomationsRestoreFile()">Import all</button>
+                <button type="button" class="btn btn-secondary" onclick="chooseAutomationsRestoreFile(true)">Import all</button>
             </div>
         </section>
 
@@ -11636,7 +11633,7 @@
                             <p class="field-hint">Export all automations, or restore by replacing the full automations list from a JSON file.</p>
                             <div class="dialog-actions">
                                 <button type="button" class="btn btn-secondary btn-inline" onclick="exportAllAutomations()">Export</button>
-                                <button type="button" class="btn btn-primary btn-inline" onclick="chooseAutomationsRestoreFile()">Restore</button>
+                                <button type="button" class="btn btn-primary btn-inline" onclick="chooseAutomationsRestoreFile(false)">Restore</button>
                             </div>
                         </div>
                         <div class="upload-card">

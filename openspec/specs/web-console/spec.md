@@ -60,7 +60,7 @@ The console MUST present main sections as a left sidebar strip (horizontal folde
 - **THEN** the Automation panel is shown and other main panels are hidden
 
 ### Requirement: Automation section lists automations
-The Automation section MUST show a narrow left group list and a table of automations. The group list MUST start with **All**, then distinct non-empty groups, and include **Not in group** when any ungrouped automation exists (or always as a selectable bucket). Selecting **All** MUST show every automation. Selecting a named group MUST show only automations with that `group`. Selecting **Not in group** MUST show only automations with empty `group`. The table MUST show at least name, active, and last performed when known, plus timer columns already present. Buttons Add, Export all, and Import all remain. Only `isAdmin` MUST see Automation.
+The Automation section MUST show a narrow left group list and a table of automations. The group list MUST start with **All**, then distinct non-empty groups, and include **Not in group** when any ungrouped automation exists (or always as a selectable bucket). Selecting **All** MUST show every automation. Selecting a named group MUST show only automations with that `group`. Selecting **Not in group** MUST show only automations with empty `group`. The table MUST show at least name, active, and last performed when known, plus timer columns already present. Buttons Add, Export all, and Import all remain. Import all MUST merge (upsert by `name`, keep automations not present in the file); the confirm dialog before Import all MUST state that merge behavior. Only `isAdmin` MUST see Automation.
 
 #### Scenario: Filter by group
 - **WHEN** an `isAdmin` selects group `Lights` and two automations have that group
@@ -73,6 +73,10 @@ The Automation section MUST show a narrow left group list and a table of automat
 #### Scenario: Open Automation list
 - **WHEN** an `isAdmin` opens Automation and at least one automation is stored
 - **THEN** each visible row shows name, active, and last performed when known
+
+#### Scenario: Import all confirm mentions merge
+- **WHEN** the operator chooses Import all and a confirm dialog is shown
+- **THEN** the message indicates merge/upsert behavior and that existing automations not in the file are kept
 
 ### Requirement: Automation edit dialog import and export
 Add or row edit MUST open an edit dialog with **General** (Active, then Name, then Group, Debug; no title), **Trigger** (countdown TIMER controls first, then listening devices with typed parameter pickers), Condition (enable checkbox plus editor when enabled, with typed comparison pickers), actions (device actions with typed pickers or automation targets), Export, and Import. Dialog Import MUST be enabled only when the form is empty (no listeners, no actions, condition disabled or empty, TIMER `use` false / defaults unset). Dialog Export MUST download one JSON file named from the automation’s `name`.
@@ -409,7 +413,7 @@ The WiFi section SHALL scroll when its fields do not fit the main panel. Save an
 
 ### Requirement: Log tab shows recent firmware logs
 
-The Log tab MUST display recent firmware log lines that are also emitted on USB when console logging is enabled. The page MUST be able to refresh that list without leaving the Log tab. Older lines MAY drop when the in-memory buffer is full. The Refresh control MUST stay visible without a second page scroller hiding it, MUST be left-aligned, and MUST use a compact content width (not a full-width bar). The Log card MUST NOT repeat a second “Log” title under the Log tab.
+The Log tab MUST display recent firmware log lines that are also emitted on USB when console logging is enabled. The page MUST be able to refresh that list without leaving the Log tab. Older lines MAY drop when the in-memory buffer is full. The Refresh control MUST stay visible without a second page scroller hiding it, MUST be left-aligned, and MUST use a compact content width (not a full-width bar). The Log card MUST NOT repeat a second “Log” title under the Log tab. The on-screen list MAY show only a bounded tail (on the order of 64 KiB) for UI performance. A **Download full log** control MUST download the entire current ring used length (up to ring capacity, typically the PSRAM ring), not only that on-screen tail.
 
 #### Scenario: New log line appears
 
@@ -429,6 +433,14 @@ The Log tab MUST display recent firmware log lines that are also emitted on USB 
 #### Scenario: No duplicate Log title
 - **WHEN** the operator opens System → Log
 - **THEN** the tab is labeled Log and the card does not show another Log heading
+
+#### Scenario: Download exceeds view cap when ring is larger
+- **WHEN** the host log ring holds more than 64 KiB and the operator activates Download full log
+- **THEN** the downloaded file size matches the ring’s used length (greater than 64 KiB when the ring holds more)
+
+#### Scenario: Download equals ring when small
+- **WHEN** the ring holds less than 64 KiB and the operator activates Download full log
+- **THEN** the downloaded file contains the full current ring text
 
 ### Requirement: Escape dismisses overlay dialogs
 
