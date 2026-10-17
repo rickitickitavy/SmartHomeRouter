@@ -3165,6 +3165,59 @@ button.console-binary-icon--control:disabled {
     align-self: flex-start;
 }
 
+#automationEditDialog .automation-listen-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: center;
+    column-gap: 1.5rem;
+    row-gap: 0.55rem;
+    padding: 0.65rem 0.75rem;
+    margin: 0 0 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--surface) 88%, var(--bg) 12%);
+}
+
+#automationEditDialog .automation-listen-field {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.45rem;
+    margin: 0;
+    min-width: 0;
+}
+
+#automationEditDialog .automation-listen-field.is-hidden,
+#automationEditDialog .automation-listen-field[hidden] {
+    display: none !important;
+}
+
+#automationEditDialog .automation-listen-field-label {
+    flex: 0 0 5.25rem;
+    width: 5.25rem;
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+#automationEditDialog .automation-listen-field select,
+#automationEditDialog .automation-listen-field input[type="text"] {
+    flex: 1 1 auto;
+    width: auto !important;
+    max-width: none !important;
+    min-width: 0;
+    min-height: 40px;
+}
+
+#automationEditDialog .automation-listen-row-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 0.15rem;
+}
+
 #automationEditDialog .automation-action-toolbar {
     display: flex;
     flex-direction: row;

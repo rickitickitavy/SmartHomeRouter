@@ -90,17 +90,31 @@ Add or row edit MUST open an edit dialog with **General** (Active, then Name, th
 - **THEN** there is no Title input
 
 ### Requirement: Automation Trigger rows use typed parameters
-Each Trigger (listening) row MUST let the operator choose a registered device, a channel when that device has more than one channel (channel control MUST be hidden when only one channel is available), and either a **known parameter** for that device’s classified type or **CUSTOM**. When CUSTOM is selected, the row MUST show cluster and attrId fields for entry (hex). The Remove control on Trigger rows MUST use the same compact button sizing as Remove controls in Condition and Actions (`btn-inline` / shared editor button style).
+
+Each Trigger (listening) row under **Triggered by devices** MUST let the operator choose a registered device, a channel when that device has more than one channel (channel control MUST be hidden when only one channel is available), and either a **known parameter** for that device’s classified type or **CUSTOM**. When CUSTOM is selected, the row MUST show cluster and attrId fields for entry (hex). The row MUST also expose **Event type** with options **Change** and **Any value**, default **Change**, with a field label on the same line as each control (including a **Field** label for the parameter picker). Channel / Cluster / Attr controls MUST be hidden when not applicable. The Remove control on Trigger rows MUST use the same compact button sizing as Remove controls in Condition and Actions (`btn-inline` / shared editor button style).
 
 #### Scenario: Hide single-channel picker
+
 - **WHEN** the operator selects a device that has only one channel on a Trigger row
 - **THEN** no channel control is shown for that row
 
+#### Scenario: Add listen uses known param
+
+- **WHEN** the operator adds a Trigger listen row for an On/Off device
+- **THEN** the row offers known parameters for that type (including Status) and CUSTOM, and Event type defaults to Change
+
+#### Scenario: Labels on same line
+
+- **WHEN** the automation edit dialog shows a Triggered by devices row
+- **THEN** Device, Channel (when shown), Field, Event type (and custom cluster/attr when shown) each have a label on the same line as their control
+
 #### Scenario: Custom shows cluster and attrId
+
 - **WHEN** the operator chooses CUSTOM on a Trigger row
 - **THEN** cluster and attrId inputs are visible and required for a complete custom binding
 
 #### Scenario: Trigger Remove matches other editors
+
 - **WHEN** the operator views Trigger, Condition, and Actions Remove buttons
 - **THEN** Trigger Remove uses the same compact inline button styling as the other Remove buttons
 

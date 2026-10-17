@@ -447,8 +447,8 @@ void AutomationEngine::evaluateAndMaybeRun(AutomationRecord *automation, bool re
     if (!conditionTrue) {
         return;
     }
-    // Status/listener triggers re-fire on every matching report while the condition
-    // stays true (e.g. repeated UP). Require false→true unless this is a timer tick.
+    // Status path: require false→true unless a matching listen entry used eventType=any
+    // (then re-fire while the condition stays true). Timer ticks pass false here.
     if (requireConditionRisingEdge && !risingEdge) {
         return;
     }
@@ -577,7 +577,8 @@ void AutomationEngine::onStatusChanged(
     const uint8_t ieee[8],
     uint8_t endpoint,
     uint16_t clusterOr0,
-    const char *newState
+    const char *newState,
+    bool valueChanged
 ) {
     if (topicMap == nullptr || ieee == nullptr || store == nullptr) {
         return;
@@ -588,6 +589,7 @@ void AutomationEngine::onStatusChanged(
             continue;
         }
         bool matched = false;
+        bool admittedByAnyEvent = false;
         for (const AutomationListener *listener = automation->listen; listener != nullptr; listener = listener->next) {
             if (listener->ieeeText == nullptr) {
                 continue;
@@ -598,7 +600,13 @@ void AutomationEngine::onStatusChanged(
             if (!listenerMatchesEvent(listener, endpoint, clusterOr0, newState)) {
                 continue;
             }
+            if (listener->eventType == AutomationListenEventChange && !valueChanged) {
+                continue;
+            }
             matched = true;
+            if (listener->eventType == AutomationListenEventAny) {
+                admittedByAnyEvent = true;
+            }
             if (automation->debug) {
                 LOGGER.info(
                     String("Automation debug ")
@@ -610,12 +618,15 @@ void AutomationEngine::onStatusChanged(
                     + " cluster="
                     + String((unsigned)clusterOr0)
                     + (listener->param != nullptr ? String(" param=") + listener->param : String(""))
+                    + " eventType="
+                    + (listener->eventType == AutomationListenEventAny ? "any" : "change")
                 );
             }
-            break;
+            // Keep scanning so a later eventType=any can admit re-fire while true.
         }
         if (matched) {
-            evaluateAndMaybeRun(automation, true);
+            // Rising-edge required only when no matching any-event listener admitted this report.
+            evaluateAndMaybeRun(automation, !admittedByAnyEvent);
         }
     }
 }

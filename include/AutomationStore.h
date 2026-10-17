@@ -30,6 +30,11 @@ enum AutomationActionTarget : uint8_t {
     AutomationTargetAutomation = 1
 };
 
+enum AutomationListenEventType : uint8_t {
+    AutomationListenEventChange = 0,
+    AutomationListenEventAny = 1
+};
+
 enum AutomationAutomationOp : uint8_t {
     AutomationOpEnable = 0,
     AutomationOpDisable = 1,
@@ -55,6 +60,7 @@ struct AutomationListener {
     uint16_t cluster;
     bool hasAttrId;
     uint16_t attrId;
+    AutomationListenEventType eventType;
     AutomationListener *next;
 };
 
