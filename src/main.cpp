@@ -81,6 +81,7 @@ static void onHostUserChanged(UserChangeKind kind, const UserRecord *user);
 static void onSlaveUserSync(uint8_t flags, const UserRecord *user);
 #endif
 static bool hostPreparationLatched = false;
+static bool hostZigbeeStatusCollectPending = false;
 static volatile bool hostDeviceListPersistPending = false;
 static volatile bool hostMqttCommandResubscribePending = false;
 static volatile bool hostMqttReloadPending = false;
@@ -619,11 +620,27 @@ static void applyMeasurementMqttState(const char *topic, const char *payload) {
     ZIGBEE_SPI_PROXY.noteMqttState(entry->ieee, statusEndpoint, body.c_str());
 }
 
+static void requestHostZigbeeStatusCollect() {
+    hostZigbeeStatusCollectPending = true;
+}
+
+static void pumpHostZigbeeStatusCollect() {
+    if (!hostZigbeeStatusCollectPending) {
+        return;
+    }
+    if (mqttClient != nullptr && mqttClient->isSubscriptionReconcileActive()) {
+        return;
+    }
+    hostZigbeeStatusCollectPending = false;
+    hostCollectZigbeeStatuses();
+}
+
 static void onMqttLogicalMessage(const char *topic, const char *payload) {
     if (mqttClient != nullptr
         && mqttClient->serverBornTopic().length() > 0
         && strcmp(topic, mqttClient->serverBornTopic().c_str()) == 0) {
-        hostCollectZigbeeStatuses();
+        // Defer collect off the MQTT callback / subscribe-attach stack.
+        requestHostZigbeeStatusCollect();
         return;
     }
 
@@ -1788,6 +1805,7 @@ void loop() {
     maybeStartNtp();
     mqttBroker->dispatch(wifiController->hasUsableInterface());
     mqttClient->dispatch(wifiController->isStaConnected());
+    pumpHostZigbeeStatusCollect();
     pumpWifiDeviceCommands();
     ZIGBEE_SPI_PROXY.pumpRegistrySync();
     if (automationEngine != nullptr) {

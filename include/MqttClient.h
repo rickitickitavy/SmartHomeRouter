@@ -29,6 +29,7 @@ public:
     void publishDeviceState(const DeviceTopicEntry *entry, const char *message, uint8_t endpoint);
     bool publishDeviceCommand(const DeviceTopicEntry *entry, const char *message, uint8_t endpoint);
     void subscribeDeviceCommands();
+    bool isSubscriptionReconcileActive() const { return subscriptionReconcileActive; }
     void serviceBornAnnounce();
     bool publishServerBornAnnounce();
     const String &permitJoinTopic() const { return topicPermitJoin; }
@@ -40,6 +41,14 @@ private:
         char *topic;
         bool keepMarked;
         TopicSubscription *next;
+    };
+
+    enum class SubscriptionReconcilePhase : uint8_t {
+        Idle = 0,
+        ClearMarks,
+        AddBorn,
+        AddDevices,
+        RemoveStale
     };
 
     SettingsManager *settingsManager;
@@ -57,6 +66,11 @@ private:
     volatile bool connectInProgress = false;
     volatile bool remoteSessionAttachPending = false;
     bool publishPumpInProgress = false;
+    bool subscriptionReconcileActive = false;
+    SubscriptionReconcilePhase reconcilePhase = SubscriptionReconcilePhase::Idle;
+    DeviceTopicEntry *reconcileDeviceCursor = nullptr;
+    uint16_t reconcileSubscribeCount = 0;
+    uint16_t reconcileUnsubscribeCount = 0;
     TaskHandle_t connectTaskHandle = nullptr;
 
     String topicStatus;
@@ -76,9 +90,12 @@ private:
     void fillUniqueClientId(char *outClientId, size_t outLen) const;
     void finishRemoteSessionAttach();
     static void connectTaskEntry(void *arg);
-    void subscribeBridge();
+    void subscribeBridgeTopics();
+    void beginSubscriptionReconcile();
+    void pumpSubscriptionReconcile(uint8_t opBudget);
+    uint8_t enqueueWantedTopicsForEntry(const DeviceTopicEntry *entry, uint8_t opBudget);
     void clearTopicSubscriptions();
     TopicSubscription *findTopicSubscription(const char *topic) const;
-    void keepOrSubscribe(const String &subscribeTopic);
+    void keepOrSubscribe(const char *topic, bool quiet);
     bool publishMessage(const char *topic, const char *payload, bool retained, bool logInfo = true);
 };
