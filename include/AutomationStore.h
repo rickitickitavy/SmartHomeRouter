@@ -142,6 +142,7 @@ public:
     AutomationWriteResult replaceFromJson(const char *name, const char *json, bool keepName);
     AutomationWriteResult deleteAutomation(const char *name);
     bool replaceAllFromJson(const String &json);
+    bool mergeAllFromJson(const String &json);
     String listSummaryJson() const;
     String listFullJson() const;
     String automationFullJson(const AutomationRecord *automation, bool includeRuntime) const;

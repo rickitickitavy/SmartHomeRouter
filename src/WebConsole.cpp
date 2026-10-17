@@ -1175,12 +1175,33 @@ void WebConsole::handleAutomationsRestorePost(AsyncWebServerRequest *request) {
         request->send(400, "text/plain", "Need an automations JSON array");
         return;
     }
+    // Import all (Automations page) uses ?merge=1; Maintenance Restore and other callers replace-all.
+    const bool mergeImport =
+        request->hasParam("merge") && request->getParam("merge")->value() == "1";
+    if (mergeImport) {
+        if (!automationStore->mergeAllFromJson(trimmed)) {
+            LOGGER.error("Automation import failed: list rejected");
+            request->send(400, "text/plain", "Need a valid automations list");
+            return;
+        }
+        LOGGER.info(
+            "Automation import merged "
+            + String(automationStore->automationCount())
+            + " automation(s) on host"
+        );
+        request->send(200, "text/plain", "Merged");
+        return;
+    }
     if (!automationStore->replaceAllFromJson(trimmed)) {
         LOGGER.error("Automation import failed: list rejected");
         request->send(400, "text/plain", "Need a valid automations list");
         return;
     }
-    LOGGER.info("Automation import restored " + String(automationStore->automationCount()) + " automation(s)");
+    LOGGER.info(
+        "Automation import restored "
+        + String(automationStore->automationCount())
+        + " automation(s)"
+    );
     request->send(200, "text/plain", "Restored");
 }
 
@@ -2494,13 +2515,13 @@ void WebConsole::handleLogDownloadGet(AsyncWebServerRequest *request) {
     }
     size_t start = 0;
     size_t length = 0;
+    // Full ring (not kWebViewMaxBytes). Fixed-length filler matches /api/log and avoids
+    // chunked-transfer truncation seen with large PSRAM rings.
     LOGGER.snapshotRing(&start, &length);
-    AsyncWebServerResponse *response = request->beginChunkedResponse(
+    AsyncWebServerResponse *response = request->beginResponse(
         "text/plain",
+        length,
         [start, length](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
-            if (index >= length) {
-                return 0;
-            }
             return LOGGER.copyRingSlice(start, length, index, reinterpret_cast<char *>(buffer), maxLen);
         }
     );
