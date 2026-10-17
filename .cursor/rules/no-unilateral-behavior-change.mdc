@@ -1,0 +1,31 @@
+---
+description: Never change human-described behavior without asking (shared project copy)
+alwaysApply: true
+---
+
+# No unilateral behavior change
+
+Keep in sync with `~/.cursor/rules/no-unilateral-behavior-change.mdc` when that file changes.
+
+NEVER change, reinterpret, replace, or “fix away” **behavior the human has described** (or a product rule they stated) on your own authority.
+
+## Required sequence
+
+1. **Propose** a concrete change (what would differ from today’s / from their rule).
+2. **Describe** options and trade-offs in plain language.
+3. **Ask** the human which option to take.
+4. **Wait** for an explicit choice that names the behavior (not a vague “fix it”).
+
+Only after that approval may you edit code, specs, OpenSpec deltas, or design that redefine that behavior.
+
+## Includes
+
+- Rising-edge vs value-must-change vs re-fire-on-same-report style rules
+- Trigger, condition, and automation semantics the human stated
+- Any conflict between your diagnosis and a human-stated rule — surface the conflict; do not pick a side by implementing
+
+## Does not block
+
+- Restoring behavior that already matches what the human described
+- Pure bugs with no product-rule ambiguity (crash, wrong pointer) when the intended behavior is already explicit
+- Formatting, renames with no semantic change, or edits the human explicitly ordered in the same turn

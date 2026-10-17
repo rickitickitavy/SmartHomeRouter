@@ -12,4 +12,4 @@ This applies **even if the user explicitly asks** to commit or push on the curre
 
 Instead: create/switch to a feature branch, commit there, push that branch, open a PR.
 
-A Cursor `beforeShellExecution` hook (`~/.cursor/hooks/block-master-develop-git.py`) denies these commands.
+A Cursor `beforeShellExecution` hook (`.cursor/hooks/block-master-develop-git.py`, also mirrored under `~/.cursor/hooks/`) denies these commands.

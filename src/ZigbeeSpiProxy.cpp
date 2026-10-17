@@ -102,9 +102,11 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
     }
     unsigned parsedPercent = 0;
     if (sscanf(message, "BATTERY %u", &parsedPercent) == 1) {
+        const bool batteryChanged =
+            !slot->hasBattery || slot->batteryPercent != (uint8_t)parsedPercent;
         slot->hasBattery = true;
         slot->batteryPercent = parsedPercent;
-        // Battery often re-reports the same %; still notify automations (same as DRY/LEAK).
+        // Battery may re-report the same %; pass valueChanged so listeners can filter by eventType.
         // Notify with a plain number so GREATER/LESS compares work (no "BATTERY " prefix).
         if (statusValueChanged != nullptr && DeviceTopicMap::isUsableEndpoint(endpoint)) {
             char batteryMessage[16];
@@ -113,7 +115,8 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
                 slot->ieee,
                 endpoint,
                 kZigbeeClusterPowerConfig,
-                batteryMessage
+                batteryMessage,
+                batteryChanged
             );
         }
         return;
@@ -231,7 +234,8 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
             }
         }
     }
-    // Discrete statuses (DRY/LEAK/ON/OFF/UP/…) re-report the same value often; still notify.
+    // Discrete statuses may re-report the same value; still notify so eventType=any can re-fire.
+    // Listeners with eventType=change filter using valueChanged.
     if ((valueChanged || isDiscreteStatus) && statusValueChanged != nullptr) {
         uint16_t clusterOr0 = 0;
         const char *clusterMark = strstr(message, "cl=0x");
@@ -254,7 +258,7 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
                 clusterOr0 = kZigbeeClusterWindowCovering;
             }
         }
-        statusValueChanged(slot->ieee, endpoint, clusterOr0, statusSlot->state);
+        statusValueChanged(slot->ieee, endpoint, clusterOr0, statusSlot->state, valueChanged);
     }
 }
 

@@ -6921,6 +6921,31 @@
             updateAutomationImportEnabled();
         }
 
+        function setAutomationListenFieldVisible(wrap, visible) {
+            if (!wrap) {
+                return;
+            }
+            if (visible) {
+                wrap.classList.remove("is-hidden");
+                wrap.hidden = false;
+            } else {
+                wrap.classList.add("is-hidden");
+                wrap.hidden = true;
+            }
+        }
+
+        function appendAutomationListenLabeledControl(row, labelText, control) {
+            var wrap = document.createElement("label");
+            wrap.className = "automation-listen-field";
+            var caption = document.createElement("span");
+            caption.className = "automation-listen-field-label";
+            caption.textContent = labelText;
+            wrap.appendChild(caption);
+            wrap.appendChild(control);
+            row.appendChild(wrap);
+            return wrap;
+        }
+
         function renderAutomationListenEditor() {
             var host = document.getElementById("automationListenEditor");
             if (!host || !automationEditorDraft) {
@@ -6932,27 +6957,38 @@
             for (index = 0; index < listen.length; index++) {
                 (function (listenIndex) {
                     var binding = listen[listenIndex];
+                    if (!binding.eventType || (binding.eventType !== "any" && binding.eventType !== "change")) {
+                        binding.eventType = "change";
+                    }
                     var row = document.createElement("div");
-                    row.className = "field";
+                    row.className = "automation-listen-row";
                     var deviceSelect = document.createElement("select");
                     fillDeviceSelect(deviceSelect, binding.ieee || "");
                     var channelSelect = document.createElement("select");
                     var paramSelect = document.createElement("select");
                     var clusterInput = document.createElement("input");
                     clusterInput.type = "text";
-                    clusterInput.placeholder = "cluster (hex)";
+                    clusterInput.placeholder = "0x…";
                     clusterInput.value = formatZigbeeIdToken(binding.cluster);
                     var attrInput = document.createElement("input");
                     attrInput.type = "text";
-                    attrInput.placeholder = "attrId (hex)";
+                    attrInput.placeholder = "0x…";
                     attrInput.value =
                         binding.attrId != null && binding.attrId !== ""
                             ? formatZigbeeIdToken(binding.attrId)
                             : "";
+                    var eventTypeSelect = document.createElement("select");
+                    eventTypeSelect.innerHTML =
+                        "<option value=\"change\">Change</option>"
+                        + "<option value=\"any\">Any value</option>";
+                    eventTypeSelect.value = binding.eventType === "any" ? "any" : "change";
+                    var channelField = null;
+                    var clusterField = null;
+                    var attrField = null;
                     function refreshCustomVisibility() {
                         var isCustom = paramSelect.value === "custom";
-                        clusterInput.hidden = !isCustom;
-                        attrInput.hidden = !isCustom;
+                        setAutomationListenFieldVisible(clusterField, isCustom);
+                        setAutomationListenFieldVisible(attrField, isCustom);
                         if (!isCustom) {
                             delete binding.cluster;
                             delete binding.attrId;
@@ -6971,6 +7007,7 @@
                         if (channelSelect.hidden) {
                             binding.channel = 1;
                         }
+                        setAutomationListenFieldVisible(channelField, !channelSelect.hidden);
                         binding.param = fillAutomationParamSelect(
                             paramSelect,
                             device,
@@ -7016,6 +7053,9 @@
                         }
                         updateAutomationImportEnabled();
                     };
+                    eventTypeSelect.onchange = function () {
+                        binding.eventType = eventTypeSelect.value === "any" ? "any" : "change";
+                    };
                     var removeBtn = document.createElement("button");
                     removeBtn.type = "button";
                     removeBtn.className = "btn btn-secondary btn-inline";
@@ -7025,13 +7065,20 @@
                         renderAutomationListenEditor();
                         updateAutomationImportEnabled();
                     };
+                    appendAutomationListenLabeledControl(row, "Device", deviceSelect);
+                    channelField = appendAutomationListenLabeledControl(row, "Channel", channelSelect);
+                    appendAutomationListenLabeledControl(row, "Field", paramSelect);
+                    appendAutomationListenLabeledControl(row, "Event type", eventTypeSelect);
+                    clusterField = appendAutomationListenLabeledControl(row, "Cluster", clusterInput);
+                    attrField = appendAutomationListenLabeledControl(row, "Attr", attrInput);
+                    var actions = document.createElement("div");
+                    actions.className = "automation-listen-row-actions";
+                    actions.appendChild(removeBtn);
+                    row.appendChild(actions);
+                    setAutomationListenFieldVisible(channelField, false);
+                    setAutomationListenFieldVisible(clusterField, false);
+                    setAutomationListenFieldVisible(attrField, false);
                     refreshDeviceDependent();
-                    row.appendChild(deviceSelect);
-                    row.appendChild(channelSelect);
-                    row.appendChild(paramSelect);
-                    row.appendChild(clusterInput);
-                    row.appendChild(attrInput);
-                    row.appendChild(removeBtn);
                     host.appendChild(row);
                 })(index);
             }
@@ -7044,7 +7091,8 @@
                 automationEditorDraft.listen.push({
                     ieee: firstIeee || "",
                     channel: 1,
-                    param: "status"
+                    param: "status",
+                    eventType: "change"
                 });
                 renderAutomationListenEditor();
                 updateAutomationImportEnabled();

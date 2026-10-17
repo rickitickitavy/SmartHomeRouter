@@ -690,6 +690,15 @@ bool AutomationStore::parseListeners(const char *objectJson, AutomationListener 
                 listener->attrId = (uint16_t)attrId;
             }
         }
+        listener->eventType = AutomationListenEventChange;
+        String eventTypeText;
+        if (extractJsonString(object.c_str(), "eventType", eventTypeText)) {
+            if (eventTypeText.equalsIgnoreCase("any")) {
+                listener->eventType = AutomationListenEventAny;
+            } else {
+                listener->eventType = AutomationListenEventChange;
+            }
+        }
         if (tail == nullptr) {
             *outListeners = listener;
         } else {
@@ -1620,6 +1629,9 @@ void AutomationStore::appendAutomationFull(String &json, const AutomationRecord 
             json += ",\"attrId\":";
             json += String((unsigned)listener->attrId);
         }
+        json += ",\"eventType\":\"";
+        json += listener->eventType == AutomationListenEventAny ? "any" : "change";
+        json += "\"";
         json += "}";
     }
     json += "],\"condition\":";

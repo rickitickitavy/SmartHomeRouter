@@ -15,7 +15,13 @@ public:
 
     void begin(AutomationStore *store, ZigbeeSpiProxy *spiProxy, DeviceTopicMap *topicMap, DeviceCommandFn deviceCommand);
     void tick();
-    void onStatusChanged(const uint8_t ieee[8], uint8_t endpoint, uint16_t clusterOr0, const char *newState);
+    void onStatusChanged(
+        const uint8_t ieee[8],
+        uint8_t endpoint,
+        uint16_t clusterOr0,
+        const char *newState,
+        bool valueChanged
+    );
 
 private:
     AutomationStore *store;

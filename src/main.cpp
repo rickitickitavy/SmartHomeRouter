@@ -1690,9 +1690,19 @@ static void setupHost() {
         }
     });
     ZIGBEE_SPI_PROXY.setStatusValueChangedHandler(
-        [](const uint8_t ieee[8], uint8_t endpoint, uint16_t clusterOr0, const char *newState) {
+        [](const uint8_t ieee[8],
+           uint8_t endpoint,
+           uint16_t clusterOr0,
+           const char *newState,
+           bool valueChanged) {
             if (automationEngine != nullptr) {
-                automationEngine->onStatusChanged(ieee, endpoint, clusterOr0, newState);
+                automationEngine->onStatusChanged(
+                    ieee,
+                    endpoint,
+                    clusterOr0,
+                    newState,
+                    valueChanged
+                );
             }
         }
     );

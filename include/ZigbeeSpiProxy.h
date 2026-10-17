@@ -70,7 +70,13 @@ public:
     using DeviceLiveChangedFn = void (*)(const uint8_t ieee[8]);
     void setDeviceLiveChangedHandler(DeviceLiveChangedFn handler);
     using StatusValueChangedFn =
-        void (*)(const uint8_t ieee[8], uint8_t endpoint, uint16_t clusterOr0, const char *newState);
+        void (*)(
+            const uint8_t ieee[8],
+            uint8_t endpoint,
+            uint16_t clusterOr0,
+            const char *newState,
+            bool valueChanged
+        );
     void setStatusValueChangedHandler(StatusValueChangedFn handler);
     bool copyEndpointState(const uint8_t ieee[8], uint8_t endpoint, char *out, size_t outLen) const;
     bool copyEndpointStateForParam(
