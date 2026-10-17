@@ -2341,6 +2341,7 @@
             { id: "onOff", label: "On/Off", cluster: 0x0006 },
             { id: "iasZone", label: "IAS Zone", cluster: 0x0500 },
             { id: "windowCovering", label: "Window Covering", cluster: 0x0102 },
+            { id: "userData", label: "User data", cluster: 0xFC00 },
             { id: "basic", label: "Basic", cluster: 0x0000 },
             { id: "powerConfiguration", label: "Power Configuration", cluster: 0x0001 },
             { id: "deviceTemperatureConfiguration", label: "Device Temperature Configuration", cluster: 0x0002 },
@@ -2459,9 +2460,14 @@
             }
             var previous = selectedId || typeSelect.value || "unknown";
             typeSelect.innerHTML = "";
+            var sortedEntries = deviceTypeCatalog.slice().sort(function (left, right) {
+                var leftLabel = deviceTypeOptionLabel(left);
+                var rightLabel = deviceTypeOptionLabel(right);
+                return leftLabel.localeCompare(rightLabel, undefined, { sensitivity: "base" });
+            });
             var index;
-            for (index = 0; index < deviceTypeCatalog.length; index++) {
-                var entry = deviceTypeCatalog[index];
+            for (index = 0; index < sortedEntries.length; index++) {
+                var entry = sortedEntries[index];
                 var option = document.createElement("option");
                 option.value = entry.id;
                 option.textContent = deviceTypeOptionLabel(entry);
@@ -2471,6 +2477,11 @@
             if (typeSelect.value != previous) {
                 typeSelect.value = "unknown";
             }
+            parameterDialogTypeId = typeSelect.value || "unknown";
+            typeSelect.onchange = function () {
+                parameterDialogTypeId = typeSelect.value || "unknown";
+                renderUserDataFieldsEditor();
+            };
         }
 
         function ensureDeviceTypeCatalog() {
@@ -2531,6 +2542,7 @@
                     typeSelect.value = parameterDialogTypeId || "unknown";
                 }
             }
+            renderUserDataFieldsEditor();
             applyMqttPublishControls();
         }
 
@@ -3003,9 +3015,57 @@
             cell.textContent = textParts.join(" ");
         }
 
+        function userDataBraceStateText(device) {
+            if (!device) {
+                return "";
+            }
+            return placeMeasurementState(device, { channel: 1 }) || "";
+        }
+
+        function userDataSlotDisplayToken(device, slotIndex) {
+            var stateText = userDataBraceStateText(device);
+            if (!stateText) {
+                return "";
+            }
+            var braceText = stateText;
+            var valAt = stateText.indexOf("val=");
+            if (valAt >= 0) {
+                braceText = stateText.substring(valAt + 4);
+            }
+            var slots = splitUserDataBraceSlots(braceText);
+            if (slotIndex < 0 || slotIndex >= slots.length) {
+                return "";
+            }
+            var token = slots[slotIndex];
+            if (!token || token.toUpperCase() === "NULL") {
+                return "";
+            }
+            if (token.charAt(0) === "\"" && token.charAt(token.length - 1) === "\"") {
+                token = token.substring(1, token.length - 1);
+            }
+            var fields = Array.isArray(device.userDataFields) ? device.userDataFields : [];
+            var fieldType = fields[slotIndex] && fields[slotIndex].type
+                ? fields[slotIndex].type
+                : "string";
+            if (fieldType === "bool") {
+                var lower = token.toLowerCase();
+                if (lower === "true" || lower === "on") {
+                    return "ON";
+                }
+                if (lower === "false" || lower === "off") {
+                    return "OFF";
+                }
+            }
+            return token;
+        }
+
         function fillDeviceStatusCell(cell, device) {
             var entries = statusEntriesForDevice(device);
             var typeId = device.type || "unknown";
+            if (typeId === "userData") {
+                cell.textContent = userDataSlotDisplayToken(device, 0);
+                return;
+            }
             if (isMeasurementDeviceType(typeId)) {
                 fillMeasurementStatusCell(cell, entries);
                 return;
@@ -4102,6 +4162,8 @@
                 }
             }
             applyMqttPublishControls();
+            parameterDialogUserDataFields = normalizeUserDataFields(device.userDataFields);
+            renderUserDataFieldsEditor();
             document.getElementById("parameterDialogError").hidden = true;
             document.getElementById("parameterDialog").hidden = false;
             parameterDialogBaseline = readParameterDialogDraft();
@@ -4148,6 +4210,165 @@
             showParameterTab("settings");
         }
 
+        var parameterDialogUserDataFields = [];
+
+        function currentParameterDialogTypeId() {
+            return parameterDialogTypeId || "unknown";
+        }
+
+        function isUserDataDeviceTypeId(typeId) {
+            var resolvedTypeId = typeId || "";
+            if (resolvedTypeId === "userData") {
+                return true;
+            }
+            var index;
+            for (index = 0; index < deviceTypeCatalog.length; index++) {
+                if (deviceTypeCatalog[index].id === resolvedTypeId) {
+                    return deviceTypeCatalog[index].cluster === 0xFC00;
+                }
+            }
+            return false;
+        }
+
+        function normalizeUserDataFields(rawFields) {
+            var source = Array.isArray(rawFields) ? rawFields : [];
+            var normalized = [];
+            var index;
+            for (index = 0; index < source.length && normalized.length < 16; index++) {
+                var row = source[index] || {};
+                var name = String(row.name || "").trim();
+                var typeId = String(row.type || "string");
+                if (typeId !== "int" && typeId !== "float" && typeId !== "bool" && typeId !== "string") {
+                    typeId = "string";
+                }
+                normalized.push({
+                    nullable: !!row.nullable,
+                    name: name,
+                    type: typeId
+                });
+            }
+            return normalized;
+        }
+
+        function renderUserDataFieldsEditor() {
+            var section = document.getElementById("deviceUserDataFieldsSection");
+            var body = document.getElementById("deviceUserDataFieldsBody");
+            if (!section || !body) {
+                return;
+            }
+            var show = isUserDataDeviceTypeId(currentParameterDialogTypeId());
+            section.hidden = !show;
+            section.style.display = show ? "" : "none";
+            if (!show) {
+                body.innerHTML = "";
+                return;
+            }
+            body.innerHTML = "";
+            var rowIndex;
+            for (rowIndex = 0; rowIndex < parameterDialogUserDataFields.length; rowIndex++) {
+                (function (fieldIndex) {
+                    var field = parameterDialogUserDataFields[fieldIndex];
+                    var row = document.createElement("tr");
+                    var nullableCell = document.createElement("td");
+                    nullableCell.className = "col-check";
+                    var nullableInput = document.createElement("input");
+                    nullableInput.type = "checkbox";
+                    nullableInput.checked = !!field.nullable;
+                    nullableInput.onchange = function () {
+                        parameterDialogUserDataFields[fieldIndex].nullable = !!nullableInput.checked;
+                    };
+                    nullableCell.appendChild(nullableInput);
+                    var nameCell = document.createElement("td");
+                    var nameInput = document.createElement("input");
+                    nameInput.type = "text";
+                    nameInput.className = "user-data-field-name";
+                    nameInput.value = field.name || "";
+                    nameInput.autocomplete = "off";
+                    nameInput.oninput = function () {
+                        parameterDialogUserDataFields[fieldIndex].name = nameInput.value;
+                    };
+                    nameCell.appendChild(nameInput);
+                    var typeCell = document.createElement("td");
+                    var typeSelect = document.createElement("select");
+                    typeSelect.className = "user-data-field-type";
+                    ["int", "float", "bool", "string"].forEach(function (typeId) {
+                        var option = document.createElement("option");
+                        option.value = typeId;
+                        option.textContent = typeId;
+                        typeSelect.appendChild(option);
+                    });
+                    typeSelect.value = field.type || "string";
+                    typeSelect.onchange = function () {
+                        parameterDialogUserDataFields[fieldIndex].type = typeSelect.value;
+                    };
+                    typeCell.appendChild(typeSelect);
+                    var actionsCell = document.createElement("td");
+                    actionsCell.className = "user-data-field-actions";
+                    var upButton = document.createElement("button");
+                    upButton.type = "button";
+                    upButton.className = "console-widget-move-btn";
+                    upButton.textContent = "▲";
+                    upButton.title = "Move up";
+                    upButton.setAttribute("aria-label", "Move up");
+                    upButton.disabled = fieldIndex === 0;
+                    upButton.onclick = function () {
+                        moveUserDataFieldRow(fieldIndex, -1);
+                    };
+                    var downButton = document.createElement("button");
+                    downButton.type = "button";
+                    downButton.className = "console-widget-move-btn";
+                    downButton.textContent = "▼";
+                    downButton.title = "Move down";
+                    downButton.setAttribute("aria-label", "Move down");
+                    downButton.disabled = fieldIndex >= parameterDialogUserDataFields.length - 1;
+                    downButton.onclick = function () {
+                        moveUserDataFieldRow(fieldIndex, 1);
+                    };
+                    var removeButton = document.createElement("button");
+                    removeButton.type = "button";
+                    removeButton.className = "console-widget-delete-btn";
+                    removeButton.textContent = "🗑";
+                    removeButton.title = "Remove field";
+                    removeButton.setAttribute("aria-label", "Remove field");
+                    removeButton.onclick = function () {
+                        parameterDialogUserDataFields.splice(fieldIndex, 1);
+                        renderUserDataFieldsEditor();
+                    };
+                    actionsCell.appendChild(upButton);
+                    actionsCell.appendChild(downButton);
+                    actionsCell.appendChild(removeButton);
+                    row.appendChild(nullableCell);
+                    row.appendChild(nameCell);
+                    row.appendChild(typeCell);
+                    row.appendChild(actionsCell);
+                    body.appendChild(row);
+                })(rowIndex);
+            }
+        }
+
+        function moveUserDataFieldRow(fieldIndex, delta) {
+            var nextIndex = fieldIndex + delta;
+            if (nextIndex < 0 || nextIndex >= parameterDialogUserDataFields.length) {
+                return;
+            }
+            var swap = parameterDialogUserDataFields[fieldIndex];
+            parameterDialogUserDataFields[fieldIndex] = parameterDialogUserDataFields[nextIndex];
+            parameterDialogUserDataFields[nextIndex] = swap;
+            renderUserDataFieldsEditor();
+        }
+
+        function addUserDataFieldRow() {
+            if (parameterDialogUserDataFields.length >= 16) {
+                return;
+            }
+            parameterDialogUserDataFields.push({
+                nullable: false,
+                name: "",
+                type: "string"
+            });
+            renderUserDataFieldsEditor();
+        }
+
         function readParameterDialogDraft() {
             var channelsSelect = document.getElementById("deviceChannels");
             var fullControlInput = document.getElementById("deviceFullControl");
@@ -4168,7 +4389,8 @@
                     : (publishInput ? !!publishInput.checked : false),
                 type: parameterDialogTransport == "mqtt" && typeSelect
                     ? typeSelect.value
-                    : parameterDialogTypeId
+                    : parameterDialogTypeId,
+                userDataFields: normalizeUserDataFields(parameterDialogUserDataFields)
             };
         }
 
@@ -4182,7 +4404,8 @@
                 && left.fullControl === right.fullControl
                 && left.debug === right.debug
                 && left.publishToMqtt === right.publishToMqtt
-                && left.type === right.type;
+                && left.type === right.type
+                && JSON.stringify(left.userDataFields || []) === JSON.stringify(right.userDataFields || []);
         }
 
         function parameterDialogHasUnsavedChanges() {
@@ -4431,6 +4654,27 @@
             if (parameterDialogTransport != "mqtt") {
                 body.publishToMqtt = !!(document.getElementById("devicePublishToMqtt")
                     && document.getElementById("devicePublishToMqtt").checked);
+            }
+            if ((typeId || "unknown") === "userData") {
+                var fields = normalizeUserDataFields(parameterDialogUserDataFields);
+                var fieldIndex;
+                var seenNames = {};
+                for (fieldIndex = 0; fieldIndex < fields.length; fieldIndex++) {
+                    var fieldName = String(fields[fieldIndex].name || "").trim();
+                    if (!fieldName) {
+                        errorLine.hidden = false;
+                        errorLine.textContent = "User data field names cannot be empty";
+                        return;
+                    }
+                    if (seenNames[fieldName]) {
+                        errorLine.hidden = false;
+                        errorLine.textContent = "User data field names must be unique";
+                        return;
+                    }
+                    seenNames[fieldName] = true;
+                    fields[fieldIndex].name = fieldName;
+                }
+                body.userDataFields = fields;
             }
             if (ieeeText) {
                 body.ieee = ieeeText;
@@ -4714,6 +4958,71 @@
             return String(device.battery);
         }
 
+        function splitUserDataBraceSlots(braceText) {
+            var body = String(braceText || "").trim();
+            if (body.charAt(0) === "{") {
+                body = body.substring(1);
+            }
+            if (body.charAt(body.length - 1) === "}") {
+                body = body.substring(0, body.length - 1);
+            }
+            var slots = [];
+            var current = "";
+            var inString = false;
+            var escape = false;
+            var index;
+            for (index = 0; index < body.length; index++) {
+                var character = body.charAt(index);
+                if (inString) {
+                    current += character;
+                    if (escape) {
+                        escape = false;
+                        continue;
+                    }
+                    if (character === "\\") {
+                        escape = true;
+                        continue;
+                    }
+                    if (character === "\"") {
+                        inString = false;
+                    }
+                    continue;
+                }
+                if (character === "\"") {
+                    inString = true;
+                    current += character;
+                    continue;
+                }
+                if (character === ",") {
+                    slots.push(current.trim());
+                    current = "";
+                    continue;
+                }
+                current += character;
+            }
+            slots.push(current.trim());
+            return slots;
+        }
+
+        function userDataFieldValueFromState(device, fieldName) {
+            if (!device || !fieldName) {
+                return "";
+            }
+            var fields = Array.isArray(device.userDataFields) ? device.userDataFields : [];
+            var fieldIndex = -1;
+            var index;
+            for (index = 0; index < fields.length; index++) {
+                if (fields[index] && String(fields[index].name || "").trim() === fieldName) {
+                    fieldIndex = index;
+                    break;
+                }
+            }
+            if (fieldIndex < 0) {
+                return "";
+            }
+            return userDataSlotDisplayToken(device, fieldIndex);
+        }
+
         function placeBindingResolvedState(device, binding) {
             var param = placeBindingParam(binding);
             if (param === "battery") {
@@ -4727,6 +5036,15 @@
                 if (coveringEntry && coveringEntry.position) {
                     return String(coveringEntry.position);
                 }
+            }
+            if (device && device.type === "userData") {
+                if (param === "custom") {
+                    return userDataBraceStateText(device);
+                }
+                if (!param || param === "status") {
+                    return userDataSlotDisplayToken(device, 0);
+                }
+                return userDataFieldValueFromState(device, param);
             }
             if (isMeasurementDeviceType(device && device.type ? device.type : "")) {
                 return placeMeasurementState(device, binding);
@@ -6225,9 +6543,39 @@
             return "0x" + Math.floor(number).toString(16).toUpperCase().padStart(4, "0");
         }
 
-        function automationKnownParamsForDevice(device) {
+        function isReservedBindingParamId(paramId) {
+            var key = String(paramId || "").trim().toLowerCase();
+            return key === "custom"
+                || key === "battery"
+                || key === "status"
+                || key === "sensorvalue"
+                || key === "position"
+                || key === "lightlevel"
+                || key === "onoff";
+        }
+
+        function automationKnownParamsForDevice(device, forWidget) {
             var typeId = device && device.type ? String(device.type) : "unknown";
             var params = [];
+            if (typeId === "userData") {
+                var fields = Array.isArray(device.userDataFields) ? device.userDataFields : [];
+                var fieldIndex;
+                for (fieldIndex = 0; fieldIndex < fields.length; fieldIndex++) {
+                    var fieldName = fields[fieldIndex] && fields[fieldIndex].name
+                        ? String(fields[fieldIndex].name).trim()
+                        : "";
+                    if (!fieldName || isReservedBindingParamId(fieldName)) {
+                        continue;
+                    }
+                    params.push({ id: fieldName, label: fieldName });
+                }
+                // Widget bindings: schema field names only (no CUSTOM / battery).
+                if (!forWidget) {
+                    params.push({ id: "custom", label: "CUSTOM" });
+                    params.push({ id: "battery", label: "Battery level" });
+                }
+                return params;
+            }
             if (typeId === "windowCovering") {
                 params.push({ id: "status", label: "Status" });
                 params.push({ id: "position", label: "Position" });
@@ -6511,16 +6859,20 @@
             return chosen;
         }
 
-        function fillAutomationParamSelect(select, device, selectedParam) {
+        function fillAutomationParamSelect(select, device, selectedParam, forWidget) {
             select.innerHTML = "";
-            var params = automationKnownParamsForDevice(device);
+            var params = automationKnownParamsForDevice(device, !!forWidget);
+            var wanted = selectedParam ? String(selectedParam) : "";
+            if (wanted && wanted.toLowerCase() === "custom") {
+                wanted = "custom";
+            }
             var index;
             var matched = false;
             for (index = 0; index < params.length; index++) {
                 var option = document.createElement("option");
                 option.value = params[index].id;
                 option.textContent = params[index].label;
-                if (selectedParam && selectedParam === params[index].id) {
+                if (wanted && wanted === params[index].id) {
                     option.selected = true;
                     matched = true;
                 }
@@ -6528,7 +6880,7 @@
             }
             // Do not inject an unmatched previous param (e.g. orphan Status) as selected.
             if (!matched || !select.value) {
-                select.value = params[0] ? params[0].id : "custom";
+                select.value = params[0] ? params[0].id : "";
             }
             return select.value;
         }
@@ -9708,6 +10060,27 @@
             return null;
         }
 
+        function userDataFieldTypeForParam(device, paramValue) {
+            if (!device || (device.type || "") !== "userData" || !paramValue) {
+                return "";
+            }
+            var wanted = String(paramValue).trim();
+            if (!wanted || wanted === "custom" || wanted === "battery" || wanted === "status") {
+                return "";
+            }
+            var fields = Array.isArray(device.userDataFields) ? device.userDataFields : [];
+            var fieldIndex;
+            for (fieldIndex = 0; fieldIndex < fields.length; fieldIndex++) {
+                var fieldName = fields[fieldIndex] && fields[fieldIndex].name
+                    ? String(fields[fieldIndex].name).trim()
+                    : "";
+                if (fieldName === wanted) {
+                    return String(fields[fieldIndex].type || "string");
+                }
+            }
+            return "";
+        }
+
         function consoleBindingParamIsNumeric(device, paramValue) {
             if (!device || !paramValue) {
                 return false;
@@ -9726,6 +10099,10 @@
                 || paramValue === "position"
                 || paramValue === "lightLevel") {
                 return true;
+            }
+            if (typeId === "userData") {
+                var fieldType = userDataFieldTypeForParam(device, paramValue);
+                return fieldType === "int" || fieldType === "float";
             }
             if (isMeasurementDeviceType(typeId)) {
                 return true;
@@ -9801,7 +10178,15 @@
 
         function refreshConsoleDeviceCustomAndGaugeFields() {
             var paramSelect = document.getElementById("consoleDeviceParam");
-            var isCustom = paramSelect && paramSelect.value === "custom";
+            var paramValue = paramSelect ? String(paramSelect.value || "") : "";
+            if (paramValue && paramValue.toLowerCase() === "custom" && paramValue !== "custom") {
+                paramSelect.value = "custom";
+                paramValue = "custom";
+            }
+            var device = consoleDialogSelectedDevice();
+            // userData widget bindings expose schema field names only — never CUSTOM cluster/attr.
+            var isCustom = paramValue === "custom"
+                && !(device && (device.type || "") === "userData");
             setHidden(document.getElementById("consoleDeviceClusterField"), !isCustom);
             setHidden(document.getElementById("consoleDeviceAttrField"), !isCustom);
             if (!isCustom) {
@@ -9948,7 +10333,7 @@
             fillAutomationChannelSelect(channelSelect, device, previousChannel);
             setHidden(channelField, channelSelect.hidden);
             setHidden(paramField, false);
-            fillAutomationParamSelect(paramSelect, device, previousParam || "");
+            fillAutomationParamSelect(paramSelect, device, previousParam || "", true);
             refreshConsoleDeviceCustomAndGaugeFields();
             updateConsoleDeviceUnitField();
         }
@@ -9985,16 +10370,27 @@
                 var select = document.getElementById("consoleDeviceSelect");
                 select.innerHTML = "";
                 var list = Array.isArray(parts[0]) ? parts[0] : [];
-                consoleDeviceDialogDevices = list;
+                consoleDeviceDialogDevices = list.map(function (deviceRow) {
+                    if (deviceRow && (deviceRow.type || "") === "userData") {
+                        deviceRow.userDataFields = normalizeUserDataFields(deviceRow.userDataFields);
+                    }
+                    return deviceRow;
+                });
                 var index;
-                for (index = 0; index < list.length; index++) {
+                for (index = 0; index < consoleDeviceDialogDevices.length; index++) {
                     var option = document.createElement("option");
-                    option.value = list[index].ieee || "";
-                    option.textContent = (list[index].name || list[index].friendlyName || list[index].ieee || "Device")
-                        + " (" + zigbeeDeviceTypeLabel(list[index].type) + ")";
-                    option.setAttribute("data-type", list[index].type || "");
-                    option.setAttribute("data-channels", String(deviceChannelCount(list[index])));
-                    if (binding.ieee && binding.ieee === list[index].ieee) {
+                    option.value = consoleDeviceDialogDevices[index].ieee || "";
+                    option.textContent = (consoleDeviceDialogDevices[index].name
+                        || consoleDeviceDialogDevices[index].friendlyName
+                        || consoleDeviceDialogDevices[index].ieee
+                        || "Device")
+                        + " (" + zigbeeDeviceTypeLabel(consoleDeviceDialogDevices[index].type) + ")";
+                    option.setAttribute("data-type", consoleDeviceDialogDevices[index].type || "");
+                    option.setAttribute(
+                        "data-channels",
+                        String(deviceChannelCount(consoleDeviceDialogDevices[index]))
+                    );
+                    if (binding.ieee && binding.ieee === consoleDeviceDialogDevices[index].ieee) {
                         option.selected = true;
                     }
                     select.appendChild(option);
@@ -10069,7 +10465,7 @@
                     fillAutomationChannelSelect(channelSelect, device, binding.channel || 1);
                     setHidden(document.getElementById("consoleDeviceChannelField"), channelSelect.hidden);
                     setHidden(document.getElementById("consoleDeviceParamField"), false);
-                    fillAutomationParamSelect(paramSelect, device, binding.param || "");
+                    fillAutomationParamSelect(paramSelect, device, binding.param || "", true);
                     setHidden(document.getElementById("consoleDeviceClusterField"), true);
                     setHidden(document.getElementById("consoleDeviceAttrField"), true);
                     setHidden(document.getElementById("consoleDeviceUnitField"), true);
@@ -11312,6 +11708,23 @@
                                 <option value="15">15</option>
                                 <option value="16">16</option>
                             </select>
+                        </div>
+                        <div id="deviceUserDataFieldsSection" class="form-section" hidden>
+                            <h3 class="group-title">User data fields</h3>
+                            <div class="table-wrap">
+                                <table class="data-table" id="deviceUserDataFieldsTable">
+                                    <thead>
+                                        <tr>
+                                            <th class="col-check">Nullable</th>
+                                            <th>Name</th>
+                                            <th>Type</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="deviceUserDataFieldsBody"></tbody>
+                                </table>
+                            </div>
+                            <button type="button" class="btn btn-secondary btn-inline" id="deviceUserDataFieldAddBtn" onclick="addUserDataFieldRow()">Add field</button>
                         </div>
                         <div id="deviceMqttGroup" class="form-section">
                             <h3 class="group-title">MQTT</h3>

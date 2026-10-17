@@ -3,6 +3,7 @@
 #include "InterChipHost.h"
 #include "JsonField.h"
 #include "Logger.h"
+#include "UserDataPayload.h"
 #include "ZigbeeCluster.h"
 #include "ZigbeeDeviceType.h"
 
@@ -117,8 +118,15 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
         }
         return;
     }
+    String userDataBraceList;
     if (strstr(message, "cl=0x") != nullptr && strstr(message, "attr=") != nullptr) {
-        return;
+        if (!userDataMessageIsClusterReport(message)) {
+            return;
+        }
+        if (!userDataExtractBraceList(message, &userDataBraceList) || userDataBraceList.length() == 0) {
+            return;
+        }
+        message = userDataBraceList.c_str();
     }
     if (!DeviceTopicMap::isUsableEndpoint(endpoint)) {
         return;

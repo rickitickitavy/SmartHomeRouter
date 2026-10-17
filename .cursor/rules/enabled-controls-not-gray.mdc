@@ -1,0 +1,25 @@
+---
+description: Enabled buttons and editable fields must not use gray styling
+alwaysApply: true
+---
+
+# Enabled controls are not gray
+
+Do **not** use gray / muted / chrome-idle fills or muted text for:
+
+- Enabled buttons (not `:disabled` / `.is-busy` / `.is-disabled`)
+- Enabled inputs, selects, and textareas that are **not** `readonly` / `:read-only` / `:disabled`
+
+Those controls MUST use normal interactive colors (`--surface` or accent primary, `--text`, `--border` / `--accent` as appropriate) so they read as editable and clickable.
+
+Gray / muted / mixed-bg styling is reserved for **disabled** or **readonly** controls only (so operators can tell they cannot edit).
+
+```css
+/* BAD — enabled control looks disabled */
+button:not(:disabled) { background: var(--chrome-idle); color: var(--muted); }
+input:not(:disabled):not(:read-only) { background: color-mix(... var(--muted) ...); }
+
+/* GOOD — enabled vs readonly */
+button:not(:disabled) { background: var(--surface); color: var(--text); }
+input:read-only, input:disabled { background: color-mix(...); color: var(--muted); }
+```

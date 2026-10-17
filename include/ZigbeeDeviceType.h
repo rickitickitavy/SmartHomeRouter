@@ -116,6 +116,7 @@ inline const ZigbeeDeviceTypeInfo *zigbeeDeviceTypeCatalog(size_t *count) {
         {85, 0x0B04, "electricalMeasurement", "Electrical Measurement"},
         {86, 0x0B05, "diagnostics", "Diagnostics"},
         {87, 0x1000, "touchlinkCommissioning", "Touchlink Commissioning"},
+        {88, 0xFC00, "userData", "User data"},
     };
     if (count != nullptr) {
         *count = sizeof(kCatalog) / sizeof(kCatalog[0]);
@@ -274,6 +275,10 @@ inline bool zigbeeDeviceTypeIsMeasurement(uint8_t type) {
         default:
             return false;
     }
+}
+
+inline bool zigbeeDeviceTypeIsUserData(uint8_t type) {
+    return zigbeeDeviceTypeInfo(type)->clusterId == 0xFC00;
 }
 
 inline const char *zigbeeDeviceTypeJsonId(uint8_t type) {

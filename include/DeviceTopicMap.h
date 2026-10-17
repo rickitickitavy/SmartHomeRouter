@@ -11,6 +11,7 @@ struct DeviceTopicEntry {
     char *stateTopic;
     char *commandTopic;
     char *availabilityTopic;
+    char *userDataFieldsJson;
     uint8_t channelCount;
     uint8_t fullControl;
     uint8_t debug;

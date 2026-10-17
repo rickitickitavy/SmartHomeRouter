@@ -203,6 +203,21 @@ static void applyDeviceConfigPayload(const char *payload) {
             entry->publishToMqtt = 0;
         }
     }
+    String typeText;
+    if (extractJsonString(payload, "type", typeText)) {
+        entry->zigbeeType = zigbeeDeviceTypeFromJsonId(typeText.c_str());
+    }
+    free(entry->userDataFieldsJson);
+    entry->userDataFieldsJson = nullptr;
+    if (zigbeeDeviceTypeIsUserData(entry->zigbeeType)) {
+        String fieldsSlice;
+        if (extractJsonKeyedSlice(payload, "userDataFields", '[', fieldsSlice) && fieldsSlice.length() > 0) {
+            entry->userDataFieldsJson =
+                DeviceTopicMap::duplicateBoundedString(fieldsSlice.c_str(), 768);
+        } else {
+            entry->userDataFieldsJson = DeviceTopicMap::duplicateBoundedString("[]", 768);
+        }
+    }
     mqttClient->subscribeDeviceCommands();
     persistHostDeviceList();
     if (!ZIGBEE_SPI_PROXY.enqueueDeviceUpsert(entry)) {

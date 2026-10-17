@@ -64,10 +64,12 @@ void DeviceTopicMap::clearEntryStrings(DeviceTopicEntry *entry) {
     free(entry->stateTopic);
     free(entry->commandTopic);
     free(entry->availabilityTopic);
+    free(entry->userDataFieldsJson);
     entry->friendlyName = nullptr;
     entry->stateTopic = nullptr;
     entry->commandTopic = nullptr;
     entry->availabilityTopic = nullptr;
+    entry->userDataFieldsJson = nullptr;
 }
 
 void DeviceTopicMap::freeEntry(DeviceTopicEntry *entry) {
@@ -107,6 +109,13 @@ bool DeviceTopicMap::cloneEntry(DeviceTopicEntry *destination, const DeviceTopic
     destination->publishToMqtt = source->publishToMqtt;
     destination->zigbeeType = source->zigbeeType;
     destination->transport = source->transport;
+    destination->userDataFieldsJson = duplicateBoundedString(source->userDataFieldsJson, 768);
+    if (source->userDataFieldsJson != nullptr
+        && source->userDataFieldsJson[0] != '\0'
+        && destination->userDataFieldsJson == nullptr) {
+        clearEntryStrings(destination);
+        return false;
+    }
     destination->used = source->used;
     destination->next = nullptr;
     return true;
@@ -743,6 +752,8 @@ DeviceTopicEntry *DeviceTopicMap::upsertFromEntry(const DeviceTopicEntry *source
         entry->zigbeeType = source->zigbeeType;
     }
     entry->transport = clampDeviceTransport(source->transport);
+    free(entry->userDataFieldsJson);
+    entry->userDataFieldsJson = duplicateBoundedString(source->userDataFieldsJson, 768);
     return entry;
 }
 
@@ -840,6 +851,47 @@ int DeviceTopicMap::nextUsedIndex(int startIndex) const {
     return -1;
 }
 
+static const char *findJsonObjectEnd(const char *objectStart) {
+    if (objectStart == nullptr || *objectStart != '{') {
+        return nullptr;
+    }
+    int depth = 0;
+    bool inString = false;
+    bool escape = false;
+    for (const char *cursor = objectStart; *cursor != '\0'; cursor++) {
+        const char character = *cursor;
+        if (inString) {
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (character == '\\') {
+                escape = true;
+                continue;
+            }
+            if (character == '"') {
+                inString = false;
+            }
+            continue;
+        }
+        if (character == '"') {
+            inString = true;
+            continue;
+        }
+        if (character == '{' || character == '[') {
+            depth++;
+            continue;
+        }
+        if (character == '}' || character == ']') {
+            depth--;
+            if (depth == 0 && character == '}') {
+                return cursor;
+            }
+        }
+    }
+    return nullptr;
+}
+
 void DeviceTopicMap::replaceFromJson(const String &json) {
     clearAll();
     const char *cursor = json.c_str();
@@ -848,7 +900,7 @@ void DeviceTopicMap::replaceFromJson(const String &json) {
         if (objectStart == nullptr) {
             break;
         }
-        const char *objectEnd = strchr(objectStart, '}');
+        const char *objectEnd = findJsonObjectEnd(objectStart);
         if (objectEnd == nullptr) {
             break;
         }
@@ -908,6 +960,17 @@ void DeviceTopicMap::replaceFromJson(const String &json) {
                         entry->publishToMqtt = parsedPublishToMqtt ? 1 : 0;
                     } else {
                         entry->publishToMqtt = 1;
+                    }
+                }
+                free(entry->userDataFieldsJson);
+                entry->userDataFieldsJson = nullptr;
+                if (zigbeeDeviceTypeIsUserData(entry->zigbeeType)) {
+                    String fieldsSlice;
+                    if (extractJsonKeyedSlice(object.c_str(), "userDataFields", '[', fieldsSlice)
+                        && fieldsSlice.length() > 0) {
+                        entry->userDataFieldsJson = duplicateBoundedString(fieldsSlice.c_str(), 768);
+                    } else {
+                        entry->userDataFieldsJson = duplicateBoundedString("[]", 768);
                     }
                 }
             }
@@ -1128,6 +1191,14 @@ static void appendDeviceListEntryJson(
     if (clampDeviceTransport(deviceEntry->transport) != DeviceTransportMqtt) {
         json += ",\"publishToMqtt\":";
         json += deviceEntry->publishToMqtt ? "true" : "false";
+    }
+    if (zigbeeDeviceTypeIsUserData(deviceEntry->zigbeeType)) {
+        json += ",\"userDataFields\":";
+        if (deviceEntry->userDataFieldsJson != nullptr && deviceEntry->userDataFieldsJson[0] != '\0') {
+            json += deviceEntry->userDataFieldsJson;
+        } else {
+            json += "[]";
+        }
     }
     if (isOnline != nullptr) {
         json += ",\"online\":";
