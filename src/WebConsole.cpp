@@ -756,6 +756,10 @@ void WebConsole::sendConsoleWriteResult(AsyncWebServerRequest *request, ConsoleW
         request->send(507, "text/plain", "Out of memory");
         return;
     }
+    if (result == ConsoleWriteParseError) {
+        request->send(400, "text/plain", "Bad console JSON");
+        return;
+    }
     request->send(400, "text/plain", "Bad console");
 }
 

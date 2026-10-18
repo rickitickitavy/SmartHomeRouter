@@ -113,6 +113,9 @@ public:
     String consoleFullJson(const ConsoleRecord *console) const;
     String mineJson(const class UserRecord *user) const;
     static bool heapAllowsAllocation(size_t bytes);
+    // Copy [start, endInclusive] into out without reading past endInclusive (avoids
+    // String(ptr).substring which first copies from ptr to the JSON NUL terminator).
+    static bool assignJsonSlice(const char *start, const char *endInclusive, String &out);
     static char *duplicateBoundedString(const char *source, size_t maxLength);
     static void freeGaugeRanges(ConsoleGaugeRange *&head);
     static void freeBindingList(ConsoleBinding *&head);
