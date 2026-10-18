@@ -5,8 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-constexpr uint8_t kUserDataFieldMaxCount = 16;
+constexpr uint8_t kUserDataFieldMaxCount = 24;
 constexpr size_t kUserDataFieldNameMaxLen = 32;
+// Enough for 24 max-length name rows of persisted schema JSON.
+constexpr size_t kUserDataFieldsJsonMaxLen = 2048;
 constexpr uint16_t kUserDataClusterId = 0xFC00;
 constexpr uint16_t kUserDataAttributeId = 0x0001;
 

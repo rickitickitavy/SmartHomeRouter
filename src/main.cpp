@@ -32,6 +32,7 @@
 #include "DeviceStore.h"
 #include "ZigbeeDeviceType.h"
 #include "ZigbeeCluster.h"
+#include "UserDataPayload.h"
 #if defined(BOARD_ROLE_SLAVE)
 #include "ZigbeeCoordinator.h"
 #endif
@@ -213,10 +214,13 @@ static void applyDeviceConfigPayload(const char *payload) {
     if (zigbeeDeviceTypeIsUserData(entry->zigbeeType)) {
         String fieldsSlice;
         if (extractJsonKeyedSlice(payload, "userDataFields", '[', fieldsSlice) && fieldsSlice.length() > 0) {
-            entry->userDataFieldsJson =
-                DeviceTopicMap::duplicateBoundedString(fieldsSlice.c_str(), 768);
+            entry->userDataFieldsJson = DeviceTopicMap::duplicateBoundedString(
+                fieldsSlice.c_str(),
+                kUserDataFieldsJsonMaxLen
+            );
         } else {
-            entry->userDataFieldsJson = DeviceTopicMap::duplicateBoundedString("[]", 768);
+            entry->userDataFieldsJson =
+                DeviceTopicMap::duplicateBoundedString("[]", kUserDataFieldsJsonMaxLen);
         }
     }
     mqttClient->subscribeDeviceCommands();

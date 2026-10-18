@@ -93,9 +93,12 @@ private:
     static constexpr int kPendingChangeSlots = 1;
     static constexpr unsigned long kOnlineWindowMs = 15UL * 60UL * 1000UL;
 
+    // Host cache only (MQTT / UI / automations). SPI wire messages stay SPI_DEVICE_MESSAGE_MAX.
+    static constexpr size_t kStatusStateMax = 512;
+
     struct EndpointStatus {
         uint8_t endpoint;
-        char state[SPI_DEVICE_MESSAGE_MAX];
+        char state[kStatusStateMax];
         char coveringMove[16];
         char coveringPosition[8];
         char discreteStatus[16];

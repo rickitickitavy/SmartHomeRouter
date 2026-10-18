@@ -2,6 +2,7 @@
 #include "JsonField.h"
 #include "SpiProtocol.h"
 #include "Defines.h"
+#include "UserDataPayload.h"
 #include "ZigbeeCluster.h"
 #include "ZigbeeDeviceType.h"
 
@@ -109,7 +110,8 @@ bool DeviceTopicMap::cloneEntry(DeviceTopicEntry *destination, const DeviceTopic
     destination->publishToMqtt = source->publishToMqtt;
     destination->zigbeeType = source->zigbeeType;
     destination->transport = source->transport;
-    destination->userDataFieldsJson = duplicateBoundedString(source->userDataFieldsJson, 768);
+    destination->userDataFieldsJson =
+        duplicateBoundedString(source->userDataFieldsJson, kUserDataFieldsJsonMaxLen);
     if (source->userDataFieldsJson != nullptr
         && source->userDataFieldsJson[0] != '\0'
         && destination->userDataFieldsJson == nullptr) {
@@ -753,7 +755,8 @@ DeviceTopicEntry *DeviceTopicMap::upsertFromEntry(const DeviceTopicEntry *source
     }
     entry->transport = clampDeviceTransport(source->transport);
     free(entry->userDataFieldsJson);
-    entry->userDataFieldsJson = duplicateBoundedString(source->userDataFieldsJson, 768);
+    entry->userDataFieldsJson =
+        duplicateBoundedString(source->userDataFieldsJson, kUserDataFieldsJsonMaxLen);
     return entry;
 }
 
@@ -968,9 +971,11 @@ void DeviceTopicMap::replaceFromJson(const String &json) {
                     String fieldsSlice;
                     if (extractJsonKeyedSlice(object.c_str(), "userDataFields", '[', fieldsSlice)
                         && fieldsSlice.length() > 0) {
-                        entry->userDataFieldsJson = duplicateBoundedString(fieldsSlice.c_str(), 768);
+                        entry->userDataFieldsJson =
+                            duplicateBoundedString(fieldsSlice.c_str(), kUserDataFieldsJsonMaxLen);
                     } else {
-                        entry->userDataFieldsJson = duplicateBoundedString("[]", 768);
+                        entry->userDataFieldsJson =
+                            duplicateBoundedString("[]", kUserDataFieldsJsonMaxLen);
                     }
                 }
             }

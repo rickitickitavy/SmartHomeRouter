@@ -2,6 +2,7 @@
 #include "Logger.h"
 #include "Defines.h"
 #include "JsonField.h"
+#include "UserDataPayload.h"
 #include "ZigbeeDeviceType.h"
 #include "FirmwareOta.h"
 #include "InterChipHost.h"
@@ -2308,10 +2309,13 @@ void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
         String fieldsSlice;
         if (extractJsonKeyedSlice(body.c_str(), "userDataFields", '[', fieldsSlice)
             && fieldsSlice.length() > 0) {
-            entry->userDataFieldsJson =
-                DeviceTopicMap::duplicateBoundedString(fieldsSlice.c_str(), 768);
+            entry->userDataFieldsJson = DeviceTopicMap::duplicateBoundedString(
+                fieldsSlice.c_str(),
+                kUserDataFieldsJsonMaxLen
+            );
         } else {
-            entry->userDataFieldsJson = DeviceTopicMap::duplicateBoundedString("[]", 768);
+            entry->userDataFieldsJson =
+                DeviceTopicMap::duplicateBoundedString("[]", kUserDataFieldsJsonMaxLen);
         }
     }
     if (foundDevices != nullptr) {

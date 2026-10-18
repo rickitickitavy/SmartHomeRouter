@@ -1138,21 +1138,28 @@
 
         function postRestoredDevice(device, remainingTries) {
             var triesLeft = remainingTries == null ? 25 : remainingTries;
+            var body = {
+                ieee: device.ieee,
+                name: device.name || device.friendlyName || "",
+                state: device.state || "",
+                command: device.command || "",
+                availability: device.availability || "",
+                channels: device.channels,
+                fullControl: !!device.fullControl,
+                debug: !!device.debug,
+                type: device.type || "unknown",
+                transport: device.transport == "mqtt" ? "mqtt" : "zigbee"
+            };
+            if (device.transport != "mqtt" && typeof device.publishToMqtt === "boolean") {
+                body.publishToMqtt = device.publishToMqtt;
+            }
+            if ((device.type || "") === "userData") {
+                body.userDataFields = normalizeUserDataFields(device.userDataFields);
+            }
             return fetch("/api/devices", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    ieee: device.ieee,
-                    name: device.name || device.friendlyName || "",
-                    state: device.state || "",
-                    command: device.command || "",
-                    availability: device.availability || "",
-                    channels: device.channels,
-                    fullControl: !!device.fullControl,
-                    debug: !!device.debug,
-                    type: device.type || "unknown",
-                    transport: device.transport == "mqtt" ? "mqtt" : "zigbee"
-                })
+                body: JSON.stringify(body)
             }).then(function (response) {
                 return response.text().then(function (text) {
                     if (response.status === 503 && triesLeft > 0) {
@@ -4183,9 +4190,13 @@
 
         function applyParameterDialogMode() {
             var deleteButton = document.getElementById("parameterDeleteBtn");
+            var exportButton = document.getElementById("parameterExportBtn");
             var commandTabButton = document.getElementById("parameterCommandTabBtn");
             if (deleteButton) {
                 deleteButton.hidden = !parameterDialogIsEdit || !(isAdminUser() || hasRole("removeDevices"));
+            }
+            if (exportButton) {
+                exportButton.hidden = !parameterDialogIsEdit || !isAdminUser();
             }
             if (commandTabButton) {
                 if (parameterDialogIsEdit && canControlDevices()) {
@@ -4195,6 +4206,72 @@
                 }
             }
             showParameterTab("settings");
+        }
+
+        function exportParameterDialogDevice() {
+            var errorLine = document.getElementById("parameterDialogError");
+            if (errorLine) {
+                errorLine.hidden = true;
+            }
+            if (!parameterDialogIsEdit || !isAdminUser()) {
+                return;
+            }
+            var ieeeText = document.getElementById("deviceIeee")
+                ? document.getElementById("deviceIeee").value
+                : "";
+            var ieeeKey = normalizeIeeeText(ieeeText);
+            if (!ieeeKey) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = "Device IEEE is missing";
+                }
+                return;
+            }
+            fetch("/api/devices/store", { cache: "no-store" }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    var parsed;
+                    try {
+                        parsed = JSON.parse(text || "[]");
+                    } catch (parseError) {
+                        throw new Error("devices store is not valid JSON");
+                    }
+                    if (!Array.isArray(parsed)) {
+                        throw new Error("devices store must be a JSON array");
+                    }
+                    var matched = null;
+                    var index;
+                    for (index = 0; index < parsed.length; index++) {
+                        if (normalizeIeeeText(parsed[index] && parsed[index].ieee) === ieeeKey) {
+                            matched = parsed[index];
+                            break;
+                        }
+                    }
+                    if (!matched) {
+                        throw new Error("Device not found in devices store");
+                    }
+                    // Same array format as Devices → Export, with only this record.
+                    var body = JSON.stringify([matched]);
+                    var blob = new Blob([body], { type: "application/json;charset=utf-8" });
+                    var objectUrl = URL.createObjectURL(blob);
+                    var link = document.createElement("a");
+                    var nameHint = matched.name || matched.friendlyName || ieeeKey;
+                    var safeName = String(nameHint).replace(/[\\/:*?"<>|]+/g, "_").trim() || ieeeKey;
+                    link.href = objectUrl;
+                    link.download = safeName + ".json";
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(objectUrl);
+                });
+            }).catch(function (error) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = error && error.message ? error.message : "Export failed";
+                }
+            });
         }
 
         var parameterDialogUserDataFields = [];
@@ -4217,11 +4294,13 @@
             return false;
         }
 
+        var USER_DATA_FIELD_MAX_COUNT = 24;
+
         function normalizeUserDataFields(rawFields) {
             var source = Array.isArray(rawFields) ? rawFields : [];
             var normalized = [];
             var index;
-            for (index = 0; index < source.length && normalized.length < 16; index++) {
+            for (index = 0; index < source.length && normalized.length < USER_DATA_FIELD_MAX_COUNT; index++) {
                 var row = source[index] || {};
                 var name = String(row.name || "").trim();
                 var typeId = String(row.type || "string");
@@ -4345,7 +4424,7 @@
         }
 
         function addUserDataFieldRow() {
-            if (parameterDialogUserDataFields.length >= 16) {
+            if (parameterDialogUserDataFields.length >= USER_DATA_FIELD_MAX_COUNT) {
                 return;
             }
             parameterDialogUserDataFields.push({
@@ -5344,7 +5423,10 @@
                     onOffSwitch.onclick = onOffToggle;
                     controls.appendChild(onOffSwitch);
                 }
-            } else if (isBinarySensorDeviceType(typeId) && binding.viewStyle === "icon") {
+            } else if (binding.viewStyle === "icon"
+                && (isBinarySensorDeviceType(typeId)
+                    || (typeId === "userData"
+                        && userDataFieldTypeForParam(device, param) === "bool"))) {
                 controls.appendChild(buildConsoleIconElement(
                     binding,
                     placeBindingResolvedState(device, binding)
@@ -9661,7 +9743,11 @@
                     iconPreviewState = String(placeOnOffState(previewDevice, binding)).toUpperCase() === "ON"
                         ? "ON"
                         : "OFF";
-                } else if (previewDevice && isBinarySensorDeviceType(previewType)) {
+                } else if (previewDevice && (
+                    isBinarySensorDeviceType(previewType)
+                    || (previewType === "userData"
+                        && userDataFieldTypeForParam(previewDevice, placeBindingParam(binding)) === "bool")
+                )) {
                     showIconPreview = true;
                     iconPreviewState = placeBindingResolvedState(previewDevice, binding) || "OFF";
                 } else if (binding.icon) {
@@ -10159,6 +10245,24 @@
             return consoleBindingParamIsNumeric(device, paramValue);
         }
 
+        function consoleBindingAllowsIcon(device, paramValue) {
+            if (!device) {
+                return false;
+            }
+            var typeId = device.type || "";
+            if (isBinarySensorDeviceType(typeId)) {
+                return true;
+            }
+            if (typeId === "onOff" && (paramValue === "status" || paramValue === "")) {
+                return true;
+            }
+            // userData bool fields use the same Icon path as binary sensors.
+            if (typeId === "userData") {
+                return userDataFieldTypeForParam(device, paramValue) === "bool";
+            }
+            return false;
+        }
+
         function renderConsoleDeviceGaugeRangesList() {
             var host = document.getElementById("consoleDeviceGaugeRangesList");
             if (!host) {
@@ -10317,12 +10421,10 @@
             var device = consoleDialogSelectedDevice();
             var paramSelect = document.getElementById("consoleDeviceParam");
             var paramValue = paramSelect ? paramSelect.value : "";
-            var isBinary = !!(device && isBinarySensorDeviceType(device.type || ""));
-            var onOffSwitchEligible = !!(device
-                && (device.type || "") === "onOff"
-                && (paramValue === "status" || paramValue === ""));
-            var allowsGauge = !isAutomation && !isBinary && consoleBindingAllowsGauge(device, paramValue);
-            var allowsIconStyle = isAutomation || isBinary || onOffSwitchEligible;
+            var allowsIconStyle = isAutomation || consoleBindingAllowsIcon(device, paramValue);
+            var allowsGauge = !isAutomation
+                && !allowsIconStyle
+                && consoleBindingAllowsGauge(device, paramValue);
             var viewStyleField = document.getElementById("consoleDeviceViewStyleField");
             var viewStyleSelect = document.getElementById("consoleDeviceViewStyle");
             var gaugeGroup = document.getElementById("consoleDeviceGaugeGroup");
@@ -11403,7 +11505,7 @@
                 <div class="page-footer-inner">
                     <button type="button" id="addDeviceBtn" class="btn btn-primary" onclick="openSearchDialog()">Add device</button>
                     <button type="button" id="exportDevicesBtn" class="btn btn-secondary" onclick="exportDevicesStore()">Export</button>
-                    <button type="button" id="restoreDevicesBtn" class="btn btn-secondary" onclick="openDevicesRestoreDialog(false)">Restore</button>
+                    <button type="button" id="restoreDevicesBtn" class="btn btn-secondary" onclick="openDevicesRestoreDialog(false)">Import</button>
                     <button type="button" id="fullRestoreDevicesBtn" class="btn btn-secondary" onclick="openDevicesRestoreDialog(true)">Full restore</button>
                 </div>
             </div>
@@ -11817,6 +11919,7 @@
                 <div class="dialog-actions">
                     <button type="button" class="btn btn-primary" onclick="saveDeviceParameters()">Save</button>
                     <button type="button" class="btn btn-secondary" onclick="requestCloseParameterDialog()">Cancel</button>
+                    <button type="button" id="parameterExportBtn" class="btn btn-secondary" hidden onclick="exportParameterDialogDevice()">Export</button>
                     <button type="button" id="parameterDeleteBtn" class="btn btn-secondary" hidden onclick="openDeleteConfirmDialog()">Delete</button>
                 </div>
             </div>
