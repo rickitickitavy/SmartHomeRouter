@@ -1877,18 +1877,28 @@ html, body {
     height: 100%;
     min-height: 0;
     justify-content: center;
+    overflow: hidden;
+}
+
+.console-composite-cell-body .console-device-row--gauge .console-device-row-title {
+    overflow: hidden;
+    text-align: center;
+    line-height: 1.15;
 }
 
 .console-composite-cell-body .console-gauge {
     width: 100%;
     max-width: 100%;
     min-height: 0;
+    flex: 1 1 auto;
+    justify-content: center;
 }
 
 .console-composite-cell-body .console-gauge-arc-svg {
     max-width: 100%;
     width: min(100%, var(--composite-cell-w, 100%));
     height: auto;
+    flex: 0 0 auto;
 }
 
 .console-composite-cell-body .console-binary-icon {
@@ -2257,7 +2267,7 @@ html, body {
 
 .console-gauge-value-svg {
     fill: var(--text);
-    font-size: 13.6px;
+    font-size: 10.88px;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
 }

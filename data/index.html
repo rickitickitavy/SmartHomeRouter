@@ -8817,44 +8817,113 @@
             if (!root) {
                 return;
             }
-            var bodyNodes = root.querySelectorAll(".console-composite-cell-body");
-            var bodyIndex;
-            for (bodyIndex = 0; bodyIndex < bodyNodes.length; bodyIndex++) {
-                var bodyEl = bodyNodes[bodyIndex];
-                var cellW = bodyEl.clientWidth || 0;
-                var cellH = bodyEl.clientHeight || 0;
-                if (!(cellW > 0)) {
-                    cellW = bodyEl.offsetWidth || 0;
+            var GAUGE_ASPECT = 104 / 58;
+            var TITLE_FONT_MAX = 15;
+            var TITLE_FONT_MIN = 9;
+            var VALUE_FONT_BASE = 10.88;
+            var VALUE_FONT_MIN = 8;
+            var VALUE_FONT_MAX = 18;
+            var TITLE_GAP = 4;
+
+            function measureBodyFit(bodyEl) {
+                var cellW = bodyEl.clientWidth || bodyEl.offsetWidth || 0;
+                var cellH = bodyEl.clientHeight || bodyEl.offsetHeight || 0;
+                return {
+                    fitW: Math.max(24, cellW - 4),
+                    fitH: Math.max(24, cellH - 4)
+                };
+            }
+
+            function scaleTitleToBand(titleEl, maxWidthPx, maxHeightPx) {
+                if (!titleEl || !(maxWidthPx > 0) || !(maxHeightPx > 0)) {
+                    return 0;
                 }
-                if (!(cellH > 0)) {
-                    cellH = bodyEl.offsetHeight || 0;
+                titleEl.style.width = "100%";
+                titleEl.style.maxWidth = String(maxWidthPx) + "px";
+                titleEl.style.boxSizing = "border-box";
+                titleEl.style.whiteSpace = "normal";
+                titleEl.style.overflowWrap = "anywhere";
+                titleEl.style.lineHeight = "1.15";
+                titleEl.style.minHeight = "";
+                var fontPx = TITLE_FONT_MAX;
+                titleEl.style.fontSize = String(fontPx) + "px";
+                while (fontPx > TITLE_FONT_MIN
+                    && (titleEl.scrollHeight > maxHeightPx + 0.5
+                        || titleEl.scrollWidth > maxWidthPx + 0.5)) {
+                    fontPx -= 0.5;
+                    titleEl.style.fontSize = String(fontPx) + "px";
                 }
-                var fitW = Math.max(24, cellW - 4);
-                var fitH = Math.max(24, cellH - 4);
-                bodyEl.style.setProperty("--composite-cell-w", String(fitW) + "px");
-                bodyEl.style.setProperty("--composite-cell-h", String(fitH) + "px");
-                var gaugeSvgs = bodyEl.querySelectorAll(".console-gauge-arc-svg");
+                return Math.min(maxHeightPx, titleEl.offsetHeight || 0);
+            }
+
+            var rowNodes = root.querySelectorAll(".console-composite-row");
+            var rowIndex;
+            for (rowIndex = 0; rowIndex < rowNodes.length; rowIndex++) {
+                var rowEl = rowNodes[rowIndex];
+                var bodyNodes = rowEl.querySelectorAll(".console-composite-cell-body");
+                var gaugeBodies = [];
+                var bodyIndex;
+                for (bodyIndex = 0; bodyIndex < bodyNodes.length; bodyIndex++) {
+                    var bodyEl = bodyNodes[bodyIndex];
+                    var fit = measureBodyFit(bodyEl);
+                    bodyEl.style.setProperty("--composite-cell-w", String(fit.fitW) + "px");
+                    bodyEl.style.setProperty("--composite-cell-h", String(fit.fitH) + "px");
+                    if (bodyEl.querySelector(".console-gauge-arc-svg")) {
+                        gaugeBodies.push({ bodyEl: bodyEl, fitW: fit.fitW, fitH: fit.fitH });
+                    }
+                    var icons = bodyEl.querySelectorAll(".console-binary-icon");
+                    var iconIndex;
+                    var iconFit = Math.max(16, Math.min(fit.fitW, fit.fitH));
+                    var iconScale = Math.max(0.5, Math.min(4, iconFit / 32));
+                    for (iconIndex = 0; iconIndex < icons.length; iconIndex++) {
+                        icons[iconIndex].style.setProperty("--console-icon-scale", String(iconScale));
+                        icons[iconIndex].style.minWidth = "0";
+                        icons[iconIndex].style.minHeight = "0";
+                    }
+                }
+                if (!gaugeBodies.length) {
+                    continue;
+                }
+                var commonW = gaugeBodies[0].fitW;
+                var commonH = gaugeBodies[0].fitH;
                 var gIndex;
-                for (gIndex = 0; gIndex < gaugeSvgs.length; gIndex++) {
-                    var titleEl = bodyEl.querySelector(".console-device-row-title");
-                    var titleH = titleEl ? titleEl.offsetHeight + 4 : 0;
-                    var availH = Math.max(28, fitH - titleH);
-                    // viewBox aspect ~104/58
-                    var byWidth = fitW;
-                    var byHeight = availH * (104 / 58);
-                    var gaugeSize = Math.max(36, Math.min(byWidth, byHeight));
-                    gaugeSvgs[gIndex].style.width = String(gaugeSize) + "px";
-                    gaugeSvgs[gIndex].style.maxWidth = "100%";
-                    gaugeSvgs[gIndex].style.height = "auto";
+                for (gIndex = 1; gIndex < gaugeBodies.length; gIndex++) {
+                    commonW = Math.min(commonW, gaugeBodies[gIndex].fitW);
+                    commonH = Math.min(commonH, gaugeBodies[gIndex].fitH);
                 }
-                var icons = bodyEl.querySelectorAll(".console-binary-icon");
-                var iconIndex;
-                var iconFit = Math.max(16, Math.min(fitW, fitH));
-                var iconScale = Math.max(0.5, Math.min(4, iconFit / 32));
-                for (iconIndex = 0; iconIndex < icons.length; iconIndex++) {
-                    icons[iconIndex].style.setProperty("--console-icon-scale", String(iconScale));
-                    icons[iconIndex].style.minWidth = "0";
-                    icons[iconIndex].style.minHeight = "0";
+                // Fixed title band from designed cell size (up to ~2 lines), same for every gauge cell.
+                var titleBand = Math.max(
+                    TITLE_FONT_MIN * 1.15,
+                    Math.min(commonH * 0.34, TITLE_FONT_MAX * 1.15 * 2 + 2)
+                );
+                for (gIndex = 0; gIndex < gaugeBodies.length; gIndex++) {
+                    var titleEl = gaugeBodies[gIndex].bodyEl.querySelector(".console-device-row-title");
+                    if (!titleEl || titleEl.offsetParent === null
+                        || window.getComputedStyle(titleEl).display === "none") {
+                        continue;
+                    }
+                    scaleTitleToBand(titleEl, commonW, titleBand);
+                    titleEl.style.minHeight = String(titleBand) + "px";
+                }
+                var availH = Math.max(28, commonH - titleBand - TITLE_GAP);
+                var gaugeSize = Math.max(36, Math.min(commonW, availH * GAUGE_ASPECT));
+                var valueFont = Math.max(
+                    VALUE_FONT_MIN,
+                    Math.min(VALUE_FONT_MAX, VALUE_FONT_BASE * (gaugeSize / 104))
+                );
+                for (gIndex = 0; gIndex < gaugeBodies.length; gIndex++) {
+                    var gaugeSvgs = gaugeBodies[gIndex].bodyEl.querySelectorAll(".console-gauge-arc-svg");
+                    var svgIndex;
+                    for (svgIndex = 0; svgIndex < gaugeSvgs.length; svgIndex++) {
+                        gaugeSvgs[svgIndex].style.width = String(gaugeSize) + "px";
+                        gaugeSvgs[svgIndex].style.maxWidth = "100%";
+                        gaugeSvgs[svgIndex].style.height = "auto";
+                        var valueNodes = gaugeSvgs[svgIndex].querySelectorAll(".console-gauge-value-svg");
+                        var valueIndex;
+                        for (valueIndex = 0; valueIndex < valueNodes.length; valueIndex++) {
+                            valueNodes[valueIndex].style.fontSize = String(valueFont) + "px";
+                        }
+                    }
                 }
             }
         }
