@@ -1556,7 +1556,7 @@ html, body {
 }
 
 .console-composite-row-height input {
-    width: 3.25rem;
+    width: 4.5rem;
     min-height: 2rem;
     box-sizing: border-box;
 }
@@ -1569,7 +1569,7 @@ html, body {
 }
 
 .console-composite-cell-width input {
-    width: 3.25rem;
+    width: 4.5rem;
     min-height: 2rem;
     box-sizing: border-box;
 }
@@ -1758,9 +1758,9 @@ html, body {
 }
 
 #consoleEditDialog .console-composite--edit .console-composite-cell-width input {
-    width: 3.25rem;
-    min-width: 3.25rem;
-    max-width: 3.25rem;
+    width: 4.5rem;
+    min-width: 4.5rem;
+    max-width: 4.5rem;
     flex: 0 0 auto;
     min-height: 2rem;
     box-sizing: border-box;

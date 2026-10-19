@@ -94,7 +94,8 @@ private:
     static constexpr unsigned long kOnlineWindowMs = 15UL * 60UL * 1000UL;
 
     // Host cache only (MQTT / UI / automations). SPI wire messages stay SPI_DEVICE_MESSAGE_MAX.
-    static constexpr size_t kStatusStateMax = 512;
+    // Sized for userData brace values: 24 slots × 16 bytes (15 chars + NUL).
+    static constexpr size_t kStatusStateMax = kUserDataValuesMaxBytes;
 
     struct EndpointStatus {
         uint8_t endpoint;

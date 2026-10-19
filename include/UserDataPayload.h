@@ -1,14 +1,27 @@
 #pragma once
 
+#include "JsonField.h"
+
 #include <Arduino.h>
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
 constexpr uint8_t kUserDataFieldMaxCount = 24;
-constexpr size_t kUserDataFieldNameMaxLen = 32;
-// Enough for 24 max-length name rows of persisted schema JSON.
-constexpr size_t kUserDataFieldsJsonMaxLen = 2048;
+// Field name: 20 chars + NUL.
+constexpr size_t kUserDataFieldNameMaxChars = 20;
+constexpr size_t kUserDataFieldNameMaxLen = kUserDataFieldNameMaxChars + 1;
+// String attribute value: 15 chars + NUL.
+constexpr size_t kUserDataStringValueMaxChars = 15;
+constexpr size_t kUserDataStringValueMaxLen = kUserDataStringValueMaxChars + 1;
+// Packed schema row: name[20]+NUL + nullable + type.
+constexpr size_t kUserDataFieldPackedBytes =
+    kUserDataFieldNameMaxChars + 1 + 1 + 1;
+constexpr size_t kUserDataFieldsMaxBytes =
+    kUserDataFieldPackedBytes * kUserDataFieldMaxCount;
+constexpr size_t kUserDataValuesMaxBytes =
+    kUserDataFieldMaxCount * kUserDataStringValueMaxLen;
+
 constexpr uint16_t kUserDataClusterId = 0xFC00;
 constexpr uint16_t kUserDataAttributeId = 0x0001;
 
@@ -19,11 +32,15 @@ enum UserDataFieldType : uint8_t {
     UserDataFieldTypeString = 3
 };
 
-struct UserDataFieldDef {
-    bool nullable;
-    UserDataFieldType type;
+struct __attribute__((packed)) UserDataFieldDef {
+    uint8_t nullable;
+    uint8_t type;
     char name[kUserDataFieldNameMaxLen];
 };
+
+static_assert(sizeof(UserDataFieldDef) == kUserDataFieldPackedBytes, "userData field pack size");
+static_assert(kUserDataFieldsMaxBytes == 552, "userData schema max bytes");
+static_assert(kUserDataValuesMaxBytes == 384, "userData values max bytes");
 
 inline UserDataFieldType userDataFieldTypeFromText(const char *text) {
     if (text == nullptr) {
@@ -52,6 +69,181 @@ inline const char *userDataFieldTypeJsonId(UserDataFieldType type) {
         default:
             return "string";
     }
+}
+
+inline void userDataCopyFieldName(char *destination, const char *source) {
+    if (destination == nullptr) {
+        return;
+    }
+    destination[0] = '\0';
+    if (source == nullptr) {
+        return;
+    }
+    size_t copyLen = 0;
+    while (source[copyLen] != '\0' && copyLen < kUserDataFieldNameMaxChars) {
+        destination[copyLen] = source[copyLen];
+        copyLen++;
+    }
+    destination[copyLen] = '\0';
+}
+
+inline void userDataTruncateStringValue(String *value) {
+    if (value == nullptr) {
+        return;
+    }
+    if (value->length() > kUserDataStringValueMaxChars) {
+        *value = value->substring(0, (unsigned int)kUserDataStringValueMaxChars);
+    }
+}
+
+inline void userDataClearFieldDefs(UserDataFieldDef **fields, uint8_t *fieldCount) {
+    if (fields != nullptr) {
+        free(*fields);
+        *fields = nullptr;
+    }
+    if (fieldCount != nullptr) {
+        *fieldCount = 0;
+    }
+}
+
+inline bool userDataCopyFieldDefs(
+    UserDataFieldDef **destinationFields,
+    uint8_t *destinationCount,
+    const UserDataFieldDef *sourceFields,
+    uint8_t sourceCount
+) {
+    if (destinationFields == nullptr || destinationCount == nullptr) {
+        return false;
+    }
+    userDataClearFieldDefs(destinationFields, destinationCount);
+    if (sourceCount == 0 || sourceFields == nullptr) {
+        return true;
+    }
+    if (sourceCount > kUserDataFieldMaxCount) {
+        sourceCount = kUserDataFieldMaxCount;
+    }
+    UserDataFieldDef *copy =
+        (UserDataFieldDef *)malloc((size_t)sourceCount * sizeof(UserDataFieldDef));
+    if (copy == nullptr) {
+        return false;
+    }
+    memcpy(copy, sourceFields, (size_t)sourceCount * sizeof(UserDataFieldDef));
+    *destinationFields = copy;
+    *destinationCount = sourceCount;
+    return true;
+}
+
+inline const char *userDataFindJsonObjectEnd(const char *objectStart) {
+    if (objectStart == nullptr || *objectStart != '{') {
+        return nullptr;
+    }
+    int depth = 0;
+    bool inString = false;
+    bool escape = false;
+    for (const char *cursor = objectStart; *cursor != '\0'; cursor++) {
+        const char character = *cursor;
+        if (inString) {
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (character == '\\') {
+                escape = true;
+                continue;
+            }
+            if (character == '"') {
+                inString = false;
+            }
+            continue;
+        }
+        if (character == '"') {
+            inString = true;
+            continue;
+        }
+        if (character == '{' || character == '[') {
+            depth++;
+            continue;
+        }
+        if (character == '}' || character == ']') {
+            depth--;
+            if (depth == 0 && character == '}') {
+                return cursor;
+            }
+        }
+    }
+    return nullptr;
+}
+
+inline uint8_t userDataParseFieldsJson(
+    const char *json,
+    UserDataFieldDef *outFields,
+    uint8_t maxCount
+) {
+    if (json == nullptr || outFields == nullptr || maxCount == 0) {
+        return 0;
+    }
+    uint8_t count = 0;
+    const char *cursor = json;
+    while (cursor != nullptr && *cursor != '\0' && count < maxCount) {
+        const char *objectStart = strchr(cursor, '{');
+        if (objectStart == nullptr) {
+            break;
+        }
+        const char *objectEnd = userDataFindJsonObjectEnd(objectStart);
+        if (objectEnd == nullptr) {
+            break;
+        }
+        String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
+        String nameText;
+        String typeText;
+        bool nullable = false;
+        extractJsonString(object.c_str(), "name", nameText);
+        extractJsonString(object.c_str(), "type", typeText);
+        extractJsonBool(object.c_str(), "nullable", nullable);
+        nameText.trim();
+        UserDataFieldDef &field = outFields[count];
+        memset(&field, 0, sizeof(field));
+        field.nullable = nullable ? 1 : 0;
+        field.type = (uint8_t)userDataFieldTypeFromText(typeText.c_str());
+        userDataCopyFieldName(field.name, nameText.c_str());
+        count++;
+        cursor = objectEnd + 1;
+    }
+    return count;
+}
+
+inline bool userDataAssignFieldsFromJson(
+    UserDataFieldDef **fields,
+    uint8_t *fieldCount,
+    const char *json
+) {
+    if (fields == nullptr || fieldCount == nullptr) {
+        return false;
+    }
+    UserDataFieldDef parsed[kUserDataFieldMaxCount];
+    const uint8_t count = userDataParseFieldsJson(json, parsed, kUserDataFieldMaxCount);
+    return userDataCopyFieldDefs(fields, fieldCount, parsed, count);
+}
+
+inline String userDataFieldsToJson(const UserDataFieldDef *fields, uint8_t fieldCount) {
+    String json = "[";
+    if (fields == nullptr) {
+        fieldCount = 0;
+    }
+    for (uint8_t index = 0; index < fieldCount; index++) {
+        if (index > 0) {
+            json += ",";
+        }
+        json += "{\"nullable\":";
+        json += fields[index].nullable ? "true" : "false";
+        json += ",\"name\":\"";
+        appendJsonEscaped(json, fields[index].name, kUserDataFieldNameMaxChars);
+        json += "\",\"type\":\"";
+        json += userDataFieldTypeJsonId((UserDataFieldType)fields[index].type);
+        json += "\"}";
+    }
+    json += "]";
+    return json;
 }
 
 inline bool userDataSlotIsNullToken(const String &token) {
@@ -233,6 +425,38 @@ inline String userDataUnquoteSlot(const String &token) {
     return trimmed;
 }
 
+inline String userDataQuoteSlot(const String &value) {
+    String quoted = "\"";
+    appendJsonEscaped(quoted, value.c_str(), kUserDataStringValueMaxChars);
+    quoted += "\"";
+    return quoted;
+}
+
+inline String userDataClampBraceListValues(const String &braceList) {
+    String slots[kUserDataFieldMaxCount];
+    const int slotCount = userDataSplitBraceSlots(braceList, slots, kUserDataFieldMaxCount);
+    if (slotCount <= 0) {
+        return braceList;
+    }
+    String clamped = "{";
+    for (int index = 0; index < slotCount; index++) {
+        if (index > 0) {
+            clamped += ",";
+        }
+        String token = slots[index];
+        token.trim();
+        if (token.length() >= 2 && token.charAt(0) == '"' && token.charAt(token.length() - 1) == '"') {
+            String value = userDataUnquoteSlot(token);
+            userDataTruncateStringValue(&value);
+            clamped += userDataQuoteSlot(value);
+        } else {
+            clamped += token;
+        }
+    }
+    clamped += "}";
+    return clamped;
+}
+
 inline String userDataSlotForField(
     const String &braceList,
     const UserDataFieldDef *fields,
@@ -266,6 +490,9 @@ inline String userDataSlotForField(
         if (userDataParseBoolToken(value, &boolValue)) {
             return boolValue ? String("ON") : String("OFF");
         }
+    }
+    if (fields[fieldIndex].type == UserDataFieldTypeString) {
+        userDataTruncateStringValue(&value);
     }
     return value;
 }

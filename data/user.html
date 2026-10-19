@@ -1388,7 +1388,7 @@
                     var heightInput = document.createElement("input");
                     heightInput.type = "number";
                     heightInput.min = "0.1";
-                    heightInput.step = "0.1";
+                    heightInput.step = "any";
                     heightInput.className = "console-composite-height";
                     heightInput.setAttribute("data-widget-index", String(widgetIndex));
                     heightInput.setAttribute("data-row-index", String(rowIndex));
@@ -1430,12 +1430,14 @@
                         var widthInput = document.createElement("input");
                         widthInput.type = "number";
                         widthInput.min = "0.1";
-                        widthInput.step = "0.1";
+                        widthInput.step = "any";
                         widthInput.className = "console-composite-width";
                         widthInput.setAttribute("data-widget-index", String(widgetIndex));
                         widthInput.setAttribute("data-row-index", String(rowIndex));
                         widthInput.setAttribute("data-cell-index", String(cellIndex));
-                        widthInput.value = String(cell.width != null ? cell.width : 1);
+                        widthInput.value = String(
+                            cell.width != null && Number(cell.width) > 0 ? Number(cell.width) : 1
+                        );
                         var widthUnit = document.createElement("select");
                         widthUnit.className = "console-composite-width-unit";
                         widthUnit.setAttribute("data-widget-index", String(widgetIndex));

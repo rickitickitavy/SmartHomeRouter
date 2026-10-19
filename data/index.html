@@ -3050,6 +3050,9 @@
                     return "OFF";
                 }
             }
+            if (fieldType === "string" && token.length > USER_DATA_STRING_VALUE_MAX_CHARS) {
+                return token.substring(0, USER_DATA_STRING_VALUE_MAX_CHARS);
+            }
             return token;
         }
 
@@ -4295,6 +4298,8 @@
         }
 
         var USER_DATA_FIELD_MAX_COUNT = 24;
+        var USER_DATA_FIELD_NAME_MAX_CHARS = 20;
+        var USER_DATA_STRING_VALUE_MAX_CHARS = 15;
 
         function normalizeUserDataFields(rawFields) {
             var source = Array.isArray(rawFields) ? rawFields : [];
@@ -4303,6 +4308,9 @@
             for (index = 0; index < source.length && normalized.length < USER_DATA_FIELD_MAX_COUNT; index++) {
                 var row = source[index] || {};
                 var name = String(row.name || "").trim();
+                if (name.length > USER_DATA_FIELD_NAME_MAX_CHARS) {
+                    name = name.substring(0, USER_DATA_FIELD_NAME_MAX_CHARS);
+                }
                 var typeId = String(row.type || "string");
                 if (typeId !== "int" && typeId !== "float" && typeId !== "bool" && typeId !== "string") {
                     typeId = "string";
@@ -4349,9 +4357,15 @@
                     nameInput.type = "text";
                     nameInput.className = "user-data-field-name";
                     nameInput.value = field.name || "";
+                    nameInput.maxLength = USER_DATA_FIELD_NAME_MAX_CHARS;
                     nameInput.autocomplete = "off";
                     nameInput.oninput = function () {
-                        parameterDialogUserDataFields[fieldIndex].name = nameInput.value;
+                        var nextName = nameInput.value || "";
+                        if (nextName.length > USER_DATA_FIELD_NAME_MAX_CHARS) {
+                            nextName = nextName.substring(0, USER_DATA_FIELD_NAME_MAX_CHARS);
+                            nameInput.value = nextName;
+                        }
+                        parameterDialogUserDataFields[fieldIndex].name = nextName;
                     };
                     nameCell.appendChild(nameInput);
                     var typeCell = document.createElement("td");
@@ -6643,7 +6657,8 @@
                     var fieldName = fields[fieldIndex] && fields[fieldIndex].name
                         ? String(fields[fieldIndex].name).trim()
                         : "";
-                    if (!fieldName || isReservedBindingParamId(fieldName)) {
+                    // Schema names are user-defined (including "status" / "text"); do not filter.
+                    if (!fieldName) {
                         continue;
                     }
                     params.push({ id: fieldName, label: fieldName });
@@ -8919,7 +8934,7 @@
                     var heightInput = document.createElement("input");
                     heightInput.type = "number";
                     heightInput.min = "0.1";
-                    heightInput.step = "0.1";
+                    heightInput.step = "any";
                     heightInput.className = "console-composite-height";
                     heightInput.setAttribute("data-widget-index", String(widgetIndex));
                     heightInput.setAttribute("data-row-index", String(rowIndex));
@@ -8987,12 +9002,14 @@
                         var widthInput = document.createElement("input");
                         widthInput.type = "number";
                         widthInput.min = "0.1";
-                        widthInput.step = "0.1";
+                        widthInput.step = "any";
                         widthInput.className = "console-composite-width";
                         widthInput.setAttribute("data-widget-index", String(widgetIndex));
                         widthInput.setAttribute("data-row-index", String(rowIndex));
                         widthInput.setAttribute("data-cell-index", String(cellIndex));
-                        widthInput.value = String(cell.width != null ? cell.width : 1);
+                        widthInput.value = String(
+                            cell.width != null && Number(cell.width) > 0 ? Number(cell.width) : 1
+                        );
                         var widthUnit = document.createElement("select");
                         widthUnit.className = "console-composite-width-unit";
                         widthUnit.setAttribute("data-widget-index", String(widgetIndex));
@@ -9341,19 +9358,43 @@
         function buildEditorBindingPreviewForBinding(binding) {
             var row = document.createElement("div");
             row.className = "console-device-row is-edit console-composite-binding-preview";
-            var title = document.createElement("span");
-            title.className = "console-device-row-title";
-            if (binding && binding.automation) {
-                title.textContent = binding.title || binding.automation || "Automation";
-            } else if (binding && binding.ieee) {
-                var device = typeof findRegisteredDevice === "function"
-                    ? findRegisteredDevice(binding.ieee)
-                    : null;
-                title.textContent = binding.title || (device && device.name) || binding.ieee;
-            } else {
-                title.textContent = "Device";
+            applyBindingTitleLayout(row, binding);
+            // Show title off → muted registered name (never IEEE / binding Title).
+            appendBindingTitleElement(row, binding, "Device", { editPlaceholder: true });
+            if (!binding || !binding.ieee || binding.automation) {
+                return row;
             }
-            row.appendChild(title);
+            var previewDevice = findRegisteredDevice(binding.ieee)
+                || findRegisteredDeviceByIeee(binding.ieee);
+            if (!previewDevice) {
+                return row;
+            }
+            var previewType = previewDevice.type || "";
+            var previewParam = placeBindingParam(binding);
+            var controls = document.createElement("div");
+            controls.className = "console-device-row-controls";
+            if (binding.viewStyle === "icon"
+                && (isBinarySensorDeviceType(previewType)
+                    || (previewType === "userData"
+                        && userDataFieldTypeForParam(previewDevice, previewParam) === "bool")
+                    || previewType === "onOff"
+                    || binding.icon)) {
+                controls.appendChild(buildConsoleIconElement(
+                    binding,
+                    placeBindingResolvedState(previewDevice, binding) || "OFF",
+                    {
+                        interactive: true,
+                        disabled: true,
+                        ariaLabel: "Icon preview"
+                    }
+                ));
+            } else {
+                var valueLabel = document.createElement("span");
+                valueLabel.className = "console-sensor-value";
+                valueLabel.textContent = placeBindingResolvedState(previewDevice, binding) || "—";
+                controls.appendChild(valueLabel);
+            }
+            row.appendChild(controls);
             return row;
         }
 
@@ -9847,7 +9888,9 @@
                 var heightWidget = consoleEditorDraft.widgets[heightWidgetIndex];
                 if (heightWidget && heightWidget.compositeRows && heightWidget.compositeRows[heightRowIndex]) {
                     var heightValue = parseFloat(heightInputs[heightIndex].value);
-                    heightWidget.compositeRows[heightRowIndex].height = heightValue > 0 ? heightValue : 1;
+                    if (heightValue > 0) {
+                        heightWidget.compositeRows[heightRowIndex].height = heightValue;
+                    }
                 }
             }
             var heightUnits = document.querySelectorAll(".console-composite-height-unit");
@@ -9872,7 +9915,9 @@
                     && widthWidget.compositeRows[widthRowIndex].cells
                     && widthWidget.compositeRows[widthRowIndex].cells[widthCellIndex]) {
                     var widthValue = parseFloat(widthInputs[widthIndex].value);
-                    widthWidget.compositeRows[widthRowIndex].cells[widthCellIndex].width = widthValue > 0 ? widthValue : 1;
+                    if (widthValue > 0) {
+                        widthWidget.compositeRows[widthRowIndex].cells[widthCellIndex].width = widthValue;
+                    }
                 }
             }
             var widthUnits = document.querySelectorAll(".console-composite-width-unit");
@@ -10351,16 +10396,20 @@
             refreshConsoleDeviceGaugeFields();
         }
 
-        function fillConsoleDeviceViewStyleOptions(isBinarySensor, selectedStyle) {
+        function fillConsoleDeviceViewStyleOptions(allowsIconStyle, allowsGauge, selectedStyle, defaultLabel) {
             var viewStyleSelect = document.getElementById("consoleDeviceViewStyle");
             if (!viewStyleSelect) {
                 return;
             }
             var previous = selectedStyle || viewStyleSelect.value || "default";
             viewStyleSelect.innerHTML = "";
-            var options = isBinarySensor
-                ? [["default", "Default"], ["icon", "Icon"]]
-                : [["default", "Default"], ["gauge", "Gauge"]];
+            var options = [["default", defaultLabel || "Default"]];
+            if (allowsIconStyle) {
+                options.push(["icon", "Icon"]);
+            }
+            if (allowsGauge) {
+                options.push(["gauge", "Gauge"]);
+            }
             var index;
             var matched = false;
             for (index = 0; index < options.length; index++) {
@@ -10429,13 +10478,24 @@
             var viewStyleSelect = document.getElementById("consoleDeviceViewStyle");
             var gaugeGroup = document.getElementById("consoleDeviceGaugeGroup");
             var iconGroup = document.getElementById("consoleDeviceIconGroup");
-            var showViewStyle = allowsGauge || allowsIconStyle;
+            // Always show View style for device bindings so string/text params keep a Text option.
+            var showViewStyle = !isAutomation && !!device;
+            var defaultStyleLabel = "Default";
+            if (device && (device.type || "") === "userData"
+                && userDataFieldTypeForParam(device, paramValue) === "string") {
+                defaultStyleLabel = "Text";
+            }
             setHidden(viewStyleField, !showViewStyle);
             var preferredStyle = consoleDevicePreferredViewStyle;
             var selectedForFill = preferredStyle
                 || (viewStyleSelect ? viewStyleSelect.value : "default");
             if (showViewStyle) {
-                fillConsoleDeviceViewStyleOptions(allowsIconStyle, selectedForFill);
+                fillConsoleDeviceViewStyleOptions(
+                    allowsIconStyle,
+                    allowsGauge,
+                    selectedForFill,
+                    defaultStyleLabel
+                );
             } else if (viewStyleSelect) {
                 viewStyleSelect.value = "default";
             }
@@ -10832,17 +10892,13 @@
                 }
             }
             var device = consoleDialogSelectedDevice();
-            var isBinary = !!(device && isBinarySensorDeviceType(device.type || ""));
-            var onOffSwitchEligible = !!(device
-                && (device.type || "") === "onOff"
-                && (body.param === "status" || body.param === ""));
-            var allowsIconStyle = isBinary || onOffSwitchEligible;
+            var allowsIconStyle = consoleBindingAllowsIcon(device, body.param);
             if (allowsIconStyle
                 && viewStyleSelect
                 && viewStyleSelect.value === "icon") {
                 body.viewStyle = "icon";
                 body.icon = normalizeMdiIconId(consoleDeviceIconDraft);
-            } else if (!isBinary
+            } else if (!allowsIconStyle
                 && consoleBindingAllowsGauge(device, body.param)
                 && viewStyleSelect
                 && viewStyleSelect.value === "gauge") {

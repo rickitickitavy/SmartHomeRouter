@@ -65,12 +65,11 @@ void DeviceTopicMap::clearEntryStrings(DeviceTopicEntry *entry) {
     free(entry->stateTopic);
     free(entry->commandTopic);
     free(entry->availabilityTopic);
-    free(entry->userDataFieldsJson);
+    userDataClearFieldDefs(&entry->userDataFields, &entry->userDataFieldCount);
     entry->friendlyName = nullptr;
     entry->stateTopic = nullptr;
     entry->commandTopic = nullptr;
     entry->availabilityTopic = nullptr;
-    entry->userDataFieldsJson = nullptr;
 }
 
 void DeviceTopicMap::freeEntry(DeviceTopicEntry *entry) {
@@ -110,11 +109,12 @@ bool DeviceTopicMap::cloneEntry(DeviceTopicEntry *destination, const DeviceTopic
     destination->publishToMqtt = source->publishToMqtt;
     destination->zigbeeType = source->zigbeeType;
     destination->transport = source->transport;
-    destination->userDataFieldsJson =
-        duplicateBoundedString(source->userDataFieldsJson, kUserDataFieldsJsonMaxLen);
-    if (source->userDataFieldsJson != nullptr
-        && source->userDataFieldsJson[0] != '\0'
-        && destination->userDataFieldsJson == nullptr) {
+    if (!userDataCopyFieldDefs(
+            &destination->userDataFields,
+            &destination->userDataFieldCount,
+            source->userDataFields,
+            source->userDataFieldCount
+        )) {
         clearEntryStrings(destination);
         return false;
     }
@@ -754,9 +754,20 @@ DeviceTopicEntry *DeviceTopicMap::upsertFromEntry(const DeviceTopicEntry *source
         entry->zigbeeType = source->zigbeeType;
     }
     entry->transport = clampDeviceTransport(source->transport);
-    free(entry->userDataFieldsJson);
-    entry->userDataFieldsJson =
-        duplicateBoundedString(source->userDataFieldsJson, kUserDataFieldsJsonMaxLen);
+    // Schema lives on the host only. Do not wipe it when the source has no fields
+    // (e.g. SPI sync payloads never carry userDataFields).
+    if (source->userDataFieldCount > 0) {
+        if (!userDataCopyFieldDefs(
+                &entry->userDataFields,
+                &entry->userDataFieldCount,
+                source->userDataFields,
+                source->userDataFieldCount
+            )) {
+            userDataClearFieldDefs(&entry->userDataFields, &entry->userDataFieldCount);
+        }
+    } else if (!zigbeeDeviceTypeIsUserData(entry->zigbeeType)) {
+        userDataClearFieldDefs(&entry->userDataFields, &entry->userDataFieldCount);
+    }
     return entry;
 }
 
@@ -965,17 +976,16 @@ void DeviceTopicMap::replaceFromJson(const String &json) {
                         entry->publishToMqtt = 1;
                     }
                 }
-                free(entry->userDataFieldsJson);
-                entry->userDataFieldsJson = nullptr;
+                userDataClearFieldDefs(&entry->userDataFields, &entry->userDataFieldCount);
                 if (zigbeeDeviceTypeIsUserData(entry->zigbeeType)) {
                     String fieldsSlice;
                     if (extractJsonKeyedSlice(object.c_str(), "userDataFields", '[', fieldsSlice)
                         && fieldsSlice.length() > 0) {
-                        entry->userDataFieldsJson =
-                            duplicateBoundedString(fieldsSlice.c_str(), kUserDataFieldsJsonMaxLen);
-                    } else {
-                        entry->userDataFieldsJson =
-                            duplicateBoundedString("[]", kUserDataFieldsJsonMaxLen);
+                        userDataAssignFieldsFromJson(
+                            &entry->userDataFields,
+                            &entry->userDataFieldCount,
+                            fieldsSlice.c_str()
+                        );
                     }
                 }
             }
@@ -1199,11 +1209,7 @@ static void appendDeviceListEntryJson(
     }
     if (zigbeeDeviceTypeIsUserData(deviceEntry->zigbeeType)) {
         json += ",\"userDataFields\":";
-        if (deviceEntry->userDataFieldsJson != nullptr && deviceEntry->userDataFieldsJson[0] != '\0') {
-            json += deviceEntry->userDataFieldsJson;
-        } else {
-            json += "[]";
-        }
+        json += userDataFieldsToJson(deviceEntry->userDataFields, deviceEntry->userDataFieldCount);
     }
     if (isOnline != nullptr) {
         json += ",\"online\":";
