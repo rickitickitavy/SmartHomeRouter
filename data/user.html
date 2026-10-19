@@ -611,6 +611,27 @@
                 || typeId == "bacnetBinaryValueExtended";
         }
 
+        function userDataFieldTypeForParam(device, paramValue) {
+            if (!device || (device.type || "") !== "userData" || !paramValue) {
+                return "";
+            }
+            var wanted = String(paramValue).trim();
+            if (!wanted || wanted === "custom" || wanted === "battery" || wanted === "status") {
+                return "";
+            }
+            var fields = Array.isArray(device.userDataFields) ? device.userDataFields : [];
+            var fieldIndex;
+            for (fieldIndex = 0; fieldIndex < fields.length; fieldIndex++) {
+                var fieldName = fields[fieldIndex] && fields[fieldIndex].name
+                    ? String(fields[fieldIndex].name).trim()
+                    : "";
+                if (fieldName === wanted) {
+                    return String(fields[fieldIndex].type || "string");
+                }
+            }
+            return "";
+        }
+
         function normalizeMdiIconId(iconId) {
             var text = String(iconId || "").trim().toLowerCase();
             if (!text) {
@@ -1966,7 +1987,10 @@
                     onOffSwitch.onclick = onOffToggle;
                     controls.appendChild(onOffSwitch);
                 }
-            } else if (isBinarySensorDeviceType(typeId) && binding.viewStyle === "icon") {
+            } else if (binding.viewStyle === "icon"
+                && (isBinarySensorDeviceType(typeId)
+                    || (typeId === "userData"
+                        && userDataFieldTypeForParam(device, param) === "bool"))) {
                 controls.appendChild(buildConsoleIconElement(
                     binding,
                     bindingResolvedState(device, binding)
