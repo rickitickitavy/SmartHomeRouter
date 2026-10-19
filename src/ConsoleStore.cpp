@@ -35,6 +35,22 @@ bool ConsoleStore::heapAllowsAllocation(size_t bytes) {
     return true;
 }
 
+bool ConsoleStore::assignJsonSlice(const char *start, const char *endInclusive, String &out) {
+    out = "";
+    if (start == nullptr || endInclusive == nullptr || endInclusive < start) {
+        return false;
+    }
+    const size_t length = (size_t)(endInclusive - start + 1);
+    if (!heapAllowsAllocation(length + 1)) {
+        return false;
+    }
+    if (!out.concat(start, (unsigned int)length)) {
+        out = "";
+        return false;
+    }
+    return true;
+}
+
 char *ConsoleStore::duplicateBoundedString(const char *source, size_t maxLength) {
     const char *text = source != nullptr ? source : "";
     size_t length = strlen(text);
@@ -506,7 +522,12 @@ bool ConsoleStore::parseGaugeConfig(const char *bindingJson, ConsoleBinding *bin
                 binding->gaugeRanges = nullptr;
                 return false;
             }
-            String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
+            String object;
+            if (!assignJsonSlice(objectStart, objectEnd, object)) {
+                freeGaugeRanges(binding->gaugeRanges);
+                binding->gaugeRanges = nullptr;
+                return false;
+            }
             double topValue = 0.0;
             String colorText;
             extractJsonDouble(object.c_str(), "top", topValue);
@@ -568,7 +589,11 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
             freeBindingList(*outBindings);
             return false;
         }
-        String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
+        String object;
+        if (!assignJsonSlice(objectStart, objectEnd, object)) {
+            freeBindingList(*outBindings);
+            return false;
+        }
         if (!heapAllowsAllocation(sizeof(ConsoleBinding))) {
             freeBindingList(*outBindings);
             return false;
@@ -852,7 +877,11 @@ bool ConsoleStore::parseCompositeRows(const char *widgetJson, ConsoleCompositeRo
             freeCompositeRowList(*outRows);
             return false;
         }
-        String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
+        String object;
+        if (!assignJsonSlice(objectStart, objectEnd, object)) {
+            freeCompositeRowList(*outRows);
+            return false;
+        }
         if (!heapAllowsAllocation(sizeof(ConsoleCompositeRow))) {
             freeCompositeRowList(*outRows);
             return false;
@@ -897,7 +926,13 @@ bool ConsoleStore::parseCompositeRows(const char *widgetJson, ConsoleCompositeRo
                     freeCompositeRowList(*outRows);
                     return false;
                 }
-                String cellObject = String(cellStart).substring(0, (unsigned int)(cellEnd - cellStart + 1));
+                String cellObject;
+                if (!assignJsonSlice(cellStart, cellEnd, cellObject)) {
+                    freeCompositeCellList(row->cells);
+                    free(row);
+                    freeCompositeRowList(*outRows);
+                    return false;
+                }
                 if (!heapAllowsAllocation(sizeof(ConsoleCompositeCell))) {
                     freeCompositeCellList(row->cells);
                     free(row);
@@ -1011,7 +1046,11 @@ bool ConsoleStore::parseWidgets(const char *objectJson, ConsoleWidget **outWidge
             freeWidgetList(*outWidgets);
             return false;
         }
-        String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
+        String object;
+        if (!assignJsonSlice(objectStart, objectEnd, object)) {
+            freeWidgetList(*outWidgets);
+            return false;
+        }
         // Root-depth only: nested devices[].spacer must not mark the whole widget a spacer.
         bool isSpacer = false;
         extractJsonBoolRoot(object.c_str(), "spacer", isSpacer);
@@ -1146,7 +1185,19 @@ ConsoleWriteResult ConsoleStore::parseOneConsole(const char *objectJson, Console
     console->columns = (uint8_t)columns;
     if (!parseWidgets(objectJson, &console->widgets)) {
         freeConsole(console);
-        return ConsoleWriteOutOfMemory;
+        const size_t freeHeap = ESP.getFreeHeap();
+        const size_t maxBlock = ESP.getMaxAllocHeap();
+        LOGGER.error(
+            String("Console widgets parse failed free=")
+            + String((unsigned long)freeHeap)
+            + " maxBlock="
+            + String((unsigned long)maxBlock)
+        );
+        // Contiguous heap too small → OOM; otherwise treat as malformed console JSON.
+        if (maxBlock < 2048UL || freeHeap < CONSOLE_HEAP_RESERVE_BYTES + 2048UL) {
+            return ConsoleWriteOutOfMemory;
+        }
+        return ConsoleWriteParseError;
     }
     *outConsole = console;
     return ConsoleWriteOk;
@@ -1216,7 +1267,11 @@ bool ConsoleStore::replaceAllFromJson(const String &json) {
             freeConsoleList(newHead);
             return false;
         }
-        String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
+        String object;
+        if (!assignJsonSlice(objectStart, objectEnd, object)) {
+            freeConsoleList(newHead);
+            return false;
+        }
         ConsoleRecord *console = nullptr;
         if (parseOneConsole(object.c_str(), &console, true) != ConsoleWriteOk || console == nullptr) {
             freeConsoleList(newHead);

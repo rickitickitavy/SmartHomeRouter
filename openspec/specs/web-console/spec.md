@@ -1500,7 +1500,7 @@ While the operator is signed in, when the console page becomes visible or shown 
 
 ### Requirement: User-data parameter dialog edits field schema
 
-For type `userData`, the parameter dialog MUST show a User data fields table (columns: nullable checkbox, name, type) with per-row Remove, Up, and Down. Add is draft-only until Save; Cancel discards. Types are `int`, `float`, `bool`, `string`. Hide the table for other types.
+For type `userData`, the parameter dialog MUST show a User data fields table (columns: nullable checkbox, name, type) with per-row Remove, Up, and Down. Add is draft-only until Save; Cancel discards. Types are `int`, `float`, `bool`, `string`. Hide the table for other types. The dialog MUST allow up to **24** fields (Add MUST NOT append a 25th row).
 
 #### Scenario: Reorder then save
 
@@ -1516,3 +1516,8 @@ For type `userData`, the parameter dialog MUST show a User data fields table (co
 
 - **WHEN** the operator opens parameters for an `onOff` device
 - **THEN** the User data fields table is not shown
+
+#### Scenario: Add stops at twenty-four
+
+- **WHEN** the operator already has 24 field rows in the User data fields table and activates Add field
+- **THEN** the table still has 24 rows (no 25th row is added)

@@ -2,6 +2,7 @@
 #include "Logger.h"
 #include "Defines.h"
 #include "JsonField.h"
+#include "UserDataPayload.h"
 #include "ZigbeeDeviceType.h"
 #include "FirmwareOta.h"
 #include "InterChipHost.h"
@@ -753,6 +754,10 @@ void WebConsole::sendConsoleWriteResult(AsyncWebServerRequest *request, ConsoleW
     }
     if (result == ConsoleWriteOutOfMemory) {
         request->send(507, "text/plain", "Out of memory");
+        return;
+    }
+    if (result == ConsoleWriteParseError) {
+        request->send(400, "text/plain", "Bad console JSON");
         return;
     }
     request->send(400, "text/plain", "Bad console");
@@ -2302,16 +2307,16 @@ void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
     } else if (foundDevices != nullptr) {
         entry->zigbeeType = foundDevices->zigbeeTypeForIeee(ieee);
     }
-    free(entry->userDataFieldsJson);
-    entry->userDataFieldsJson = nullptr;
+    userDataClearFieldDefs(&entry->userDataFields, &entry->userDataFieldCount);
     if (zigbeeDeviceTypeIsUserData(entry->zigbeeType)) {
         String fieldsSlice;
         if (extractJsonKeyedSlice(body.c_str(), "userDataFields", '[', fieldsSlice)
             && fieldsSlice.length() > 0) {
-            entry->userDataFieldsJson =
-                DeviceTopicMap::duplicateBoundedString(fieldsSlice.c_str(), 768);
-        } else {
-            entry->userDataFieldsJson = DeviceTopicMap::duplicateBoundedString("[]", 768);
+            userDataAssignFieldsFromJson(
+                &entry->userDataFields,
+                &entry->userDataFieldCount,
+                fieldsSlice.c_str()
+            );
         }
     }
     if (foundDevices != nullptr) {

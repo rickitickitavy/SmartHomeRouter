@@ -122,6 +122,7 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
         return;
     }
     String userDataBraceList;
+    bool haveUserDataBrace = false;
     if (strstr(message, "cl=0x") != nullptr && strstr(message, "attr=") != nullptr) {
         if (!userDataMessageIsClusterReport(message)) {
             return;
@@ -129,6 +130,28 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
         if (!userDataExtractBraceList(message, &userDataBraceList) || userDataBraceList.length() == 0) {
             return;
         }
+        haveUserDataBrace = true;
+    } else {
+        const char *braceCursor = message;
+        while (*braceCursor == ' ' || *braceCursor == '\t') {
+            braceCursor++;
+        }
+        if (*braceCursor == '{') {
+            bool isUserDataDevice = false;
+            if (registryMap != nullptr) {
+                const DeviceTopicEntry *entry = registryMap->findByIeee(slot->ieee);
+                isUserDataDevice =
+                    entry != nullptr && zigbeeDeviceTypeIsUserData(entry->zigbeeType);
+            }
+            if (isUserDataDevice
+                && userDataExtractBraceList(message, &userDataBraceList)
+                && userDataBraceList.length() > 0) {
+                haveUserDataBrace = true;
+            }
+        }
+    }
+    if (haveUserDataBrace) {
+        userDataBraceList = userDataClampBraceListValues(userDataBraceList);
         message = userDataBraceList.c_str();
     }
     if (!DeviceTopicMap::isUsableEndpoint(endpoint)) {

@@ -1117,11 +1117,28 @@ html, body {
 
 #parameterDialog .dialog-panel {
     width: min(40rem, 100%);
+    max-height: 90vh;
+    overflow: hidden;
 }
 
 #parameterDialog .tab-content {
-    overflow: visible;
-    flex: none;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#parameterDialog .parameter-tab-panel.tab-panel.active {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+#parameterDialog .dialog-actions {
+    flex: 0 0 auto;
+    margin-top: 0.25rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
 }
 
 #parameter-tab-command.tab-panel.active {
@@ -1539,7 +1556,7 @@ html, body {
 }
 
 .console-composite-row-height input {
-    width: 3.25rem;
+    width: 4.5rem;
     min-height: 2rem;
     box-sizing: border-box;
 }
@@ -1552,7 +1569,7 @@ html, body {
 }
 
 .console-composite-cell-width input {
-    width: 3.25rem;
+    width: 4.5rem;
     min-height: 2rem;
     box-sizing: border-box;
 }
@@ -1741,9 +1758,9 @@ html, body {
 }
 
 #consoleEditDialog .console-composite--edit .console-composite-cell-width input {
-    width: 3.25rem;
-    min-width: 3.25rem;
-    max-width: 3.25rem;
+    width: 4.5rem;
+    min-width: 4.5rem;
+    max-width: 4.5rem;
     flex: 0 0 auto;
     min-height: 2rem;
     box-sizing: border-box;
@@ -1860,18 +1877,28 @@ html, body {
     height: 100%;
     min-height: 0;
     justify-content: center;
+    overflow: hidden;
+}
+
+.console-composite-cell-body .console-device-row--gauge .console-device-row-title {
+    overflow: hidden;
+    text-align: center;
+    line-height: 1.15;
 }
 
 .console-composite-cell-body .console-gauge {
     width: 100%;
     max-width: 100%;
     min-height: 0;
+    flex: 1 1 auto;
+    justify-content: center;
 }
 
 .console-composite-cell-body .console-gauge-arc-svg {
     max-width: 100%;
     width: min(100%, var(--composite-cell-w, 100%));
     height: auto;
+    flex: 0 0 auto;
 }
 
 .console-composite-cell-body .console-binary-icon {
@@ -2240,7 +2267,7 @@ html, body {
 
 .console-gauge-value-svg {
     fill: var(--text);
-    font-size: 13.6px;
+    font-size: 10.88px;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
 }

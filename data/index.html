@@ -1138,21 +1138,28 @@
 
         function postRestoredDevice(device, remainingTries) {
             var triesLeft = remainingTries == null ? 25 : remainingTries;
+            var body = {
+                ieee: device.ieee,
+                name: device.name || device.friendlyName || "",
+                state: device.state || "",
+                command: device.command || "",
+                availability: device.availability || "",
+                channels: device.channels,
+                fullControl: !!device.fullControl,
+                debug: !!device.debug,
+                type: device.type || "unknown",
+                transport: device.transport == "mqtt" ? "mqtt" : "zigbee"
+            };
+            if (device.transport != "mqtt" && typeof device.publishToMqtt === "boolean") {
+                body.publishToMqtt = device.publishToMqtt;
+            }
+            if ((device.type || "") === "userData") {
+                body.userDataFields = normalizeUserDataFields(device.userDataFields);
+            }
             return fetch("/api/devices", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    ieee: device.ieee,
-                    name: device.name || device.friendlyName || "",
-                    state: device.state || "",
-                    command: device.command || "",
-                    availability: device.availability || "",
-                    channels: device.channels,
-                    fullControl: !!device.fullControl,
-                    debug: !!device.debug,
-                    type: device.type || "unknown",
-                    transport: device.transport == "mqtt" ? "mqtt" : "zigbee"
-                })
+                body: JSON.stringify(body)
             }).then(function (response) {
                 return response.text().then(function (text) {
                     if (response.status === 503 && triesLeft > 0) {
@@ -3043,6 +3050,9 @@
                     return "OFF";
                 }
             }
+            if (fieldType === "string" && token.length > USER_DATA_STRING_VALUE_MAX_CHARS) {
+                return token.substring(0, USER_DATA_STRING_VALUE_MAX_CHARS);
+            }
             return token;
         }
 
@@ -4183,9 +4193,13 @@
 
         function applyParameterDialogMode() {
             var deleteButton = document.getElementById("parameterDeleteBtn");
+            var exportButton = document.getElementById("parameterExportBtn");
             var commandTabButton = document.getElementById("parameterCommandTabBtn");
             if (deleteButton) {
                 deleteButton.hidden = !parameterDialogIsEdit || !(isAdminUser() || hasRole("removeDevices"));
+            }
+            if (exportButton) {
+                exportButton.hidden = !parameterDialogIsEdit || !isAdminUser();
             }
             if (commandTabButton) {
                 if (parameterDialogIsEdit && canControlDevices()) {
@@ -4195,6 +4209,72 @@
                 }
             }
             showParameterTab("settings");
+        }
+
+        function exportParameterDialogDevice() {
+            var errorLine = document.getElementById("parameterDialogError");
+            if (errorLine) {
+                errorLine.hidden = true;
+            }
+            if (!parameterDialogIsEdit || !isAdminUser()) {
+                return;
+            }
+            var ieeeText = document.getElementById("deviceIeee")
+                ? document.getElementById("deviceIeee").value
+                : "";
+            var ieeeKey = normalizeIeeeText(ieeeText);
+            if (!ieeeKey) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = "Device IEEE is missing";
+                }
+                return;
+            }
+            fetch("/api/devices/store", { cache: "no-store" }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    var parsed;
+                    try {
+                        parsed = JSON.parse(text || "[]");
+                    } catch (parseError) {
+                        throw new Error("devices store is not valid JSON");
+                    }
+                    if (!Array.isArray(parsed)) {
+                        throw new Error("devices store must be a JSON array");
+                    }
+                    var matched = null;
+                    var index;
+                    for (index = 0; index < parsed.length; index++) {
+                        if (normalizeIeeeText(parsed[index] && parsed[index].ieee) === ieeeKey) {
+                            matched = parsed[index];
+                            break;
+                        }
+                    }
+                    if (!matched) {
+                        throw new Error("Device not found in devices store");
+                    }
+                    // Same array format as Devices → Export, with only this record.
+                    var body = JSON.stringify([matched]);
+                    var blob = new Blob([body], { type: "application/json;charset=utf-8" });
+                    var objectUrl = URL.createObjectURL(blob);
+                    var link = document.createElement("a");
+                    var nameHint = matched.name || matched.friendlyName || ieeeKey;
+                    var safeName = String(nameHint).replace(/[\\/:*?"<>|]+/g, "_").trim() || ieeeKey;
+                    link.href = objectUrl;
+                    link.download = safeName + ".json";
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(objectUrl);
+                });
+            }).catch(function (error) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = error && error.message ? error.message : "Export failed";
+                }
+            });
         }
 
         var parameterDialogUserDataFields = [];
@@ -4217,13 +4297,20 @@
             return false;
         }
 
+        var USER_DATA_FIELD_MAX_COUNT = 24;
+        var USER_DATA_FIELD_NAME_MAX_CHARS = 20;
+        var USER_DATA_STRING_VALUE_MAX_CHARS = 15;
+
         function normalizeUserDataFields(rawFields) {
             var source = Array.isArray(rawFields) ? rawFields : [];
             var normalized = [];
             var index;
-            for (index = 0; index < source.length && normalized.length < 16; index++) {
+            for (index = 0; index < source.length && normalized.length < USER_DATA_FIELD_MAX_COUNT; index++) {
                 var row = source[index] || {};
                 var name = String(row.name || "").trim();
+                if (name.length > USER_DATA_FIELD_NAME_MAX_CHARS) {
+                    name = name.substring(0, USER_DATA_FIELD_NAME_MAX_CHARS);
+                }
                 var typeId = String(row.type || "string");
                 if (typeId !== "int" && typeId !== "float" && typeId !== "bool" && typeId !== "string") {
                     typeId = "string";
@@ -4270,9 +4357,15 @@
                     nameInput.type = "text";
                     nameInput.className = "user-data-field-name";
                     nameInput.value = field.name || "";
+                    nameInput.maxLength = USER_DATA_FIELD_NAME_MAX_CHARS;
                     nameInput.autocomplete = "off";
                     nameInput.oninput = function () {
-                        parameterDialogUserDataFields[fieldIndex].name = nameInput.value;
+                        var nextName = nameInput.value || "";
+                        if (nextName.length > USER_DATA_FIELD_NAME_MAX_CHARS) {
+                            nextName = nextName.substring(0, USER_DATA_FIELD_NAME_MAX_CHARS);
+                            nameInput.value = nextName;
+                        }
+                        parameterDialogUserDataFields[fieldIndex].name = nextName;
                     };
                     nameCell.appendChild(nameInput);
                     var typeCell = document.createElement("td");
@@ -4345,7 +4438,7 @@
         }
 
         function addUserDataFieldRow() {
-            if (parameterDialogUserDataFields.length >= 16) {
+            if (parameterDialogUserDataFields.length >= USER_DATA_FIELD_MAX_COUNT) {
                 return;
             }
             parameterDialogUserDataFields.push({
@@ -5344,7 +5437,10 @@
                     onOffSwitch.onclick = onOffToggle;
                     controls.appendChild(onOffSwitch);
                 }
-            } else if (isBinarySensorDeviceType(typeId) && binding.viewStyle === "icon") {
+            } else if (binding.viewStyle === "icon"
+                && (isBinarySensorDeviceType(typeId)
+                    || (typeId === "userData"
+                        && userDataFieldTypeForParam(device, param) === "bool"))) {
                 controls.appendChild(buildConsoleIconElement(
                     binding,
                     placeBindingResolvedState(device, binding)
@@ -6561,7 +6657,8 @@
                     var fieldName = fields[fieldIndex] && fields[fieldIndex].name
                         ? String(fields[fieldIndex].name).trim()
                         : "";
-                    if (!fieldName || isReservedBindingParamId(fieldName)) {
+                    // Schema names are user-defined (including "status" / "text"); do not filter.
+                    if (!fieldName) {
                         continue;
                     }
                     params.push({ id: fieldName, label: fieldName });
@@ -8720,44 +8817,113 @@
             if (!root) {
                 return;
             }
-            var bodyNodes = root.querySelectorAll(".console-composite-cell-body");
-            var bodyIndex;
-            for (bodyIndex = 0; bodyIndex < bodyNodes.length; bodyIndex++) {
-                var bodyEl = bodyNodes[bodyIndex];
-                var cellW = bodyEl.clientWidth || 0;
-                var cellH = bodyEl.clientHeight || 0;
-                if (!(cellW > 0)) {
-                    cellW = bodyEl.offsetWidth || 0;
+            var GAUGE_ASPECT = 104 / 58;
+            var TITLE_FONT_MAX = 15;
+            var TITLE_FONT_MIN = 9;
+            var VALUE_FONT_BASE = 10.88;
+            var VALUE_FONT_MIN = 8;
+            var VALUE_FONT_MAX = 18;
+            var TITLE_GAP = 4;
+
+            function measureBodyFit(bodyEl) {
+                var cellW = bodyEl.clientWidth || bodyEl.offsetWidth || 0;
+                var cellH = bodyEl.clientHeight || bodyEl.offsetHeight || 0;
+                return {
+                    fitW: Math.max(24, cellW - 4),
+                    fitH: Math.max(24, cellH - 4)
+                };
+            }
+
+            function scaleTitleToBand(titleEl, maxWidthPx, maxHeightPx) {
+                if (!titleEl || !(maxWidthPx > 0) || !(maxHeightPx > 0)) {
+                    return 0;
                 }
-                if (!(cellH > 0)) {
-                    cellH = bodyEl.offsetHeight || 0;
+                titleEl.style.width = "100%";
+                titleEl.style.maxWidth = String(maxWidthPx) + "px";
+                titleEl.style.boxSizing = "border-box";
+                titleEl.style.whiteSpace = "normal";
+                titleEl.style.overflowWrap = "anywhere";
+                titleEl.style.lineHeight = "1.15";
+                titleEl.style.minHeight = "";
+                var fontPx = TITLE_FONT_MAX;
+                titleEl.style.fontSize = String(fontPx) + "px";
+                while (fontPx > TITLE_FONT_MIN
+                    && (titleEl.scrollHeight > maxHeightPx + 0.5
+                        || titleEl.scrollWidth > maxWidthPx + 0.5)) {
+                    fontPx -= 0.5;
+                    titleEl.style.fontSize = String(fontPx) + "px";
                 }
-                var fitW = Math.max(24, cellW - 4);
-                var fitH = Math.max(24, cellH - 4);
-                bodyEl.style.setProperty("--composite-cell-w", String(fitW) + "px");
-                bodyEl.style.setProperty("--composite-cell-h", String(fitH) + "px");
-                var gaugeSvgs = bodyEl.querySelectorAll(".console-gauge-arc-svg");
+                return Math.min(maxHeightPx, titleEl.offsetHeight || 0);
+            }
+
+            var rowNodes = root.querySelectorAll(".console-composite-row");
+            var rowIndex;
+            for (rowIndex = 0; rowIndex < rowNodes.length; rowIndex++) {
+                var rowEl = rowNodes[rowIndex];
+                var bodyNodes = rowEl.querySelectorAll(".console-composite-cell-body");
+                var gaugeBodies = [];
+                var bodyIndex;
+                for (bodyIndex = 0; bodyIndex < bodyNodes.length; bodyIndex++) {
+                    var bodyEl = bodyNodes[bodyIndex];
+                    var fit = measureBodyFit(bodyEl);
+                    bodyEl.style.setProperty("--composite-cell-w", String(fit.fitW) + "px");
+                    bodyEl.style.setProperty("--composite-cell-h", String(fit.fitH) + "px");
+                    if (bodyEl.querySelector(".console-gauge-arc-svg")) {
+                        gaugeBodies.push({ bodyEl: bodyEl, fitW: fit.fitW, fitH: fit.fitH });
+                    }
+                    var icons = bodyEl.querySelectorAll(".console-binary-icon");
+                    var iconIndex;
+                    var iconFit = Math.max(16, Math.min(fit.fitW, fit.fitH));
+                    var iconScale = Math.max(0.5, Math.min(4, iconFit / 32));
+                    for (iconIndex = 0; iconIndex < icons.length; iconIndex++) {
+                        icons[iconIndex].style.setProperty("--console-icon-scale", String(iconScale));
+                        icons[iconIndex].style.minWidth = "0";
+                        icons[iconIndex].style.minHeight = "0";
+                    }
+                }
+                if (!gaugeBodies.length) {
+                    continue;
+                }
+                var commonW = gaugeBodies[0].fitW;
+                var commonH = gaugeBodies[0].fitH;
                 var gIndex;
-                for (gIndex = 0; gIndex < gaugeSvgs.length; gIndex++) {
-                    var titleEl = bodyEl.querySelector(".console-device-row-title");
-                    var titleH = titleEl ? titleEl.offsetHeight + 4 : 0;
-                    var availH = Math.max(28, fitH - titleH);
-                    // viewBox aspect ~104/58
-                    var byWidth = fitW;
-                    var byHeight = availH * (104 / 58);
-                    var gaugeSize = Math.max(36, Math.min(byWidth, byHeight));
-                    gaugeSvgs[gIndex].style.width = String(gaugeSize) + "px";
-                    gaugeSvgs[gIndex].style.maxWidth = "100%";
-                    gaugeSvgs[gIndex].style.height = "auto";
+                for (gIndex = 1; gIndex < gaugeBodies.length; gIndex++) {
+                    commonW = Math.min(commonW, gaugeBodies[gIndex].fitW);
+                    commonH = Math.min(commonH, gaugeBodies[gIndex].fitH);
                 }
-                var icons = bodyEl.querySelectorAll(".console-binary-icon");
-                var iconIndex;
-                var iconFit = Math.max(16, Math.min(fitW, fitH));
-                var iconScale = Math.max(0.5, Math.min(4, iconFit / 32));
-                for (iconIndex = 0; iconIndex < icons.length; iconIndex++) {
-                    icons[iconIndex].style.setProperty("--console-icon-scale", String(iconScale));
-                    icons[iconIndex].style.minWidth = "0";
-                    icons[iconIndex].style.minHeight = "0";
+                // Fixed title band from designed cell size (up to ~2 lines), same for every gauge cell.
+                var titleBand = Math.max(
+                    TITLE_FONT_MIN * 1.15,
+                    Math.min(commonH * 0.34, TITLE_FONT_MAX * 1.15 * 2 + 2)
+                );
+                for (gIndex = 0; gIndex < gaugeBodies.length; gIndex++) {
+                    var titleEl = gaugeBodies[gIndex].bodyEl.querySelector(".console-device-row-title");
+                    if (!titleEl || titleEl.offsetParent === null
+                        || window.getComputedStyle(titleEl).display === "none") {
+                        continue;
+                    }
+                    scaleTitleToBand(titleEl, commonW, titleBand);
+                    titleEl.style.minHeight = String(titleBand) + "px";
+                }
+                var availH = Math.max(28, commonH - titleBand - TITLE_GAP);
+                var gaugeSize = Math.max(36, Math.min(commonW, availH * GAUGE_ASPECT));
+                var valueFont = Math.max(
+                    VALUE_FONT_MIN,
+                    Math.min(VALUE_FONT_MAX, VALUE_FONT_BASE * (gaugeSize / 104))
+                );
+                for (gIndex = 0; gIndex < gaugeBodies.length; gIndex++) {
+                    var gaugeSvgs = gaugeBodies[gIndex].bodyEl.querySelectorAll(".console-gauge-arc-svg");
+                    var svgIndex;
+                    for (svgIndex = 0; svgIndex < gaugeSvgs.length; svgIndex++) {
+                        gaugeSvgs[svgIndex].style.width = String(gaugeSize) + "px";
+                        gaugeSvgs[svgIndex].style.maxWidth = "100%";
+                        gaugeSvgs[svgIndex].style.height = "auto";
+                        var valueNodes = gaugeSvgs[svgIndex].querySelectorAll(".console-gauge-value-svg");
+                        var valueIndex;
+                        for (valueIndex = 0; valueIndex < valueNodes.length; valueIndex++) {
+                            valueNodes[valueIndex].style.fontSize = String(valueFont) + "px";
+                        }
+                    }
                 }
             }
         }
@@ -8837,7 +9003,7 @@
                     var heightInput = document.createElement("input");
                     heightInput.type = "number";
                     heightInput.min = "0.1";
-                    heightInput.step = "0.1";
+                    heightInput.step = "any";
                     heightInput.className = "console-composite-height";
                     heightInput.setAttribute("data-widget-index", String(widgetIndex));
                     heightInput.setAttribute("data-row-index", String(rowIndex));
@@ -8905,12 +9071,14 @@
                         var widthInput = document.createElement("input");
                         widthInput.type = "number";
                         widthInput.min = "0.1";
-                        widthInput.step = "0.1";
+                        widthInput.step = "any";
                         widthInput.className = "console-composite-width";
                         widthInput.setAttribute("data-widget-index", String(widgetIndex));
                         widthInput.setAttribute("data-row-index", String(rowIndex));
                         widthInput.setAttribute("data-cell-index", String(cellIndex));
-                        widthInput.value = String(cell.width != null ? cell.width : 1);
+                        widthInput.value = String(
+                            cell.width != null && Number(cell.width) > 0 ? Number(cell.width) : 1
+                        );
                         var widthUnit = document.createElement("select");
                         widthUnit.className = "console-composite-width-unit";
                         widthUnit.setAttribute("data-widget-index", String(widgetIndex));
@@ -9259,19 +9427,43 @@
         function buildEditorBindingPreviewForBinding(binding) {
             var row = document.createElement("div");
             row.className = "console-device-row is-edit console-composite-binding-preview";
-            var title = document.createElement("span");
-            title.className = "console-device-row-title";
-            if (binding && binding.automation) {
-                title.textContent = binding.title || binding.automation || "Automation";
-            } else if (binding && binding.ieee) {
-                var device = typeof findRegisteredDevice === "function"
-                    ? findRegisteredDevice(binding.ieee)
-                    : null;
-                title.textContent = binding.title || (device && device.name) || binding.ieee;
-            } else {
-                title.textContent = "Device";
+            applyBindingTitleLayout(row, binding);
+            // Show title off → muted registered name (never IEEE / binding Title).
+            appendBindingTitleElement(row, binding, "Device", { editPlaceholder: true });
+            if (!binding || !binding.ieee || binding.automation) {
+                return row;
             }
-            row.appendChild(title);
+            var previewDevice = findRegisteredDevice(binding.ieee)
+                || findRegisteredDeviceByIeee(binding.ieee);
+            if (!previewDevice) {
+                return row;
+            }
+            var previewType = previewDevice.type || "";
+            var previewParam = placeBindingParam(binding);
+            var controls = document.createElement("div");
+            controls.className = "console-device-row-controls";
+            if (binding.viewStyle === "icon"
+                && (isBinarySensorDeviceType(previewType)
+                    || (previewType === "userData"
+                        && userDataFieldTypeForParam(previewDevice, previewParam) === "bool")
+                    || previewType === "onOff"
+                    || binding.icon)) {
+                controls.appendChild(buildConsoleIconElement(
+                    binding,
+                    placeBindingResolvedState(previewDevice, binding) || "OFF",
+                    {
+                        interactive: true,
+                        disabled: true,
+                        ariaLabel: "Icon preview"
+                    }
+                ));
+            } else {
+                var valueLabel = document.createElement("span");
+                valueLabel.className = "console-sensor-value";
+                valueLabel.textContent = placeBindingResolvedState(previewDevice, binding) || "—";
+                controls.appendChild(valueLabel);
+            }
+            row.appendChild(controls);
             return row;
         }
 
@@ -9661,7 +9853,11 @@
                     iconPreviewState = String(placeOnOffState(previewDevice, binding)).toUpperCase() === "ON"
                         ? "ON"
                         : "OFF";
-                } else if (previewDevice && isBinarySensorDeviceType(previewType)) {
+                } else if (previewDevice && (
+                    isBinarySensorDeviceType(previewType)
+                    || (previewType === "userData"
+                        && userDataFieldTypeForParam(previewDevice, placeBindingParam(binding)) === "bool")
+                )) {
                     showIconPreview = true;
                     iconPreviewState = placeBindingResolvedState(previewDevice, binding) || "OFF";
                 } else if (binding.icon) {
@@ -9761,7 +9957,9 @@
                 var heightWidget = consoleEditorDraft.widgets[heightWidgetIndex];
                 if (heightWidget && heightWidget.compositeRows && heightWidget.compositeRows[heightRowIndex]) {
                     var heightValue = parseFloat(heightInputs[heightIndex].value);
-                    heightWidget.compositeRows[heightRowIndex].height = heightValue > 0 ? heightValue : 1;
+                    if (heightValue > 0) {
+                        heightWidget.compositeRows[heightRowIndex].height = heightValue;
+                    }
                 }
             }
             var heightUnits = document.querySelectorAll(".console-composite-height-unit");
@@ -9786,7 +9984,9 @@
                     && widthWidget.compositeRows[widthRowIndex].cells
                     && widthWidget.compositeRows[widthRowIndex].cells[widthCellIndex]) {
                     var widthValue = parseFloat(widthInputs[widthIndex].value);
-                    widthWidget.compositeRows[widthRowIndex].cells[widthCellIndex].width = widthValue > 0 ? widthValue : 1;
+                    if (widthValue > 0) {
+                        widthWidget.compositeRows[widthRowIndex].cells[widthCellIndex].width = widthValue;
+                    }
                 }
             }
             var widthUnits = document.querySelectorAll(".console-composite-width-unit");
@@ -10159,6 +10359,24 @@
             return consoleBindingParamIsNumeric(device, paramValue);
         }
 
+        function consoleBindingAllowsIcon(device, paramValue) {
+            if (!device) {
+                return false;
+            }
+            var typeId = device.type || "";
+            if (isBinarySensorDeviceType(typeId)) {
+                return true;
+            }
+            if (typeId === "onOff" && (paramValue === "status" || paramValue === "")) {
+                return true;
+            }
+            // userData bool fields use the same Icon path as binary sensors.
+            if (typeId === "userData") {
+                return userDataFieldTypeForParam(device, paramValue) === "bool";
+            }
+            return false;
+        }
+
         function renderConsoleDeviceGaugeRangesList() {
             var host = document.getElementById("consoleDeviceGaugeRangesList");
             if (!host) {
@@ -10247,16 +10465,20 @@
             refreshConsoleDeviceGaugeFields();
         }
 
-        function fillConsoleDeviceViewStyleOptions(isBinarySensor, selectedStyle) {
+        function fillConsoleDeviceViewStyleOptions(allowsIconStyle, allowsGauge, selectedStyle, defaultLabel) {
             var viewStyleSelect = document.getElementById("consoleDeviceViewStyle");
             if (!viewStyleSelect) {
                 return;
             }
             var previous = selectedStyle || viewStyleSelect.value || "default";
             viewStyleSelect.innerHTML = "";
-            var options = isBinarySensor
-                ? [["default", "Default"], ["icon", "Icon"]]
-                : [["default", "Default"], ["gauge", "Gauge"]];
+            var options = [["default", defaultLabel || "Default"]];
+            if (allowsIconStyle) {
+                options.push(["icon", "Icon"]);
+            }
+            if (allowsGauge) {
+                options.push(["gauge", "Gauge"]);
+            }
             var index;
             var matched = false;
             for (index = 0; index < options.length; index++) {
@@ -10317,23 +10539,32 @@
             var device = consoleDialogSelectedDevice();
             var paramSelect = document.getElementById("consoleDeviceParam");
             var paramValue = paramSelect ? paramSelect.value : "";
-            var isBinary = !!(device && isBinarySensorDeviceType(device.type || ""));
-            var onOffSwitchEligible = !!(device
-                && (device.type || "") === "onOff"
-                && (paramValue === "status" || paramValue === ""));
-            var allowsGauge = !isAutomation && !isBinary && consoleBindingAllowsGauge(device, paramValue);
-            var allowsIconStyle = isAutomation || isBinary || onOffSwitchEligible;
+            var allowsIconStyle = isAutomation || consoleBindingAllowsIcon(device, paramValue);
+            var allowsGauge = !isAutomation
+                && !allowsIconStyle
+                && consoleBindingAllowsGauge(device, paramValue);
             var viewStyleField = document.getElementById("consoleDeviceViewStyleField");
             var viewStyleSelect = document.getElementById("consoleDeviceViewStyle");
             var gaugeGroup = document.getElementById("consoleDeviceGaugeGroup");
             var iconGroup = document.getElementById("consoleDeviceIconGroup");
-            var showViewStyle = allowsGauge || allowsIconStyle;
+            // Always show View style for device bindings so string/text params keep a Text option.
+            var showViewStyle = !isAutomation && !!device;
+            var defaultStyleLabel = "Default";
+            if (device && (device.type || "") === "userData"
+                && userDataFieldTypeForParam(device, paramValue) === "string") {
+                defaultStyleLabel = "Text";
+            }
             setHidden(viewStyleField, !showViewStyle);
             var preferredStyle = consoleDevicePreferredViewStyle;
             var selectedForFill = preferredStyle
                 || (viewStyleSelect ? viewStyleSelect.value : "default");
             if (showViewStyle) {
-                fillConsoleDeviceViewStyleOptions(allowsIconStyle, selectedForFill);
+                fillConsoleDeviceViewStyleOptions(
+                    allowsIconStyle,
+                    allowsGauge,
+                    selectedForFill,
+                    defaultStyleLabel
+                );
             } else if (viewStyleSelect) {
                 viewStyleSelect.value = "default";
             }
@@ -10730,17 +10961,13 @@
                 }
             }
             var device = consoleDialogSelectedDevice();
-            var isBinary = !!(device && isBinarySensorDeviceType(device.type || ""));
-            var onOffSwitchEligible = !!(device
-                && (device.type || "") === "onOff"
-                && (body.param === "status" || body.param === ""));
-            var allowsIconStyle = isBinary || onOffSwitchEligible;
+            var allowsIconStyle = consoleBindingAllowsIcon(device, body.param);
             if (allowsIconStyle
                 && viewStyleSelect
                 && viewStyleSelect.value === "icon") {
                 body.viewStyle = "icon";
                 body.icon = normalizeMdiIconId(consoleDeviceIconDraft);
-            } else if (!isBinary
+            } else if (!allowsIconStyle
                 && consoleBindingAllowsGauge(device, body.param)
                 && viewStyleSelect
                 && viewStyleSelect.value === "gauge") {
@@ -11403,7 +11630,7 @@
                 <div class="page-footer-inner">
                     <button type="button" id="addDeviceBtn" class="btn btn-primary" onclick="openSearchDialog()">Add device</button>
                     <button type="button" id="exportDevicesBtn" class="btn btn-secondary" onclick="exportDevicesStore()">Export</button>
-                    <button type="button" id="restoreDevicesBtn" class="btn btn-secondary" onclick="openDevicesRestoreDialog(false)">Restore</button>
+                    <button type="button" id="restoreDevicesBtn" class="btn btn-secondary" onclick="openDevicesRestoreDialog(false)">Import</button>
                     <button type="button" id="fullRestoreDevicesBtn" class="btn btn-secondary" onclick="openDevicesRestoreDialog(true)">Full restore</button>
                 </div>
             </div>
@@ -11817,6 +12044,7 @@
                 <div class="dialog-actions">
                     <button type="button" class="btn btn-primary" onclick="saveDeviceParameters()">Save</button>
                     <button type="button" class="btn btn-secondary" onclick="requestCloseParameterDialog()">Cancel</button>
+                    <button type="button" id="parameterExportBtn" class="btn btn-secondary" hidden onclick="exportParameterDialogDevice()">Export</button>
                     <button type="button" id="parameterDeleteBtn" class="btn btn-secondary" hidden onclick="openDeleteConfirmDialog()">Delete</button>
                 </div>
             </div>
