@@ -112,7 +112,7 @@ The arc gauge center value text MUST use a font size 15% smaller than the previo
 - **THEN** the center value text uses the reduced arc font size
 
 ### Requirement: Binary sensor icon view style
-For Binary Input / Binary Output / Binary Value (and BACnet binary) device bindings, and for On/Off device bindings and automation bindings, the binding MUST support view style `default` or `icon`. When view style is `icon`, the binding MUST store an icon id from the Material Design Icons set used by Home Assistant (`mdi:…`). Missing view style MUST behave as `default`. Binary sensor types MUST NOT offer gauge. On/Off and automation `default` MUST keep the existing switch control.
+For Binary Input / Binary Output / Binary Value (and BACnet binary) device bindings, On/Off device bindings, automation bindings, and `userData` bindings whose selected schema field type is `bool`, the binding MUST support view style `default` or `icon`. When view style is `icon`, the binding MUST store an icon id from the Material Design Icons set used by Home Assistant (`mdi:…`). Missing view style MUST behave as `default`. Binary sensor types and `userData` bool fields MUST NOT offer gauge. On/Off and automation `default` MUST keep the existing switch control. `userData` bool `default` MUST show the boolean state as text (ON/OFF), not a switch.
 
 #### Scenario: Binary icon persists
 - **WHEN** an editor saves a binaryInput binding with view style `icon` and icon `mdi:pump`
@@ -125,6 +125,10 @@ For Binary Input / Binary Output / Binary Value (and BACnet binary) device bindi
 #### Scenario: Automation icon persists
 - **WHEN** an editor saves an automation binding with view style `icon` and icon `mdi:timer`
 - **THEN** after reboot that binding still has those fields
+
+#### Scenario: UserData bool icon persists
+- **WHEN** an editor saves a `userData` bool field binding with view style `icon` and icon `mdi:water`
+- **THEN** after reboot that binding still has those fields and simple-user view mode shows the water icon
 
 #### Scenario: Binary does not use gauge
 - **WHEN** a binaryInput binding is edited
