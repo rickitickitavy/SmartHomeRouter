@@ -440,3 +440,33 @@ In composite edit mode the editor MUST let the operator drag a cell and drop it 
 #### Scenario: Empty source row removed
 - **WHEN** the editor moves the last cell out of a row
 - **THEN** that empty row is removed from the draft
+
+### Requirement: Numeric binding as-logical conversion
+A device binding whose selected parameter is numeric (digital) MAY store boolean `asLogical` (default false when missing) and numeric `logicalThreshold` (default `0` when missing or invalid). When `asLogical` is true, view mode MUST convert the live numeric reading to a boolean with rule: value **less than** `logicalThreshold` is FALSE; value **greater than or equal to** `logicalThreshold` is TRUE. Missing or non-numeric live readings MUST treat as FALSE for icon/default logical display. When `asLogical` is false, the binding MUST keep existing numeric Default/Gauge behavior and MUST ignore `logicalThreshold` for display. Binary sensor types, On/Off status, automation bindings, and native `userData` bool fields are unchanged by this requirement (they already have bool semantics).
+
+#### Scenario: Threshold converts to true
+- **WHEN** a numeric binding has `asLogical` true, `logicalThreshold` `10`, and the live value is `10`
+- **THEN** view mode treats the binding state as TRUE
+
+#### Scenario: Below threshold is false
+- **WHEN** a numeric binding has `asLogical` true, `logicalThreshold` `10`, and the live value is `9.9`
+- **THEN** view mode treats the binding state as FALSE
+
+#### Scenario: As-logical fields persist
+- **WHEN** an editor saves a numeric binding with `asLogical` true and `logicalThreshold` `5.5`
+- **THEN** after reboot those fields are unchanged
+
+### Requirement: Numeric as-logical allows icon view style
+When `asLogical` is true on a numeric binding, the binding MUST support view style `default` or `icon` (not `gauge`). Icon presentation MUST match existing bool/binary icon coloring (TRUE/active yellow; FALSE/inactive muted theme). Icon for as-logical numeric bindings MUST be display-only (MUST NOT send device commands). When `asLogical` is false, Icon MUST NOT be offered for that numeric param and Gauge MAY be offered as today. If a stored binding has `asLogical` false and `viewStyle` `icon`, view mode MUST treat view style as `default`.
+
+#### Scenario: Icon offered when as logical
+- **WHEN** an editor enables as logical on a temperature `sensorValue` binding
+- **THEN** View style offers Default and Icon and does not offer Gauge
+
+#### Scenario: Icon shows true yellow
+- **WHEN** a numeric as-logical icon binding’s converted state is TRUE
+- **THEN** view mode shows the selected icon in the active yellow color used for bool icons
+
+#### Scenario: Gauge restored when as logical off
+- **WHEN** the editor unchecks as logical on a numeric binding
+- **THEN** View style offers Default and Gauge and does not offer Icon

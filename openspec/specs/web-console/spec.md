@@ -1568,3 +1568,40 @@ When the Consoles editor exports a console as JSON, the browser download filenam
 #### Scenario: Cyrillic name transliterated
 - **WHEN** the editor exports a console named `Котел`
 - **THEN** the download filename uses a Latin transliteration such as `Kotel.json` instead of collapsing to underscores only
+
+### Requirement: Binding dialog as-logical checkbox for numeric params
+When the Consoles device binding dialog’s selected parameter is numeric (digital), the dialog MUST show a checkbox with the label **as logical** immediately to the right of the checkbox. When the checkbox is checked, the dialog MUST show a numeric field for the compare threshold used by as-logical conversion. When the checkbox is unchecked, the threshold field MUST be hidden. The checkbox and threshold MUST NOT appear for non-numeric params (On/Off status, covering move, automation, binary sensor params, native `userData` bool).
+
+#### Scenario: Checkbox appears for numeric param
+- **WHEN** an editor opens a binding for a temperature device with param Sensor value
+- **THEN** the dialog shows the as logical checkbox with that label to the right of the box
+
+#### Scenario: Threshold field when checked
+- **WHEN** the editor checks as logical
+- **THEN** a compare / threshold numeric field is visible
+
+#### Scenario: Hidden for On/Off
+- **WHEN** an editor selects an On/Off device with param Status
+- **THEN** as logical and its threshold field are not shown
+
+### Requirement: Binding dialog view style follows as-logical variant B
+While as logical is checked for a numeric param, the dialog View style control MUST offer only Default and Icon (Gauge group hidden). While as logical is unchecked for a numeric param, View style MUST offer Default and Gauge as today (Icon not offered). Unchecking as logical while View style is Icon MUST reset View style to Default. Checking as logical while View style is Gauge MUST reset View style to Default (or Icon only after the operator chooses Icon).
+
+#### Scenario: Gauge hidden when as logical on
+- **WHEN** the editor checks as logical on a numeric binding that had View style Gauge
+- **THEN** Gauge is no longer offered and the selected style is not Gauge
+
+#### Scenario: Icon picker when as logical icon
+- **WHEN** as logical is checked and the editor chooses View style Icon
+- **THEN** the icon picker and icon scale controls used for bool icons are available
+
+### Requirement: Place and user render numeric as-logical icons
+On Place view-mode and the simple-user page, numeric bindings with `asLogical` true MUST apply the threshold conversion and MUST render Icon view with the same yellow/muted bool styling. Default view MUST show the logical ON/OFF text style used for `userData` bool default (not a switch). Edit-mode preview SHOULD reflect the same conversion without sending device commands.
+
+#### Scenario: User page icon below threshold
+- **WHEN** a simple user opens a console whose numeric as-logical icon binding has live value below `logicalThreshold`
+- **THEN** the icon uses the inactive muted color
+
+#### Scenario: Place matches user conversion
+- **WHEN** the same binding is shown on Place and simple-user at the same live value
+- **THEN** both treat TRUE/FALSE the same way for icon and default logical text
