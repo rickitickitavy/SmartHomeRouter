@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Defines.h"
+
+class DeviceTopicMap;
 #include <Arduino.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -91,6 +93,8 @@ struct AutomationAction {
     uint16_t customCluster;
     uint16_t customCommand;
     char *customValue;
+    bool hasDeviceCustomCommand;
+    char *deviceCustomName;
     char *automationName;
     AutomationAutomationOp automationOp;
     bool hasStartTime;
@@ -131,6 +135,8 @@ public:
     ~AutomationStore();
 
     bool begin(bool persistToLittleFs);
+    void setDeviceMap(DeviceTopicMap *devices);
+    bool parseSingleActionJson(const char *actionObjectJson, AutomationAction **outActions);
     void requestPersist();
     void persistIfDue();
     int automationCount() const;
@@ -167,6 +173,7 @@ public:
 
 private:
     AutomationRecord *head;
+    DeviceTopicMap *deviceMap;
     int storedCount;
     bool persistEnabled;
     bool persistPending;
@@ -179,7 +186,7 @@ private:
     static bool parseListeners(const char *objectJson, AutomationListener **outListeners);
     static bool parseCondition(const char *conditionJson, AutomationCondition **outCondition, int depth);
     static bool parseActions(const char *objectJson, AutomationAction **outActions);
-    static bool validateAutomation(const AutomationRecord *automation);
+    bool validateAutomation(const AutomationRecord *automation) const;
     static void appendAutomationFull(String &json, const AutomationRecord *automation, bool includeRuntime);
     static void appendConditionJson(String &json, const AutomationCondition *condition);
     static void appendActionJson(String &json, const AutomationAction *action);

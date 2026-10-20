@@ -1014,6 +1014,18 @@
             });
         }
 
+        function runConsoleClickAction(action) {
+            if (!action || typeof action !== "object") {
+                return;
+            }
+            fetch("/api/consoles/run-action", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(action)
+            }).catch(function () {
+            });
+        }
+
         function toggleGroupOnOff(widget) {
             var turnOn = !widgetGroupOnOffState(widget);
             var payload = turnOn ? "ON" : "OFF";
@@ -2037,6 +2049,40 @@
             return wrap;
         }
 
+
+        function bindingHasAnyClickAction(binding) {
+            return !!(binding && (
+                binding.clickActionFalse
+                || binding.clickActionTrue
+                || binding.clickAction
+            ));
+        }
+
+        function bindingClickActionForState(binding, isOn) {
+            if (!binding) {
+                return null;
+            }
+            if (isOn) {
+                if (binding.clickActionTrue) {
+                    return binding.clickActionTrue;
+                }
+            } else if (binding.clickActionFalse) {
+                return binding.clickActionFalse;
+            }
+            return binding.clickAction || null;
+        }
+
+        function makeBindingClickActionHandler(binding, isOn) {
+            var action = bindingClickActionForState(binding, isOn);
+            if (!action) {
+                return null;
+            }
+            var stored = action;
+            return function () {
+                runConsoleClickAction(stored);
+            };
+        }
+
         function buildBindingRow(binding) {
             var row = document.createElement("div");
             if (binding && binding.spacer) {
@@ -2049,6 +2095,7 @@
             appendBindingTitleElement(row, binding, "Device");
             var controls = document.createElement("div");
             controls.className = "console-device-row-controls";
+            var useCustomClick = bindingHasAnyClickAction(binding);
             if (binding && binding.automation) {
                 var automationName = binding.automation;
                 var known = Object.prototype.hasOwnProperty.call(automationStatusByName, automationName);
@@ -2062,15 +2109,18 @@
                         });
                     };
                 })(automationName, automationOn);
+                var autoClick = useCustomClick
+                    ? makeBindingClickActionHandler(binding, automationOn)
+                    : (known ? automationToggle : null);
                 if (binding.viewStyle === "icon") {
                     controls.appendChild(buildConsoleIconElement(
                         binding,
                         automationOn ? "ON" : "OFF",
                         {
                             interactive: true,
-                            disabled: !known,
-                            ariaLabel: "Automation on off",
-                            onclick: known ? automationToggle : null
+                            disabled: !useCustomClick && !known,
+                            ariaLabel: useCustomClick ? "Run click action" : "Automation on off",
+                            onclick: autoClick
                         }
                     ));
                 } else {
@@ -2078,12 +2128,12 @@
                     automationSwitch.type = "button";
                     automationSwitch.className = "console-switch"
                         + (automationOn ? " is-on" : "")
-                        + (known ? "" : " is-disabled");
-                    automationSwitch.setAttribute("aria-label", "Automation on off");
-                    if (!known) {
+                        + ((!useCustomClick && !known) ? " is-disabled" : "");
+                    automationSwitch.setAttribute("aria-label", useCustomClick ? "Run click action" : "Automation on off");
+                    if (!useCustomClick && !known) {
                         automationSwitch.disabled = true;
-                    } else {
-                        automationSwitch.onclick = automationToggle;
+                    } else if (autoClick) {
+                        automationSwitch.onclick = autoClick;
                     }
                     controls.appendChild(automationSwitch);
                 }
@@ -2114,21 +2164,24 @@
                         window.setTimeout(refreshConsoleControls, 300);
                     };
                 })(device.ieee, channel, onOffIsOn);
+                var onOffClick = useCustomClick
+                    ? makeBindingClickActionHandler(binding, onOffIsOn)
+                    : onOffToggle;
                 if (binding.viewStyle === "icon") {
                     controls.appendChild(buildConsoleIconElement(
                         binding,
                         onOffIsOn ? "ON" : "OFF",
                         {
                             interactive: true,
-                            ariaLabel: "Device on off",
-                            onclick: onOffToggle
+                            ariaLabel: useCustomClick ? "Run click action" : "Device on off",
+                            onclick: onOffClick
                         }
                     ));
                 } else {
                     var onOffSwitch = document.createElement("button");
                     onOffSwitch.type = "button";
                     onOffSwitch.className = "console-switch" + (onOffIsOn ? " is-on" : "");
-                    onOffSwitch.onclick = onOffToggle;
+                    onOffSwitch.onclick = onOffClick;
                     controls.appendChild(onOffSwitch);
                 }
             } else if (bindingUsesAsLogical(device, binding)) {
@@ -2137,7 +2190,20 @@
                     userBindingNumericValue(device, binding)
                 );
                 if (binding.viewStyle === "icon") {
-                    controls.appendChild(buildConsoleIconElement(binding, logicalState));
+                    var logicalClick = useCustomClick
+                        ? makeBindingClickActionHandler(binding, isBinaryStateOn(logicalState))
+                        : null;
+                    controls.appendChild(buildConsoleIconElement(
+                        binding,
+                        logicalState,
+                        logicalClick
+                            ? {
+                                interactive: true,
+                                ariaLabel: "Run click action",
+                                onclick: logicalClick
+                            }
+                            : {}
+                    ));
                 } else {
                     var logicalLabel = document.createElement("span");
                     logicalLabel.className = "console-sensor-value";
@@ -2148,9 +2214,20 @@
                 && (isBinarySensorDeviceType(typeId)
                     || (typeId === "userData"
                         && userDataFieldTypeForParam(device, param) === "bool"))) {
+                var binaryState = bindingResolvedState(device, binding);
+                var binaryClick = useCustomClick
+                    ? makeBindingClickActionHandler(binding, isBinaryStateOn(binaryState))
+                    : null;
                 controls.appendChild(buildConsoleIconElement(
                     binding,
-                    bindingResolvedState(device, binding)
+                    binaryState,
+                    binaryClick
+                        ? {
+                            interactive: true,
+                            ariaLabel: "Run click action",
+                            onclick: binaryClick
+                        }
+                        : {}
                 ));
             } else if (showTypeControls && typeId === "windowCovering") {
                 var openButton = document.createElement("button");
@@ -2191,6 +2268,21 @@
                 controls.appendChild(closeButton);
                 controls.appendChild(stopButton);
                 controls.appendChild(position);
+            } else if (useCustomClick && binding.viewStyle === "icon") {
+                var clickIconState = bindingResolvedState(device, binding) || "OFF";
+                var clickIconHandler = makeBindingClickActionHandler(
+                    binding,
+                    isBinaryStateOn(clickIconState)
+                );
+                controls.appendChild(buildConsoleIconElement(
+                    binding,
+                    clickIconState,
+                    {
+                        interactive: true,
+                        ariaLabel: "Run click action",
+                        onclick: clickIconHandler
+                    }
+                ));
             } else if (binding.viewStyle === "gauge") {
                 row.classList.add("console-device-row--gauge");
                 var rawState = bindingResolvedState(device, binding);

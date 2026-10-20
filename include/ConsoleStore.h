@@ -37,6 +37,8 @@ struct ConsoleBinding {
     float gaugeMax;
     bool hasGauge;
     bool isSpacer;
+    char *clickActionFalseJson;
+    char *clickActionTrueJson;
     ConsoleGaugeRange *gaugeRanges;
     ConsoleBinding *next;
 };

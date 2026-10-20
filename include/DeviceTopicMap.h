@@ -3,6 +3,7 @@
 #include "GlobalSettings.h"
 #include "SpiProtocol.h"
 #include "UserDataPayload.h"
+#include "DeviceCustomCommand.h"
 #include <Arduino.h>
 #include <stddef.h>
 
@@ -14,6 +15,8 @@ struct DeviceTopicEntry {
     char *availabilityTopic;
     UserDataFieldDef *userDataFields;
     uint8_t userDataFieldCount;
+    DeviceCustomCommandDef *customCommands;
+    uint8_t customCommandCount;
     uint8_t channelCount;
     uint8_t fullControl;
     uint8_t debug;

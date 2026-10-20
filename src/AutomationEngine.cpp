@@ -1,4 +1,5 @@
 #include "AutomationEngine.h"
+#include "DeviceCustomCommand.h"
 #include "AutomationParam.h"
 #include "DeviceTopicMap.h"
 #include "Logger.h"
@@ -307,12 +308,49 @@ bool AutomationEngine::evaluateCondition(
     return result;
 }
 
+void AutomationEngine::runAction(const AutomationAction *action) {
+    applyAction(action);
+}
+
 void AutomationEngine::applyAction(const AutomationAction *action) {
     if (action == nullptr || store == nullptr) {
         return;
     }
     if (action->target == AutomationTargetDevice) {
         if (deviceCommand == nullptr || action->ieeeText == nullptr) {
+            return;
+        }
+        if (action->hasDeviceCustomCommand) {
+            if (topicMap == nullptr || action->deviceCustomName == nullptr) {
+                return;
+            }
+            uint8_t ieee[8];
+            if (!topicMap->parseIeee(action->ieeeText, ieee)) {
+                return;
+            }
+            const DeviceTopicEntry *entry = topicMap->findByIeee(ieee);
+            if (entry == nullptr || !entry->used) {
+                return;
+            }
+            const DeviceCustomCommandDef *command = deviceCustomCommandFindByName(
+                entry->customCommands,
+                entry->customCommandCount,
+                action->deviceCustomName
+            );
+            if (command == nullptr) {
+                return;
+            }
+            char customPayload[AUTOMATION_VALUE_MAX];
+            if (!deviceCustomCommandBuildPayloadForTransport(
+                    entry->transport,
+                    command,
+                    action->customValue,
+                    customPayload,
+                    sizeof(customPayload)
+                )) {
+                return;
+            }
+            deviceCommand(action->ieeeText, customPayload, (int)action->channel);
             return;
         }
         if (action->hasCustomCommand) {

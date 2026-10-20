@@ -220,6 +220,23 @@ static void applyDeviceConfigPayload(const char *payload) {
             );
         }
     }
+    deviceCustomCommandClear(&entry->customCommands, &entry->customCommandCount);
+    String customCommandsSlice;
+    if (extractJsonKeyedSlice(payload, "customCommands", '[', customCommandsSlice)
+        && customCommandsSlice.length() > 0) {
+        bool customValid = true;
+        if (!deviceCustomCommandAssignFromJson(
+                &entry->customCommands,
+                &entry->customCommandCount,
+                customCommandsSlice.c_str(),
+                &customValid
+            )
+            || !customValid) {
+            LOGGER.error("Invalid customCommands");
+            deviceCustomCommandClear(&entry->customCommands, &entry->customCommandCount);
+            return;
+        }
+    }
     mqttClient->subscribeDeviceCommands();
     persistHostDeviceList();
     if (!ZIGBEE_SPI_PROXY.enqueueDeviceUpsert(entry)) {
@@ -1646,6 +1663,7 @@ static void setupHost() {
     automationStore->begin(true);
     automationEngine = new AutomationEngine();
     topicMap = settingsManager->deviceMap();
+    automationStore->setDeviceMap(topicMap);
     foundDevices = new FoundDeviceList();
     wifiController = new WiFiController(settingsManager, forceAp);
     mqttClient = new MqttClient(settingsManager, topicMap);
@@ -1684,6 +1702,19 @@ static void setupHost() {
         return settingsManager != nullptr ? settingsManager->devicesJsonFile() : String("[]");
     });
     automationEngine->begin(automationStore, &ZIGBEE_SPI_PROXY, topicMap, applyManualDeviceCommand);
+    webConsole->setActionRunner([](const char *actionObjectJson) -> int {
+        if (automationStore == nullptr || automationEngine == nullptr || actionObjectJson == nullptr) {
+            return 503;
+        }
+        AutomationAction *actions = nullptr;
+        if (!automationStore->parseSingleActionJson(actionObjectJson, &actions) || actions == nullptr) {
+            AutomationStore::freeActionList(actions);
+            return 400;
+        }
+        automationEngine->runAction(actions);
+        AutomationStore::freeActionList(actions);
+        return 200;
+    });
     webConsole->begin();
     ZIGBEE_SPI_PROXY.setDeviceLiveChangedHandler([](const uint8_t ieee[8]) {
         if (webConsole != nullptr) {

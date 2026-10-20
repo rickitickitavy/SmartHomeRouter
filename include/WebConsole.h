@@ -24,6 +24,7 @@ public:
     using DevicesRestoredFn = bool (*)(const uint8_t (*removedIeees)[8], int removedCount);
     using UsersRestoredFn = bool (*)(const char (*removedNames)[USER_NAME_MAX], int removedCount);
     using VoidApplyFn = void (*)();
+    using ActionRunnerFn = int (*)(const char *actionObjectJson);
 
     explicit WebConsole(
         SettingsManager *settingsManager,
@@ -57,6 +58,7 @@ public:
     void setUsersRestoredHandler(UsersRestoredFn handler);
     void setMqttReloadHandler(VoidApplyFn handler);
     void setZigbeeApplyHandler(VoidApplyFn handler);
+    void setActionRunner(ActionRunnerFn handler);
 
 private:
     SettingsManager *settingsManager;
@@ -79,6 +81,7 @@ private:
     UsersRestoredFn applyUsersRestored = nullptr;
     VoidApplyFn reloadMqttRuntime = nullptr;
     VoidApplyFn applyZigbeeRuntime = nullptr;
+    ActionRunnerFn runConsoleAction = nullptr;
     AsyncWebServer server;
     AsyncWebSocket devicesSocket;
     AsyncWebSocket consolesSocket;
@@ -135,6 +138,7 @@ private:
     void handleUsersDelete(AsyncWebServerRequest *request);
     void handleConsolesGet(AsyncWebServerRequest *request);
     void handleConsolesMineGet(AsyncWebServerRequest *request);
+    void handleConsolesRunActionPost(AsyncWebServerRequest *request);
     void handleConsolesPost(AsyncWebServerRequest *request);
     void handleConsolesStoreGet(AsyncWebServerRequest *request);
     void handleConsolesRestorePost(AsyncWebServerRequest *request);

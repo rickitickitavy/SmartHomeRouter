@@ -66,6 +66,7 @@ void DeviceTopicMap::clearEntryStrings(DeviceTopicEntry *entry) {
     free(entry->commandTopic);
     free(entry->availabilityTopic);
     userDataClearFieldDefs(&entry->userDataFields, &entry->userDataFieldCount);
+    deviceCustomCommandClear(&entry->customCommands, &entry->customCommandCount);
     entry->friendlyName = nullptr;
     entry->stateTopic = nullptr;
     entry->commandTopic = nullptr;
@@ -114,6 +115,15 @@ bool DeviceTopicMap::cloneEntry(DeviceTopicEntry *destination, const DeviceTopic
             &destination->userDataFieldCount,
             source->userDataFields,
             source->userDataFieldCount
+        )) {
+        clearEntryStrings(destination);
+        return false;
+    }
+    if (!deviceCustomCommandCopy(
+            &destination->customCommands,
+            &destination->customCommandCount,
+            source->customCommands,
+            source->customCommandCount
         )) {
         clearEntryStrings(destination);
         return false;
@@ -768,6 +778,17 @@ DeviceTopicEntry *DeviceTopicMap::upsertFromEntry(const DeviceTopicEntry *source
     } else if (!zigbeeDeviceTypeIsUserData(entry->zigbeeType)) {
         userDataClearFieldDefs(&entry->userDataFields, &entry->userDataFieldCount);
     }
+    // Custom commands are host-only; SPI sync never carries them — keep existing.
+    if (source->customCommandCount > 0) {
+        if (!deviceCustomCommandCopy(
+                &entry->customCommands,
+                &entry->customCommandCount,
+                source->customCommands,
+                source->customCommandCount
+            )) {
+            deviceCustomCommandClear(&entry->customCommands, &entry->customCommandCount);
+        }
+    }
     return entry;
 }
 
@@ -986,6 +1007,21 @@ void DeviceTopicMap::replaceFromJson(const String &json) {
                             &entry->userDataFieldCount,
                             fieldsSlice.c_str()
                         );
+                    }
+                }
+                deviceCustomCommandClear(&entry->customCommands, &entry->customCommandCount);
+                String customCommandsSlice;
+                if (extractJsonKeyedSlice(object.c_str(), "customCommands", '[', customCommandsSlice)
+                    && customCommandsSlice.length() > 0) {
+                    bool customValid = true;
+                    deviceCustomCommandAssignFromJson(
+                        &entry->customCommands,
+                        &entry->customCommandCount,
+                        customCommandsSlice.c_str(),
+                        &customValid
+                    );
+                    if (!customValid) {
+                        deviceCustomCommandClear(&entry->customCommands, &entry->customCommandCount);
                     }
                 }
             }
@@ -1211,6 +1247,8 @@ static void appendDeviceListEntryJson(
         json += ",\"userDataFields\":";
         json += userDataFieldsToJson(deviceEntry->userDataFields, deviceEntry->userDataFieldCount);
     }
+    json += ",\"customCommands\":";
+    json += deviceCustomCommandsToJson(deviceEntry->customCommands, deviceEntry->customCommandCount);
     if (isOnline != nullptr) {
         json += ",\"online\":";
         json += isOnline(deviceEntry->ieee) ? "true" : "false";

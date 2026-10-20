@@ -4164,6 +4164,8 @@
             applyMqttPublishControls();
             parameterDialogUserDataFields = normalizeUserDataFields(device.userDataFields);
             renderUserDataFieldsEditor();
+            parameterDialogCustomCommands = normalizeCustomCommands(device.customCommands);
+            renderCustomCommandsEditor();
             document.getElementById("parameterDialogError").hidden = true;
             document.getElementById("parameterDialog").hidden = false;
             parameterDialogBaseline = readParameterDialogDraft();
@@ -4452,6 +4454,147 @@
             renderUserDataFieldsEditor();
         }
 
+        var parameterDialogCustomCommands = [];
+        var DEVICE_CUSTOM_COMMAND_MAX_COUNT = 8;
+        var DEVICE_CUSTOM_COMMAND_NAME_MAX_CHARS = 11;
+        var DEVICE_CUSTOM_COMMAND_VALUE_MAX_CHARS = 15;
+
+        function normalizeCustomCommands(rawCommands) {
+            var source = Array.isArray(rawCommands) ? rawCommands : [];
+            var normalized = [];
+            var index;
+            for (index = 0; index < source.length && normalized.length < DEVICE_CUSTOM_COMMAND_MAX_COUNT; index++) {
+                var row = source[index] || {};
+                var name = String(row.name || "").trim();
+                if (name.length > DEVICE_CUSTOM_COMMAND_NAME_MAX_CHARS) {
+                    name = name.substring(0, DEVICE_CUSTOM_COMMAND_NAME_MAX_CHARS);
+                }
+                var hasParam = !!row.hasParam;
+                var paramType = String(row.paramType || "int");
+                if (paramType !== "int" && paramType !== "bool"
+                    && paramType !== "float" && paramType !== "string") {
+                    paramType = "int";
+                }
+                if (!hasParam) {
+                    paramType = "int";
+                }
+                normalized.push({
+                    name: name,
+                    hasParam: hasParam,
+                    paramType: hasParam ? paramType : "int"
+                });
+            }
+            return normalized;
+        }
+
+        function customCommandsForSave(rawCommands) {
+            var normalized = normalizeCustomCommands(rawCommands);
+            var result = [];
+            var index;
+            for (index = 0; index < normalized.length; index++) {
+                var row = normalized[index];
+                var entry = {
+                    name: String(row.name || "").trim(),
+                    hasParam: !!row.hasParam
+                };
+                if (entry.hasParam) {
+                    entry.paramType = row.paramType || "int";
+                }
+                result.push(entry);
+            }
+            return result;
+        }
+
+        function renderCustomCommandsEditor() {
+            var body = document.getElementById("deviceCustomCommandsBody");
+            var addBtn = document.getElementById("deviceCustomCommandAddBtn");
+            if (!body) {
+                return;
+            }
+            body.innerHTML = "";
+            var rowIndex;
+            for (rowIndex = 0; rowIndex < parameterDialogCustomCommands.length; rowIndex++) {
+                (function (commandIndex) {
+                    var command = parameterDialogCustomCommands[commandIndex];
+                    var row = document.createElement("tr");
+                    var nameCell = document.createElement("td");
+                    var nameInput = document.createElement("input");
+                    nameInput.type = "text";
+                    nameInput.className = "custom-command-name";
+                    nameInput.value = command.name || "";
+                    nameInput.maxLength = DEVICE_CUSTOM_COMMAND_NAME_MAX_CHARS;
+                    nameInput.autocomplete = "off";
+                    nameInput.oninput = function () {
+                        var nextName = nameInput.value || "";
+                        if (nextName.length > DEVICE_CUSTOM_COMMAND_NAME_MAX_CHARS) {
+                            nextName = nextName.substring(0, DEVICE_CUSTOM_COMMAND_NAME_MAX_CHARS);
+                            nameInput.value = nextName;
+                        }
+                        parameterDialogCustomCommands[commandIndex].name = nextName;
+                    };
+                    nameCell.appendChild(nameInput);
+                    var hasParamCell = document.createElement("td");
+                    hasParamCell.className = "col-check";
+                    var hasParamInput = document.createElement("input");
+                    hasParamInput.type = "checkbox";
+                    hasParamInput.checked = !!command.hasParam;
+                    hasParamInput.onchange = function () {
+                        parameterDialogCustomCommands[commandIndex].hasParam = !!hasParamInput.checked;
+                        renderCustomCommandsEditor();
+                    };
+                    hasParamCell.appendChild(hasParamInput);
+                    var typeCell = document.createElement("td");
+                    var typeSelect = document.createElement("select");
+                    typeSelect.className = "custom-command-param-type";
+                    ["int", "bool", "float", "string"].forEach(function (typeId) {
+                        var option = document.createElement("option");
+                        option.value = typeId;
+                        option.textContent = typeId;
+                        typeSelect.appendChild(option);
+                    });
+                    typeSelect.value = command.paramType || "int";
+                    typeSelect.disabled = !command.hasParam;
+                    typeSelect.onchange = function () {
+                        parameterDialogCustomCommands[commandIndex].paramType = typeSelect.value;
+                    };
+                    typeCell.appendChild(typeSelect);
+                    var actionsCell = document.createElement("td");
+                    actionsCell.className = "user-data-field-actions";
+                    var removeButton = document.createElement("button");
+                    removeButton.type = "button";
+                    removeButton.className = "console-widget-delete-btn";
+                    removeButton.textContent = "🗑";
+                    removeButton.title = "Remove command";
+                    removeButton.setAttribute("aria-label", "Remove command");
+                    removeButton.onclick = function () {
+                        parameterDialogCustomCommands.splice(commandIndex, 1);
+                        renderCustomCommandsEditor();
+                    };
+                    actionsCell.appendChild(removeButton);
+                    row.appendChild(nameCell);
+                    row.appendChild(hasParamCell);
+                    row.appendChild(typeCell);
+                    row.appendChild(actionsCell);
+                    body.appendChild(row);
+                })(rowIndex);
+            }
+            if (addBtn) {
+                addBtn.disabled = parameterDialogCustomCommands.length >= DEVICE_CUSTOM_COMMAND_MAX_COUNT;
+            }
+        }
+
+        function addCustomCommandRow() {
+            if (parameterDialogCustomCommands.length >= DEVICE_CUSTOM_COMMAND_MAX_COUNT) {
+                return;
+            }
+            parameterDialogCustomCommands.push({
+                name: "",
+                hasParam: false,
+                paramType: "int"
+            });
+            renderCustomCommandsEditor();
+        }
+
         function readParameterDialogDraft() {
             var channelsSelect = document.getElementById("deviceChannels");
             var fullControlInput = document.getElementById("deviceFullControl");
@@ -4473,7 +4616,8 @@
                 type: parameterDialogTransport == "mqtt" && typeSelect
                     ? typeSelect.value
                     : parameterDialogTypeId,
-                userDataFields: normalizeUserDataFields(parameterDialogUserDataFields)
+                userDataFields: normalizeUserDataFields(parameterDialogUserDataFields),
+                customCommands: normalizeCustomCommands(parameterDialogCustomCommands)
             };
         }
 
@@ -4488,7 +4632,8 @@
                 && left.debug === right.debug
                 && left.publishToMqtt === right.publishToMqtt
                 && left.type === right.type
-                && JSON.stringify(left.userDataFields || []) === JSON.stringify(right.userDataFields || []);
+                && JSON.stringify(left.userDataFields || []) === JSON.stringify(right.userDataFields || [])
+                && JSON.stringify(left.customCommands || []) === JSON.stringify(right.customCommands || []);
         }
 
         function parameterDialogHasUnsavedChanges() {
@@ -4759,6 +4904,31 @@
                 }
                 body.userDataFields = fields;
             }
+            var commands = customCommandsForSave(parameterDialogCustomCommands);
+            var commandIndex;
+            var seenCommandNames = {};
+            for (commandIndex = 0; commandIndex < commands.length; commandIndex++) {
+                var commandName = String(commands[commandIndex].name || "").trim();
+                if (!commandName) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = "Custom command names cannot be empty";
+                    return;
+                }
+                if (commandName.length > DEVICE_CUSTOM_COMMAND_NAME_MAX_CHARS) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = "Custom command names must be at most "
+                        + String(DEVICE_CUSTOM_COMMAND_NAME_MAX_CHARS) + " characters";
+                    return;
+                }
+                if (seenCommandNames[commandName]) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = "Custom command names must be unique";
+                    return;
+                }
+                seenCommandNames[commandName] = true;
+                commands[commandIndex].name = commandName;
+            }
+            body.customCommands = commands;
             if (ieeeText) {
                 body.ieee = ieeeText;
             }
@@ -4807,6 +4977,10 @@
         var consoleEditorEditMode = false;
         var consoleDeviceDialogWidgetIndex = -1;
         var consoleDeviceDialogBindingIndex = -1;
+        var consoleDeviceClickActionEnabled = false;
+        var consoleDeviceClickActionFalseDraft = null;
+        var consoleDeviceClickActionTrueDraft = null;
+        var consoleDeviceClickActionEditWhich = "false";
         var consoleDeviceDialogBaseline = null;
         var consoleDeviceDialogOpenSeq = 0;
         var consoleDevicePreferredViewStyle = null;
@@ -5388,6 +5562,95 @@
             return wrap;
         }
 
+        function cloneAutomationActionObject(action) {
+            if (!action || typeof action !== "object") {
+                return null;
+            }
+            try {
+                return JSON.parse(JSON.stringify(action));
+            } catch (error) {
+                return null;
+            }
+        }
+
+        function runConsoleClickAction(action) {
+            if (!action || typeof action !== "object") {
+                return Promise.resolve();
+            }
+            return fetch("/api/consoles/run-action", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(action)
+            }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                });
+            }).catch(function (error) {
+                console.warn("run-action failed", error && error.message ? error.message : error);
+            });
+        }
+
+
+        function bindingHasAnyClickAction(binding) {
+            return !!(binding && (
+                binding.clickActionFalse
+                || binding.clickActionTrue
+                || binding.clickAction
+            ));
+        }
+
+        function bindingClickActionForState(binding, isOn) {
+            if (!binding) {
+                return null;
+            }
+            if (isOn) {
+                if (binding.clickActionTrue) {
+                    return binding.clickActionTrue;
+                }
+            } else if (binding.clickActionFalse) {
+                return binding.clickActionFalse;
+            }
+            return binding.clickAction || null;
+        }
+
+        function makeBindingClickActionHandler(binding, isOn) {
+            var action = bindingClickActionForState(binding, isOn);
+            if (!action) {
+                return null;
+            }
+            var stored = cloneAutomationActionObject(action) || action;
+            return function () {
+                runConsoleClickAction(stored);
+            };
+        }
+
+        function getConsoleClickActionDraft() {
+            return consoleDeviceClickActionEditWhich === "true"
+                ? consoleDeviceClickActionTrueDraft
+                : consoleDeviceClickActionFalseDraft;
+        }
+
+        function setConsoleClickActionDraft(value) {
+            if (consoleDeviceClickActionEditWhich === "true") {
+                consoleDeviceClickActionTrueDraft = value;
+            } else {
+                consoleDeviceClickActionFalseDraft = value;
+            }
+        }
+
+        function normalizeLoadedClickAction(action) {
+            if (!action || typeof action !== "object") {
+                return null;
+            }
+            var cloned = cloneAutomationActionObject(action) || action;
+            if (!cloned.target) {
+                cloned.target = cloned.automation ? "automation" : "device";
+            }
+            return cloned;
+        }
+
         function placeBuildDeviceRow(binding) {
             var row = document.createElement("div");
             if (binding && binding.spacer) {
@@ -5400,6 +5663,7 @@
             appendBindingTitleElement(row, binding, "Device");
             var controls = document.createElement("div");
             controls.className = "console-device-row-controls";
+            var useCustomClick = bindingHasAnyClickAction(binding);
             if (binding && binding.automation) {
                 var automationName = binding.automation;
                 var automationOn = !!placeAutomationStatusByName[automationName];
@@ -5416,27 +5680,30 @@
                         });
                     };
                 })(automationName, automationOn);
+                var autoClick = useCustomClick
+                    ? makeBindingClickActionHandler(binding, automationOn)
+                    : (automationKnown ? automationToggle : null);
                 if (binding.viewStyle === "icon") {
                     controls.appendChild(buildConsoleIconElement(
                         binding,
                         automationOn ? "ON" : "OFF",
                         {
                             interactive: true,
-                            disabled: !automationKnown,
-                            ariaLabel: "Automation on off",
-                            onclick: automationKnown ? automationToggle : null
+                            disabled: !useCustomClick && !automationKnown,
+                            ariaLabel: useCustomClick ? "Run click action" : "Automation on off",
+                            onclick: autoClick
                         }
                     ));
                 } else {
                     var automationSwitch = document.createElement("button");
                     automationSwitch.type = "button";
                     automationSwitch.className = "console-switch" + (automationOn ? " is-on" : "");
-                    automationSwitch.setAttribute("aria-label", "Automation on off");
-                    if (!automationKnown) {
+                    automationSwitch.setAttribute("aria-label", useCustomClick ? "Run click action" : "Automation on off");
+                    if (!useCustomClick && !automationKnown) {
                         automationSwitch.disabled = true;
                         automationSwitch.className += " is-disabled";
-                    } else {
-                        automationSwitch.onclick = automationToggle;
+                    } else if (autoClick) {
+                        automationSwitch.onclick = autoClick;
                     }
                     controls.appendChild(automationSwitch);
                 }
@@ -5467,21 +5734,24 @@
                         window.setTimeout(refreshPlaceConsolesIfActive, 300);
                     };
                 })(device.ieee, channel, onOffIsOn);
+                var onOffClick = useCustomClick
+                    ? makeBindingClickActionHandler(binding, onOffIsOn)
+                    : onOffToggle;
                 if (binding.viewStyle === "icon") {
                     controls.appendChild(buildConsoleIconElement(
                         binding,
                         onOffIsOn ? "ON" : "OFF",
                         {
                             interactive: true,
-                            ariaLabel: "Device on off",
-                            onclick: onOffToggle
+                            ariaLabel: useCustomClick ? "Run click action" : "Device on off",
+                            onclick: onOffClick
                         }
                     ));
                 } else {
                     var onOffSwitch = document.createElement("button");
                     onOffSwitch.type = "button";
                     onOffSwitch.className = "console-switch" + (onOffIsOn ? " is-on" : "");
-                    onOffSwitch.onclick = onOffToggle;
+                    onOffSwitch.onclick = onOffClick;
                     controls.appendChild(onOffSwitch);
                 }
             } else if (bindingUsesAsLogical(device, binding)) {
@@ -5490,7 +5760,20 @@
                     placeBindingNumericValue(device, binding)
                 );
                 if (binding.viewStyle === "icon") {
-                    controls.appendChild(buildConsoleIconElement(binding, logicalState));
+                    var logicalClick = useCustomClick
+                        ? makeBindingClickActionHandler(binding, isBinaryStateOn(logicalState))
+                        : null;
+                    controls.appendChild(buildConsoleIconElement(
+                        binding,
+                        logicalState,
+                        logicalClick
+                            ? {
+                                interactive: true,
+                                ariaLabel: "Run click action",
+                                onclick: logicalClick
+                            }
+                            : {}
+                    ));
                 } else {
                     var logicalLabel = document.createElement("span");
                     logicalLabel.className = "console-sensor-value";
@@ -5501,9 +5784,20 @@
                 && (isBinarySensorDeviceType(typeId)
                     || (typeId === "userData"
                         && userDataFieldTypeForParam(device, param) === "bool"))) {
+                var binaryState = placeBindingResolvedState(device, binding);
+                var binaryClick = useCustomClick
+                    ? makeBindingClickActionHandler(binding, isBinaryStateOn(binaryState))
+                    : null;
                 controls.appendChild(buildConsoleIconElement(
                     binding,
-                    placeBindingResolvedState(device, binding)
+                    binaryState,
+                    binaryClick
+                        ? {
+                            interactive: true,
+                            ariaLabel: "Run click action",
+                            onclick: binaryClick
+                        }
+                        : {}
                 ));
             } else if (showTypeControls && typeId === "windowCovering") {
                 [["OPEN", "OPEN"], ["CLOSE", "CLOSE"], ["STOP", "STOP"]].forEach(function (pair) {
@@ -5527,6 +5821,21 @@
                         : (coveringEntry ? coveringEntry.state : "")
                 );
                 controls.appendChild(position);
+            } else if (useCustomClick && binding.viewStyle === "icon") {
+                var clickIconState = placeBindingResolvedState(device, binding) || "OFF";
+                var clickIconHandler = makeBindingClickActionHandler(
+                    binding,
+                    isBinaryStateOn(clickIconState)
+                );
+                controls.appendChild(buildConsoleIconElement(
+                    binding,
+                    clickIconState,
+                    {
+                        interactive: true,
+                        ariaLabel: "Run click action",
+                        onclick: clickIconHandler
+                    }
+                ));
             } else if (binding.viewStyle === "gauge") {
                 row.classList.add("console-device-row--gauge");
                 var rawState = placeBindingResolvedState(device, binding);
@@ -6782,6 +7091,36 @@
             return [];
         }
 
+        function automationDeviceCmdCommandId(name) {
+            // Wire/UI format is bare COMMAND (no deviceCmd: prefix).
+            return String(name || "").trim();
+        }
+
+        function automationDeviceCmdNameFromId(commandId) {
+            var text = String(commandId || "").trim();
+            // Accept legacy internal ids from older drafts.
+            if (text.indexOf("deviceCmd:") === 0) {
+                return text.substring("deviceCmd:".length);
+            }
+            return text;
+        }
+
+        function automationCommandMetaIsDeviceCmd(meta) {
+            return !!(meta && meta.deviceCmd);
+        }
+
+        function findDeviceCustomCommandDef(device, name) {
+            var commands = normalizeCustomCommands(device && device.customCommands);
+            var wanted = String(name || "").trim();
+            var index;
+            for (index = 0; index < commands.length; index++) {
+                if (commands[index].name === wanted) {
+                    return commands[index];
+                }
+            }
+            return null;
+        }
+
         function automationCommandsForDevice(device) {
             var typeId = device && device.type ? String(device.type) : "unknown";
             var commands = [];
@@ -6808,8 +7147,169 @@
                 commands.push({ id: "ON", label: "ON", needsValue: false });
                 commands.push({ id: "OFF", label: "OFF", needsValue: false });
             }
+            var customCommands = normalizeCustomCommands(device && device.customCommands);
+            var customIndex;
+            for (customIndex = 0; customIndex < customCommands.length; customIndex++) {
+                var custom = customCommands[customIndex];
+                if (!custom.name) {
+                    continue;
+                }
+                commands.push({
+                    id: automationDeviceCmdCommandId(custom.name),
+                    label: custom.name + (custom.hasParam ? " …" : ""),
+                    needsValue: !!custom.hasParam,
+                    paramType: custom.hasParam ? (custom.paramType || "int") : "",
+                    deviceCmd: true,
+                    commandName: custom.name
+                });
+            }
             commands.push({ id: "custom", label: "CUSTOM", needsValue: false });
             return commands;
+        }
+
+        function automationFindCommandMeta(device, commandId) {
+            var wanted = automationDeviceCmdNameFromId(commandId);
+            var commands = automationCommandsForDevice(device);
+            var index;
+            // Prefer named custom device commands over built-ins with the same id.
+            for (index = 0; index < commands.length; index++) {
+                if (!commands[index].deviceCmd) {
+                    continue;
+                }
+                if (commands[index].id === wanted
+                    || commands[index].commandName === wanted
+                    || commands[index].id === commandId) {
+                    return commands[index];
+                }
+            }
+            for (index = 0; index < commands.length; index++) {
+                if (commands[index].id === commandId || commands[index].id === wanted) {
+                    return commands[index];
+                }
+            }
+            return null;
+        }
+
+        function buildDeviceCmdValueControl(paramType, currentValue, onChange) {
+            var host = document.createElement("div");
+            host.className = "device-cmd-value-host";
+            var typeId = String(paramType || "string");
+            if (typeId === "bool") {
+                var select = document.createElement("select");
+                select.className = "device-cmd-value-bool";
+                ["ON", "OFF"].forEach(function (optionValue) {
+                    var option = document.createElement("option");
+                    option.value = optionValue;
+                    option.textContent = optionValue;
+                    select.appendChild(option);
+                });
+                var current = String(currentValue || "").trim().toUpperCase();
+                select.value = current === "OFF" || current === "0" || current === "FALSE" ? "OFF" : "ON";
+                if (!String(currentValue || "").trim()) {
+                    select.value = "ON";
+                }
+                select.onchange = function () {
+                    onChange(select.value);
+                };
+                host.appendChild(select);
+                return host;
+            }
+            var input = document.createElement("input");
+            input.className = "device-cmd-value-input";
+            input.autocomplete = "off";
+            if (typeId === "int") {
+                input.type = "number";
+                input.step = "1";
+            } else if (typeId === "float") {
+                input.type = "number";
+                input.step = "0.01";
+            } else {
+                input.type = "text";
+                input.maxLength = DEVICE_CUSTOM_COMMAND_VALUE_MAX_CHARS;
+            }
+            input.value = currentValue != null ? String(currentValue) : "";
+            input.oninput = function () {
+                var next = input.value;
+                if (typeId === "string" && next.length > DEVICE_CUSTOM_COMMAND_VALUE_MAX_CHARS) {
+                    next = next.substring(0, DEVICE_CUSTOM_COMMAND_VALUE_MAX_CHARS);
+                    input.value = next;
+                }
+                onChange(next);
+            };
+            host.appendChild(input);
+            return host;
+        }
+
+        function formatDeviceCmdStoredValue(paramType, rawValue) {
+            var text = String(rawValue != null ? rawValue : "").trim();
+            if (!text) {
+                return "";
+            }
+            if (paramType === "bool") {
+                var upper = text.toUpperCase();
+                if (upper === "OFF" || upper === "0" || upper === "FALSE") {
+                    return "OFF";
+                }
+                return "ON";
+            }
+            if (paramType === "float") {
+                var floatValue = parseFloat(text);
+                if (isNaN(floatValue)) {
+                    return text;
+                }
+                return floatValue.toFixed(2);
+            }
+            if (paramType === "int") {
+                var intValue = parseInt(text, 10);
+                if (isNaN(intValue)) {
+                    return text;
+                }
+                return String(intValue);
+            }
+            if (text.length > DEVICE_CUSTOM_COMMAND_VALUE_MAX_CHARS) {
+                return text.substring(0, DEVICE_CUSTOM_COMMAND_VALUE_MAX_CHARS);
+            }
+            return text;
+        }
+
+        function validateDeviceCmdActionValue(device, action) {
+            if (!action || action.param !== "deviceCmd") {
+                return "";
+            }
+            var commandName = String(action.command || "").trim();
+            if (!commandName) {
+                return "Custom command name is required";
+            }
+            var def = findDeviceCustomCommandDef(device, commandName);
+            if (!def) {
+                return "Unknown custom command: " + commandName;
+            }
+            if (!def.hasParam) {
+                return "";
+            }
+            var valueText = String(action.value != null ? action.value : "").trim();
+            if (!valueText) {
+                return "Value is required for custom command " + commandName;
+            }
+            if (def.paramType === "int" && isNaN(parseInt(valueText, 10))) {
+                return "Custom command value must be an integer";
+            }
+            if (def.paramType === "float" && isNaN(parseFloat(valueText))) {
+                return "Custom command value must be a number";
+            }
+            if (def.paramType === "string"
+                && valueText.length > DEVICE_CUSTOM_COMMAND_VALUE_MAX_CHARS) {
+                return "Custom command string value must be at most "
+                    + String(DEVICE_CUSTOM_COMMAND_VALUE_MAX_CHARS) + " characters";
+            }
+            if (def.paramType === "bool") {
+                var upper = valueText.toUpperCase();
+                if (upper !== "ON" && upper !== "OFF" && upper !== "0" && upper !== "1"
+                    && upper !== "TRUE" && upper !== "FALSE") {
+                    return "Custom command bool value must be ON or OFF";
+                }
+            }
+            return "";
         }
 
         function automationDefaultDeviceAction(device) {
@@ -6839,8 +7339,12 @@
             if (!action) {
                 return "custom";
             }
+            if (action.param === "deviceCmd") {
+                return automationDeviceCmdCommandId(action.command || "");
+            }
             if (action.param === "custom"
-                || (action.cluster != null && action.command != null && !action.payload)) {
+                || (action.cluster != null && action.command != null && !action.payload
+                    && action.param !== "deviceCmd")) {
                 return "custom";
             }
             var param = String(action.param || "");
@@ -6947,12 +7451,47 @@
             if (upper === "CUSTOM") {
                 return { kind: "custom" };
             }
+            var valueFromEq = "";
+            var nameForMatch = text;
+            var eqAt = text.indexOf("=");
+            if (eqAt > 0) {
+                nameForMatch = text.substring(0, eqAt).trim();
+                valueFromEq = text.substring(eqAt + 1).trim();
+                upper = nameForMatch.toUpperCase();
+            }
             var commands = automationCommandsForDevice(device);
             var index;
+            // Prefer custom device commands when the typed name matches.
             for (index = 0; index < commands.length; index++) {
-                if (commands[index].id === upper
-                    || String(commands[index].label || "").toUpperCase() === upper) {
-                    return { kind: "command", id: commands[index].id, value: "" };
+                var commandMeta = commands[index];
+                if (!commandMeta.deviceCmd) {
+                    continue;
+                }
+                var cmdName = String(commandMeta.commandName || commandMeta.id || "");
+                if (cmdName === nameForMatch
+                    || cmdName.toUpperCase() === upper
+                    || String(commandMeta.label || "") === text
+                    || String(commandMeta.label || "").toUpperCase() === text.toUpperCase()) {
+                    return {
+                        kind: "command",
+                        id: commandMeta.id,
+                        value: valueFromEq
+                    };
+                }
+            }
+            for (index = 0; index < commands.length; index++) {
+                commandMeta = commands[index];
+                if (commandMeta.id === nameForMatch
+                    || commandMeta.id === upper
+                    || String(commandMeta.label || "") === text
+                    || String(commandMeta.label || "").toUpperCase() === text.toUpperCase()
+                    || String(commandMeta.label || "") === nameForMatch
+                    || String(commandMeta.label || "").toUpperCase() === upper) {
+                    return {
+                        kind: "command",
+                        id: commandMeta.id,
+                        value: valueFromEq
+                    };
                 }
             }
             var moveMatch = text.match(/^MOVETO\s*[=:]?\s*(.*)$/i);
@@ -6974,6 +7513,14 @@
             var commandId = automationActionCommandId(action);
             if (commandId === "custom") {
                 return "CUSTOM";
+            }
+            if (action && action.param === "deviceCmd") {
+                return automationDeviceCmdNameFromId(action.command || commandId);
+            }
+            var deviceForDisplay = findRegisteredDeviceByIeee(action && action.ieee ? action.ieee : "");
+            var displayMeta = automationFindCommandMeta(deviceForDisplay, commandId);
+            if (automationCommandMetaIsDeviceCmd(displayMeta)) {
+                return displayMeta.commandName || commandId;
             }
             if (commandId === "MOVETO") {
                 return "MOVETO";
@@ -7622,6 +8169,27 @@
                         }
                         function applyActionCommand(commandId, valueText) {
                             var stored = automationEditorDraft.actions[actionIndex];
+                            var deviceForCmd = findRegisteredDeviceByIeee(stored.ieee || "");
+                            var meta = automationFindCommandMeta(deviceForCmd, commandId);
+                            if (automationCommandMetaIsDeviceCmd(meta)
+                                || String(commandId || "").indexOf("deviceCmd:") === 0) {
+                                var deviceCmdName = meta && meta.commandName
+                                    ? meta.commandName
+                                    : automationDeviceCmdNameFromId(commandId);
+                                stored.param = "deviceCmd";
+                                stored.command = deviceCmdName;
+                                delete stored.cluster;
+                                delete stored.payload;
+                                if (meta && meta.needsValue) {
+                                    stored.value = formatDeviceCmdStoredValue(
+                                        meta.paramType,
+                                        valueText
+                                    );
+                                } else {
+                                    delete stored.value;
+                                }
+                                return;
+                            }
                             stored.param = commandId;
                             if (commandId === "custom") {
                                 enterCustomActionMode();
@@ -7644,8 +8212,18 @@
                             if (resolved.kind === "command") {
                                 var valueText = resolved.value;
                                 if (automationCommandNeedsValue(device, resolved.id) && !valueText) {
-                                    var presets = automationCommandValueList(device, resolved.id);
-                                    valueText = presets[0] || "";
+                                    var cmdMeta = automationFindCommandMeta(device, resolved.id);
+                                    if (automationCommandMetaIsDeviceCmd(cmdMeta)
+                                        || String(resolved.id || "").indexOf("deviceCmd:") === 0) {
+                                        if (cmdMeta && cmdMeta.paramType === "bool") {
+                                            valueText = "ON";
+                                        } else {
+                                            valueText = "";
+                                        }
+                                    } else {
+                                        var presets = automationCommandValueList(device, resolved.id);
+                                        valueText = presets[0] || "";
+                                    }
                                 }
                                 applyActionCommand(resolved.id, valueText);
                                 return;
@@ -7663,7 +8241,14 @@
                             return automationActionCommandId(automationEditorDraft.actions[actionIndex]);
                         }
                         function refreshActionCustomVisibility() {
-                            var isCustom = currentCommandId() === "custom";
+                            var commandId = currentCommandId();
+                            var isCustom = commandId === "custom";
+                            var visDevice = findRegisteredDeviceByIeee(
+                                automationEditorDraft.actions[actionIndex].ieee || ""
+                            );
+                            var isDeviceCmd = automationCommandMetaIsDeviceCmd(
+                                automationFindCommandMeta(visDevice, commandId)
+                            ) || String(commandId || "").indexOf("deviceCmd:") === 0;
                             clusterInput.hidden = !isCustom;
                             commandInput.hidden = !isCustom;
                             valueInput.hidden = !isCustom;
@@ -7671,7 +8256,13 @@
                                 automationEditorDraft.actions[actionIndex].ieee || ""
                             );
                             payloadHost.hidden = isCustom
-                                || !automationCommandNeedsValue(device, currentCommandId());
+                                || !automationCommandNeedsValue(device, commandId);
+                            if (isDeviceCmd) {
+                                // ZCL hex fields must stay hidden for named device commands.
+                                clusterInput.hidden = true;
+                                commandInput.hidden = true;
+                                valueInput.hidden = true;
+                            }
                         }
                         function refreshActionCommandControl() {
                             commandHost.innerHTML = "";
@@ -7702,6 +8293,24 @@
                                 return;
                             }
                             payloadHost.hidden = false;
+                            if (automationCommandMetaIsDeviceCmd(
+                                    automationFindCommandMeta(device, commandId)
+                                )
+                                || String(commandId || "").indexOf("deviceCmd:") === 0) {
+                                var meta = automationFindCommandMeta(device, commandId);
+                                var storedAction = automationEditorDraft.actions[actionIndex];
+                                var deviceCmdValue = storedAction.value != null
+                                    ? String(storedAction.value)
+                                    : "";
+                                payloadHost.appendChild(buildDeviceCmdValueControl(
+                                    meta ? meta.paramType : "string",
+                                    deviceCmdValue,
+                                    function (nextValue) {
+                                        applyActionCommand(commandId, nextValue);
+                                    }
+                                ));
+                                return;
+                            }
                             var currentValue = automationActionValueText(
                                 automationEditorDraft.actions[actionIndex],
                                 commandId
@@ -7906,6 +8515,36 @@
                     errorLine.textContent = "Name is required";
                 }
                 return;
+            }
+            var actionCheckIndex;
+            for (actionCheckIndex = 0;
+                actionCheckIndex < (automationEditorDraft.actions || []).length;
+                actionCheckIndex++) {
+                var checkAction = automationEditorDraft.actions[actionCheckIndex];
+                if (!checkAction || checkAction.target === "automation") {
+                    continue;
+                }
+                if (checkAction.param !== "deviceCmd") {
+                    continue;
+                }
+                var checkDevice = findRegisteredDeviceByIeee(checkAction.ieee || "");
+                var checkError = validateDeviceCmdActionValue(checkDevice, checkAction);
+                if (checkError) {
+                    if (errorLine) {
+                        errorLine.hidden = false;
+                        errorLine.textContent = checkError;
+                    }
+                    return;
+                }
+                var checkDef = findDeviceCustomCommandDef(checkDevice, checkAction.command);
+                if (checkDef && checkDef.hasParam) {
+                    checkAction.value = formatDeviceCmdStoredValue(
+                        checkDef.paramType,
+                        checkAction.value
+                    );
+                } else {
+                    delete checkAction.value;
+                }
             }
             if (automationEditorDraft.timer
                 && automationEditorDraft.timer.use
@@ -10767,11 +11406,12 @@
             { name: "White", color: "#ffffff" },
             { name: "Gray", color: "#808080" },
             { name: "Light gray", color: "#c0c0c0" },
-            { name: "Red", color: "#e53935" },
-            { name: "Green", color: "#43a047" },
-            { name: "Light blue", color: "#4fc3f7" },
-            { name: "Yellow", color: "#fdd835" },
-            { name: "Orange", color: "#fb8c00" }
+            { name: "Red", color: "#BE1313" },
+            { name: "Green", color: "#0E7C15" },
+            { name: "Blue", color: "#1B2FC0" },
+            { name: "Yellow", color: "#BBBE13" },
+            { name: "Orange", color: "#fb8c00" },
+            { name: "Violet", color: "#2E329E" }
         ];
         var consoleColorPickerCloseHandler = null;
 
@@ -11150,6 +11790,9 @@
             var displayAsIcon = allowsIconStyle && styleValue === "icon";
             setHidden(gaugeGroup, !displayAsGauge);
             setHidden(iconGroup, !displayAsIcon);
+            if (displayAsGauge) {
+                ensureConsoleDeviceGaugeAddColorControl();
+            }
             if (displayAsIcon) {
                 renderConsoleDeviceIconGrid();
             }
@@ -11183,6 +11826,401 @@
             fillAutomationParamSelect(paramSelect, device, previousParam || "", true);
             refreshConsoleDeviceCustomAndGaugeFields();
             updateConsoleDeviceUnitField();
+        }
+
+        function defaultConsoleClickActionDraft() {
+            var firstDevice = (consoleDeviceDialogDevices && consoleDeviceDialogDevices[0])
+                || registeredDeviceRows[0]
+                || null;
+            return automationDefaultDeviceAction(firstDevice);
+        }
+
+        function onConsoleDeviceClickActionEnableChange() {
+            var enableInput = document.getElementById("consoleDeviceClickActionEnable");
+            consoleDeviceClickActionEnabled = !!(enableInput && enableInput.checked);
+            if (consoleDeviceClickActionEnabled) {
+                if (!consoleDeviceClickActionFalseDraft) {
+                    consoleDeviceClickActionFalseDraft = defaultConsoleClickActionDraft();
+                }
+                if (!consoleDeviceClickActionTrueDraft) {
+                    consoleDeviceClickActionTrueDraft = defaultConsoleClickActionDraft();
+                }
+            } else {
+                consoleDeviceClickActionFalseDraft = null;
+                consoleDeviceClickActionTrueDraft = null;
+            }
+            renderConsoleDeviceClickActionEditor();
+        }
+
+        function renderConsoleDeviceClickActionEditor() {
+            var host = document.getElementById("consoleDeviceClickActionEditor");
+            var enableInput = document.getElementById("consoleDeviceClickActionEnable");
+            if (!host) {
+                return;
+            }
+            if (enableInput) {
+                enableInput.checked = !!consoleDeviceClickActionEnabled;
+            }
+            if (!consoleDeviceClickActionEnabled
+                || (!consoleDeviceClickActionFalseDraft && !consoleDeviceClickActionTrueDraft)) {
+                host.hidden = true;
+                host.innerHTML = "";
+                return;
+            }
+            if (!consoleDeviceClickActionFalseDraft) {
+                consoleDeviceClickActionFalseDraft = defaultConsoleClickActionDraft();
+            }
+            if (!consoleDeviceClickActionTrueDraft) {
+                consoleDeviceClickActionTrueDraft = defaultConsoleClickActionDraft();
+            }
+            host.hidden = false;
+            host.innerHTML = "";
+            function renderOneClickActionSection(which, labelText) {
+                consoleDeviceClickActionEditWhich = which;
+            var action = getConsoleClickActionDraft();
+            var row = document.createElement("div");
+            row.className = "console-click-action-row";
+            var targetSelect = document.createElement("select");
+            targetSelect.innerHTML = "<option value=\"device\">Device</option><option value=\"automation\">Automation</option>";
+            targetSelect.value = action.target === "automation" ? "automation" : "device";
+            targetSelect.onchange = function () {
+                if (targetSelect.value === "automation") {
+                    var firstName = "";
+                    var autoSelectProbe = document.getElementById("consoleAutomationSelect");
+                    if (autoSelectProbe && autoSelectProbe.options.length) {
+                        firstName = autoSelectProbe.options[0].value;
+                    }
+                    setConsoleClickActionDraft({
+                        target: "automation",
+                        name: firstName || (automationNameListCache[0] || ""),
+                        op: "ENABLE"
+                    });
+                } else {
+                    setConsoleClickActionDraft(defaultConsoleClickActionDraft());
+                }
+                renderConsoleDeviceClickActionEditor();
+            };
+            row.appendChild(targetSelect);
+            if (targetSelect.value === "device") {
+                var deviceSelect = document.createElement("select");
+                var deviceList = consoleDeviceDialogDevices || registeredDeviceRows || [];
+                var deviceIndex;
+                for (deviceIndex = 0; deviceIndex < deviceList.length; deviceIndex++) {
+                    var option = document.createElement("option");
+                    option.value = deviceList[deviceIndex].ieee || "";
+                    option.textContent = (deviceList[deviceIndex].name
+                        || deviceList[deviceIndex].friendlyName
+                        || deviceList[deviceIndex].ieee
+                        || "Device");
+                    if (action.ieee && action.ieee === option.value) {
+                        option.selected = true;
+                    }
+                    deviceSelect.appendChild(option);
+                }
+                if (!deviceSelect.value && deviceSelect.options.length) {
+                    deviceSelect.selectedIndex = 0;
+                    action.ieee = deviceSelect.value;
+                }
+                var channelSelect = document.createElement("select");
+                var commandHost = document.createElement("div");
+                var payloadHost = document.createElement("div");
+                var clusterInput = document.createElement("input");
+                clusterInput.type = "text";
+                clusterInput.placeholder = "cluster (hex)";
+                clusterInput.value = formatZigbeeIdToken(action.cluster);
+                var commandInput = document.createElement("input");
+                commandInput.type = "text";
+                commandInput.placeholder = "command (hex)";
+                if (action.param === "custom"
+                    && action.command != null
+                    && action.command !== "") {
+                    commandInput.value = formatZigbeeIdToken(action.command);
+                } else {
+                    commandInput.value = "";
+                }
+                var valueInput = document.createElement("input");
+                valueInput.type = "text";
+                valueInput.placeholder = "value";
+                valueInput.value = action.value != null ? String(action.value) : "";
+                function findClickDevice() {
+                    var ieee = getConsoleClickActionDraft().ieee || "";
+                    var list = consoleDeviceDialogDevices || [];
+                    var idx;
+                    for (idx = 0; idx < list.length; idx++) {
+                        if ((list[idx].ieee || "") === ieee) {
+                            return list[idx];
+                        }
+                    }
+                    return findRegisteredDeviceByIeee(ieee);
+                }
+                function enterClickCustomMode() {
+                    var stored = getConsoleClickActionDraft();
+                    stored.param = "custom";
+                    delete stored.payload;
+                    if (stored.cluster == null) {
+                        stored.cluster = 6;
+                    }
+                    if (stored.command == null) {
+                        stored.command = 1;
+                    }
+                    if (stored.value == null) {
+                        stored.value = "";
+                    }
+                    clusterInput.value = formatZigbeeIdToken(stored.cluster);
+                    commandInput.value = formatZigbeeIdToken(stored.command);
+                    valueInput.value = String(stored.value || "");
+                }
+                function applyClickActionCommand(commandId, valueText) {
+                    var stored = getConsoleClickActionDraft();
+                    var meta = automationFindCommandMeta(findClickDevice(), commandId);
+                    if (automationCommandMetaIsDeviceCmd(meta)
+                        || String(commandId || "").indexOf("deviceCmd:") === 0) {
+                        var deviceCmdName = meta && meta.commandName
+                            ? meta.commandName
+                            : automationDeviceCmdNameFromId(commandId);
+                        stored.param = "deviceCmd";
+                        stored.command = deviceCmdName;
+                        delete stored.cluster;
+                        delete stored.payload;
+                        if (meta && meta.needsValue) {
+                            stored.value = formatDeviceCmdStoredValue(meta.paramType, valueText);
+                        } else {
+                            delete stored.value;
+                        }
+                        return;
+                    }
+                    stored.param = commandId;
+                    if (commandId === "custom") {
+                        enterClickCustomMode();
+                        return;
+                    }
+                    delete stored.cluster;
+                    delete stored.command;
+                    delete stored.value;
+                    stored.payload = automationBuildActionPayload(commandId, valueText);
+                }
+                function applyClickTypedCommand(typedText) {
+                    var device = findClickDevice();
+                    var resolved = automationResolveTypedCommand(device, typedText);
+                    if (resolved.kind === "custom") {
+                        enterClickCustomMode();
+                        return;
+                    }
+                    if (resolved.kind === "command") {
+                        var valueText = resolved.value;
+                        if (automationCommandNeedsValue(device, resolved.id) && !valueText) {
+                            var cmdMeta = automationFindCommandMeta(device, resolved.id);
+                            if (automationCommandMetaIsDeviceCmd(cmdMeta)
+                                || String(resolved.id || "").indexOf("deviceCmd:") === 0) {
+                                valueText = (cmdMeta && cmdMeta.paramType === "bool") ? "ON" : "";
+                            } else {
+                                var presets = automationCommandValueList(device, resolved.id);
+                                valueText = presets[0] || "";
+                            }
+                        }
+                        applyClickActionCommand(resolved.id, valueText);
+                        return;
+                    }
+                    if (resolved.kind === "manual") {
+                        var stored = getConsoleClickActionDraft();
+                        delete stored.cluster;
+                        delete stored.command;
+                        delete stored.value;
+                        delete stored.param;
+                        stored.payload = resolved.payload;
+                    }
+                }
+                function currentClickCommandId() {
+                    return automationActionCommandId(getConsoleClickActionDraft());
+                }
+                function refreshClickCustomVisibility() {
+                    var commandId = currentClickCommandId();
+                    var isCustom = commandId === "custom";
+                    var isDeviceCmd = automationCommandMetaIsDeviceCmd(
+                        automationFindCommandMeta(findClickDevice(), commandId)
+                    ) || String(commandId || "").indexOf("deviceCmd:") === 0;
+                    clusterInput.hidden = !isCustom || isDeviceCmd;
+                    commandInput.hidden = !isCustom || isDeviceCmd;
+                    valueInput.hidden = !isCustom || isDeviceCmd;
+                    if (isDeviceCmd) {
+                        clusterInput.hidden = true;
+                        commandInput.hidden = true;
+                        valueInput.hidden = true;
+                    }
+                    var device = findClickDevice();
+                    payloadHost.hidden = isCustom
+                        || !automationCommandNeedsValue(device, commandId);
+                }
+                function refreshClickCommandControl() {
+                    commandHost.innerHTML = "";
+                    var device = findClickDevice();
+                    commandHost.appendChild(buildEditableDiscreteControl(
+                        automationActionCommandDisplay(getConsoleClickActionDraft()),
+                        automationCommandLabels(device),
+                        function (nextValue) {
+                            applyClickTypedCommand(nextValue);
+                            refreshClickCustomVisibility();
+                            refreshClickPayloadControl();
+                        }
+                    ));
+                }
+                function refreshClickPayloadControl() {
+                    payloadHost.innerHTML = "";
+                    var device = findClickDevice();
+                    var commandId = currentClickCommandId();
+                    if (commandId === "custom" || !automationCommandNeedsValue(device, commandId)) {
+                        payloadHost.hidden = true;
+                        return;
+                    }
+                    payloadHost.hidden = false;
+                    if (automationCommandMetaIsDeviceCmd(
+                            automationFindCommandMeta(device, commandId)
+                        )
+                        || String(commandId || "").indexOf("deviceCmd:") === 0) {
+                        var meta = automationFindCommandMeta(device, commandId);
+                        var storedAction = getConsoleClickActionDraft();
+                        payloadHost.appendChild(buildDeviceCmdValueControl(
+                            meta ? meta.paramType : "string",
+                            storedAction.value != null ? String(storedAction.value) : "",
+                            function (nextValue) {
+                                applyClickActionCommand(commandId, nextValue);
+                            }
+                        ));
+                        return;
+                    }
+                    payloadHost.appendChild(buildEditableDiscreteControl(
+                        automationActionValueText(getConsoleClickActionDraft(), commandId),
+                        automationCommandValueList(device, commandId),
+                        function (nextValue) {
+                            applyClickActionCommand(commandId, nextValue);
+                        }
+                    ));
+                }
+                function refreshClickDeviceDependent() {
+                    getConsoleClickActionDraft().ieee = deviceSelect.value;
+                    getConsoleClickActionDraft().target = "device";
+                    var device = findClickDevice();
+                    getConsoleClickActionDraft().channel = fillAutomationChannelSelect(
+                        channelSelect,
+                        device,
+                        getConsoleClickActionDraft().channel || 1
+                    );
+                    if (channelSelect.hidden) {
+                        getConsoleClickActionDraft().channel = 1;
+                    }
+                    refreshClickCommandControl();
+                    refreshClickCustomVisibility();
+                    refreshClickPayloadControl();
+                }
+                deviceSelect.onchange = function () {
+                    var device = findClickDevice();
+                    // Re-resolve after ieee assigned below
+                    getConsoleClickActionDraft().ieee = deviceSelect.value;
+                    device = findClickDevice();
+                    var defaults = automationDefaultDeviceAction(device);
+                    defaults.channel = getConsoleClickActionDraft().channel || 1;
+                    setConsoleClickActionDraft(defaults);
+                    refreshClickDeviceDependent();
+                };
+                channelSelect.onchange = function () {
+                    getConsoleClickActionDraft().channel =
+                        parseInt(channelSelect.value, 10) || 1;
+                };
+                clusterInput.onchange = function () {
+                    var clusterValue = parseZigbeeIdToken(clusterInput.value);
+                    if (clusterValue != null && clusterValue > 0) {
+                        getConsoleClickActionDraft().cluster = clusterValue;
+                        clusterInput.value = formatZigbeeIdToken(clusterValue);
+                    } else {
+                        delete getConsoleClickActionDraft().cluster;
+                        clusterInput.value = "";
+                    }
+                };
+                commandInput.onchange = function () {
+                    if (commandInput.value === "") {
+                        delete getConsoleClickActionDraft().command;
+                    } else {
+                        var commandValue = parseZigbeeIdToken(commandInput.value);
+                        if (commandValue == null) {
+                            delete getConsoleClickActionDraft().command;
+                            commandInput.value = "";
+                        } else {
+                            getConsoleClickActionDraft().command = commandValue;
+                            commandInput.value = formatZigbeeIdToken(commandValue);
+                        }
+                    }
+                };
+                valueInput.onchange = function () {
+                    getConsoleClickActionDraft().value = valueInput.value;
+                };
+                refreshClickDeviceDependent();
+                row.appendChild(deviceSelect);
+                row.appendChild(channelSelect);
+                row.appendChild(commandHost);
+                row.appendChild(payloadHost);
+                row.appendChild(clusterInput);
+                row.appendChild(commandInput);
+                row.appendChild(valueInput);
+            } else {
+                var nameSelect = document.createElement("select");
+                fillAutomationNameSelect(nameSelect, action.name || "");
+                var opSelect = document.createElement("select");
+                var timeInput = document.createElement("input");
+                timeInput.type = "number";
+                timeInput.min = "1";
+                timeInput.placeholder = "seconds (optional)";
+                timeInput.value = action.time ? String(action.time) : "";
+                function refreshClickOps() {
+                    var ops = ["ENABLE", "DISABLE", "STOP TIMER", "START TIMER", "RESTART TIMER"];
+                    var previous = opSelect.value || action.op || "ENABLE";
+                    opSelect.innerHTML = "";
+                    var opIndex;
+                    for (opIndex = 0; opIndex < ops.length; opIndex++) {
+                        var option = document.createElement("option");
+                        option.value = ops[opIndex];
+                        option.textContent = ops[opIndex];
+                        opSelect.appendChild(option);
+                    }
+                    opSelect.value = previous;
+                    if (!opSelect.value) {
+                        opSelect.value = "ENABLE";
+                    }
+                    getConsoleClickActionDraft().op = opSelect.value;
+                    timeInput.hidden = opSelect.value !== "START TIMER";
+                }
+                timeInput.onchange = function () {
+                    var seconds = parseInt(timeInput.value, 10);
+                    if (seconds > 0) {
+                        getConsoleClickActionDraft().time = seconds;
+                    } else {
+                        delete getConsoleClickActionDraft().time;
+                    }
+                };
+                nameSelect.onchange = function () {
+                    getConsoleClickActionDraft().name = nameSelect.value;
+                    refreshClickOps();
+                };
+                opSelect.onchange = function () {
+                    getConsoleClickActionDraft().op = opSelect.value;
+                    timeInput.hidden = opSelect.value !== "START TIMER";
+                };
+                refreshClickOps();
+                row.appendChild(nameSelect);
+                row.appendChild(opSelect);
+                row.appendChild(timeInput);
+            }
+
+                var section = document.createElement("div");
+                section.className = "console-click-action-section-state";
+                var label = document.createElement("p");
+                label.className = "field-hint";
+                label.textContent = labelText;
+                section.appendChild(label);
+                section.appendChild(row);
+                host.appendChild(section);
+            }
+            renderOneClickActionSection("false", "When OFF (false)");
+            renderOneClickActionSection("true", "When ON (true)");
         }
 
         function openConsoleDeviceDialog(widgetIndex, bindingIndex) {
@@ -11220,6 +12258,9 @@
                 consoleDeviceDialogDevices = list.map(function (deviceRow) {
                     if (deviceRow && (deviceRow.type || "") === "userData") {
                         deviceRow.userDataFields = normalizeUserDataFields(deviceRow.userDataFields);
+                    }
+                    if (deviceRow) {
+                        deviceRow.customCommands = normalizeCustomCommands(deviceRow.customCommands);
                     }
                     return deviceRow;
                 });
@@ -11351,6 +12392,23 @@
                 if (openSeq !== consoleDeviceDialogOpenSeq) {
                     return;
                 }
+                var loadedFalse = normalizeLoadedClickAction(binding.clickActionFalse);
+                var loadedTrue = normalizeLoadedClickAction(binding.clickActionTrue);
+                var loadedLegacy = normalizeLoadedClickAction(binding.clickAction);
+                if (loadedFalse || loadedTrue || loadedLegacy) {
+                    consoleDeviceClickActionEnabled = true;
+                    consoleDeviceClickActionFalseDraft = loadedFalse
+                        || (loadedLegacy ? cloneAutomationActionObject(loadedLegacy) : null)
+                        || defaultConsoleClickActionDraft();
+                    consoleDeviceClickActionTrueDraft = loadedTrue
+                        || (loadedLegacy ? cloneAutomationActionObject(loadedLegacy) : null)
+                        || defaultConsoleClickActionDraft();
+                } else {
+                    consoleDeviceClickActionEnabled = false;
+                    consoleDeviceClickActionFalseDraft = null;
+                    consoleDeviceClickActionTrueDraft = null;
+                }
+                renderConsoleDeviceClickActionEditor();
                 document.getElementById("consoleDeviceDialog").hidden = false;
                 consoleDeviceDialogBaseline = JSON.stringify(readConsoleDeviceDialogBody());
             }).catch(function () {
@@ -11487,6 +12545,22 @@
             return body;
         }
 
+
+        function applyClickActionsToBindingBody(body) {
+            if (!consoleDeviceClickActionEnabled) {
+                return body;
+            }
+            if (consoleDeviceClickActionFalseDraft) {
+                body.clickActionFalse = cloneAutomationActionObject(consoleDeviceClickActionFalseDraft)
+                    || consoleDeviceClickActionFalseDraft;
+            }
+            if (consoleDeviceClickActionTrueDraft) {
+                body.clickActionTrue = cloneAutomationActionObject(consoleDeviceClickActionTrueDraft)
+                    || consoleDeviceClickActionTrueDraft;
+            }
+            return body;
+        }
+
         function readConsoleDeviceDialogBody() {
             var target = document.getElementById("consoleBindingTarget");
             var title = document.getElementById("consoleDeviceTitle").value;
@@ -11504,7 +12578,8 @@
                 } else {
                     automationBody.viewStyle = "default";
                 }
-                return applyDialogLayoutFieldsToBody(automationBody);
+                automationBody = applyDialogLayoutFieldsToBody(automationBody);
+                return applyClickActionsToBindingBody(automationBody);
             }
             var deviceSelect = document.getElementById("consoleDeviceSelect");
             var channelSelect = document.getElementById("consoleDeviceChannel");
@@ -11575,7 +12650,8 @@
             if (body.viewStyle === "icon") {
                 body.icon = normalizeMdiIconId(consoleDeviceIconDraft);
             }
-            return applyDialogLayoutFieldsToBody(body);
+            body = applyDialogLayoutFieldsToBody(body);
+            return applyClickActionsToBindingBody(body);
         }
 
         function consoleDeviceDialogHasUnsavedChanges() {
@@ -11596,6 +12672,9 @@
             consoleCompositeEditTarget = null;
             consoleDeviceDialogBaseline = null;
             consoleDevicePreferredViewStyle = null;
+            consoleDeviceClickActionEnabled = false;
+            consoleDeviceClickActionFalseDraft = null;
+            consoleDeviceClickActionTrueDraft = null;
             consoleDeviceDialogWidgetIndex = -1;
             consoleDeviceDialogBindingIndex = -1;
             document.getElementById("consoleDeviceDialog").hidden = true;
@@ -11710,6 +12789,33 @@
             var errorLine = document.getElementById("consoleDeviceDialogError");
             errorLine.hidden = true;
             var body = readConsoleDeviceDialogBody();
+            function validateOneClickAction(action, label) {
+                if (!action || action.param !== "deviceCmd") {
+                    return null;
+                }
+                var clickDevice = findRegisteredDeviceByIeee(action.ieee || "");
+                if (!clickDevice && consoleDeviceDialogDevices) {
+                    var di;
+                    for (di = 0; di < consoleDeviceDialogDevices.length; di++) {
+                        if ((consoleDeviceDialogDevices[di].ieee || "") === (action.ieee || "")) {
+                            clickDevice = consoleDeviceDialogDevices[di];
+                            break;
+                        }
+                    }
+                }
+                var clickError = validateDeviceCmdActionValue(clickDevice, action);
+                if (clickError) {
+                    return label + ": " + clickError;
+                }
+                return null;
+            }
+            var clickErr = validateOneClickAction(body.clickActionFalse, "OFF action")
+                || validateOneClickAction(body.clickActionTrue, "ON action");
+            if (clickErr) {
+                errorLine.hidden = false;
+                errorLine.textContent = clickErr;
+                return;
+            }
             if (body.automation) {
                 if (!body.automation) {
                     errorLine.hidden = false;
@@ -12584,6 +13690,23 @@
                             </div>
                             <button type="button" class="btn btn-secondary btn-inline" id="deviceUserDataFieldAddBtn" onclick="addUserDataFieldRow()">Add field</button>
                         </div>
+                        <div id="deviceCustomCommandsSection" class="form-section">
+                            <h3 class="group-title">Custom commands</h3>
+                            <div class="table-wrap">
+                                <table class="data-table" id="deviceCustomCommandsTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Name</th>
+                                            <th class="col-check">Has param</th>
+                                            <th>Param type</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="deviceCustomCommandsBody"></tbody>
+                                </table>
+                            </div>
+                            <button type="button" class="btn btn-secondary btn-inline" id="deviceCustomCommandAddBtn" onclick="addCustomCommandRow()">Add</button>
+                        </div>
                         <div id="deviceMqttGroup" class="form-section">
                             <h3 class="group-title">MQTT</h3>
                             <div class="field field-check" id="devicePublishToMqttField">
@@ -13053,6 +14176,16 @@
                     <div id="consoleDeviceGaugeRangeColorControl" class="console-color-picker-control-host" aria-label="Color"></div>
                     <button type="button" class="btn btn-secondary btn-inline" onclick="addConsoleDeviceGaugeRange()">Add</button>
                 </div>
+            </div>
+            <div id="consoleDeviceClickActionSection" class="console-click-action-section">
+                <p class="field-hint">Click actions (one icon; OFF and ON may each run a different action)</p>
+                <div class="console-binding-general-row">
+                    <label class="field-check" for="consoleDeviceClickActionEnable">
+                        <input id="consoleDeviceClickActionEnable" type="checkbox" onchange="onConsoleDeviceClickActionEnableChange();">
+                        <span>Enable click actions</span>
+                    </label>
+                </div>
+                <div id="consoleDeviceClickActionEditor" class="console-click-action-editor" hidden></div>
             </div>
         </div>
         <div class="dialog-actions">
