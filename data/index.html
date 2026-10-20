@@ -4980,7 +4980,6 @@
         var consoleDeviceClickActionEnabled = false;
         var consoleDeviceClickActionFalseDraft = null;
         var consoleDeviceClickActionTrueDraft = null;
-        var consoleDeviceClickActionEditWhich = "false";
         var consoleDeviceDialogBaseline = null;
         var consoleDeviceDialogOpenSeq = 0;
         var consoleDevicePreferredViewStyle = null;
@@ -5626,14 +5625,14 @@
             };
         }
 
-        function getConsoleClickActionDraft() {
-            return consoleDeviceClickActionEditWhich === "true"
+        function getConsoleClickActionDraft(which) {
+            return which === "true"
                 ? consoleDeviceClickActionTrueDraft
                 : consoleDeviceClickActionFalseDraft;
         }
 
-        function setConsoleClickActionDraft(value) {
-            if (consoleDeviceClickActionEditWhich === "true") {
+        function setConsoleClickActionDraft(which, value) {
+            if (which === "true") {
                 consoleDeviceClickActionTrueDraft = value;
             } else {
                 consoleDeviceClickActionFalseDraft = value;
@@ -11876,8 +11875,7 @@
             host.hidden = false;
             host.innerHTML = "";
             function renderOneClickActionSection(which, labelText) {
-                consoleDeviceClickActionEditWhich = which;
-            var action = getConsoleClickActionDraft();
+            var action = getConsoleClickActionDraft(which);
             var row = document.createElement("div");
             row.className = "console-click-action-row";
             var targetSelect = document.createElement("select");
@@ -11890,13 +11888,13 @@
                     if (autoSelectProbe && autoSelectProbe.options.length) {
                         firstName = autoSelectProbe.options[0].value;
                     }
-                    setConsoleClickActionDraft({
+                    setConsoleClickActionDraft(which, {
                         target: "automation",
                         name: firstName || (automationNameListCache[0] || ""),
                         op: "ENABLE"
                     });
                 } else {
-                    setConsoleClickActionDraft(defaultConsoleClickActionDraft());
+                    setConsoleClickActionDraft(which, defaultConsoleClickActionDraft());
                 }
                 renderConsoleDeviceClickActionEditor();
             };
@@ -11943,7 +11941,7 @@
                 valueInput.placeholder = "value";
                 valueInput.value = action.value != null ? String(action.value) : "";
                 function findClickDevice() {
-                    var ieee = getConsoleClickActionDraft().ieee || "";
+                    var ieee = getConsoleClickActionDraft(which).ieee || "";
                     var list = consoleDeviceDialogDevices || [];
                     var idx;
                     for (idx = 0; idx < list.length; idx++) {
@@ -11954,7 +11952,7 @@
                     return findRegisteredDeviceByIeee(ieee);
                 }
                 function enterClickCustomMode() {
-                    var stored = getConsoleClickActionDraft();
+                    var stored = getConsoleClickActionDraft(which);
                     stored.param = "custom";
                     delete stored.payload;
                     if (stored.cluster == null) {
@@ -11971,7 +11969,7 @@
                     valueInput.value = String(stored.value || "");
                 }
                 function applyClickActionCommand(commandId, valueText) {
-                    var stored = getConsoleClickActionDraft();
+                    var stored = getConsoleClickActionDraft(which);
                     var meta = automationFindCommandMeta(findClickDevice(), commandId);
                     if (automationCommandMetaIsDeviceCmd(meta)
                         || String(commandId || "").indexOf("deviceCmd:") === 0) {
@@ -12022,7 +12020,7 @@
                         return;
                     }
                     if (resolved.kind === "manual") {
-                        var stored = getConsoleClickActionDraft();
+                        var stored = getConsoleClickActionDraft(which);
                         delete stored.cluster;
                         delete stored.command;
                         delete stored.value;
@@ -12031,7 +12029,7 @@
                     }
                 }
                 function currentClickCommandId() {
-                    return automationActionCommandId(getConsoleClickActionDraft());
+                    return automationActionCommandId(getConsoleClickActionDraft(which));
                 }
                 function refreshClickCustomVisibility() {
                     var commandId = currentClickCommandId();
@@ -12055,7 +12053,7 @@
                     commandHost.innerHTML = "";
                     var device = findClickDevice();
                     commandHost.appendChild(buildEditableDiscreteControl(
-                        automationActionCommandDisplay(getConsoleClickActionDraft()),
+                        automationActionCommandDisplay(getConsoleClickActionDraft(which)),
                         automationCommandLabels(device),
                         function (nextValue) {
                             applyClickTypedCommand(nextValue);
@@ -12078,7 +12076,7 @@
                         )
                         || String(commandId || "").indexOf("deviceCmd:") === 0) {
                         var meta = automationFindCommandMeta(device, commandId);
-                        var storedAction = getConsoleClickActionDraft();
+                        var storedAction = getConsoleClickActionDraft(which);
                         payloadHost.appendChild(buildDeviceCmdValueControl(
                             meta ? meta.paramType : "string",
                             storedAction.value != null ? String(storedAction.value) : "",
@@ -12089,7 +12087,7 @@
                         return;
                     }
                     payloadHost.appendChild(buildEditableDiscreteControl(
-                        automationActionValueText(getConsoleClickActionDraft(), commandId),
+                        automationActionValueText(getConsoleClickActionDraft(which), commandId),
                         automationCommandValueList(device, commandId),
                         function (nextValue) {
                             applyClickActionCommand(commandId, nextValue);
@@ -12097,16 +12095,16 @@
                     ));
                 }
                 function refreshClickDeviceDependent() {
-                    getConsoleClickActionDraft().ieee = deviceSelect.value;
-                    getConsoleClickActionDraft().target = "device";
+                    getConsoleClickActionDraft(which).ieee = deviceSelect.value;
+                    getConsoleClickActionDraft(which).target = "device";
                     var device = findClickDevice();
-                    getConsoleClickActionDraft().channel = fillAutomationChannelSelect(
+                    getConsoleClickActionDraft(which).channel = fillAutomationChannelSelect(
                         channelSelect,
                         device,
-                        getConsoleClickActionDraft().channel || 1
+                        getConsoleClickActionDraft(which).channel || 1
                     );
                     if (channelSelect.hidden) {
-                        getConsoleClickActionDraft().channel = 1;
+                        getConsoleClickActionDraft(which).channel = 1;
                     }
                     refreshClickCommandControl();
                     refreshClickCustomVisibility();
@@ -12115,43 +12113,43 @@
                 deviceSelect.onchange = function () {
                     var device = findClickDevice();
                     // Re-resolve after ieee assigned below
-                    getConsoleClickActionDraft().ieee = deviceSelect.value;
+                    getConsoleClickActionDraft(which).ieee = deviceSelect.value;
                     device = findClickDevice();
                     var defaults = automationDefaultDeviceAction(device);
-                    defaults.channel = getConsoleClickActionDraft().channel || 1;
-                    setConsoleClickActionDraft(defaults);
+                    defaults.channel = getConsoleClickActionDraft(which).channel || 1;
+                    setConsoleClickActionDraft(which, defaults);
                     refreshClickDeviceDependent();
                 };
                 channelSelect.onchange = function () {
-                    getConsoleClickActionDraft().channel =
+                    getConsoleClickActionDraft(which).channel =
                         parseInt(channelSelect.value, 10) || 1;
                 };
                 clusterInput.onchange = function () {
                     var clusterValue = parseZigbeeIdToken(clusterInput.value);
                     if (clusterValue != null && clusterValue > 0) {
-                        getConsoleClickActionDraft().cluster = clusterValue;
+                        getConsoleClickActionDraft(which).cluster = clusterValue;
                         clusterInput.value = formatZigbeeIdToken(clusterValue);
                     } else {
-                        delete getConsoleClickActionDraft().cluster;
+                        delete getConsoleClickActionDraft(which).cluster;
                         clusterInput.value = "";
                     }
                 };
                 commandInput.onchange = function () {
                     if (commandInput.value === "") {
-                        delete getConsoleClickActionDraft().command;
+                        delete getConsoleClickActionDraft(which).command;
                     } else {
                         var commandValue = parseZigbeeIdToken(commandInput.value);
                         if (commandValue == null) {
-                            delete getConsoleClickActionDraft().command;
+                            delete getConsoleClickActionDraft(which).command;
                             commandInput.value = "";
                         } else {
-                            getConsoleClickActionDraft().command = commandValue;
+                            getConsoleClickActionDraft(which).command = commandValue;
                             commandInput.value = formatZigbeeIdToken(commandValue);
                         }
                     }
                 };
                 valueInput.onchange = function () {
-                    getConsoleClickActionDraft().value = valueInput.value;
+                    getConsoleClickActionDraft(which).value = valueInput.value;
                 };
                 refreshClickDeviceDependent();
                 row.appendChild(deviceSelect);
@@ -12185,23 +12183,23 @@
                     if (!opSelect.value) {
                         opSelect.value = "ENABLE";
                     }
-                    getConsoleClickActionDraft().op = opSelect.value;
+                    getConsoleClickActionDraft(which).op = opSelect.value;
                     timeInput.hidden = opSelect.value !== "START TIMER";
                 }
                 timeInput.onchange = function () {
                     var seconds = parseInt(timeInput.value, 10);
                     if (seconds > 0) {
-                        getConsoleClickActionDraft().time = seconds;
+                        getConsoleClickActionDraft(which).time = seconds;
                     } else {
-                        delete getConsoleClickActionDraft().time;
+                        delete getConsoleClickActionDraft(which).time;
                     }
                 };
                 nameSelect.onchange = function () {
-                    getConsoleClickActionDraft().name = nameSelect.value;
+                    getConsoleClickActionDraft(which).name = nameSelect.value;
                     refreshClickOps();
                 };
                 opSelect.onchange = function () {
-                    getConsoleClickActionDraft().op = opSelect.value;
+                    getConsoleClickActionDraft(which).op = opSelect.value;
                     timeInput.hidden = opSelect.value !== "START TIMER";
                 };
                 refreshClickOps();
