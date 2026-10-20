@@ -1831,6 +1831,72 @@
             return match ? parseFloat(match[0]) : NaN;
         }
 
+        function normalizeLogicalThreshold(value) {
+            var number = Number(value);
+            return isNaN(number) ? 0 : number;
+        }
+
+        function bindingAsLogicalEnabled(binding) {
+            return !!(binding && binding.asLogical);
+        }
+
+        function bindingLogicalStateText(binding, numericValue) {
+            if (isNaN(numericValue)) {
+                return "OFF";
+            }
+            return numericValue < normalizeLogicalThreshold(binding && binding.logicalThreshold)
+                ? "OFF"
+                : "ON";
+        }
+
+        function bindingParamIsNumeric(device, paramValue) {
+            if (!device || !paramValue) {
+                return false;
+            }
+            var typeId = device.type || "";
+            if (paramValue === "onOff") {
+                return false;
+            }
+            if (paramValue === "status") {
+                return isMeasurementDeviceType(typeId);
+            }
+            if (paramValue === "battery"
+                || paramValue === "custom"
+                || paramValue === "sensorValue"
+                || paramValue === "position"
+                || paramValue === "lightLevel") {
+                return true;
+            }
+            if (typeId === "userData") {
+                var fieldType = userDataFieldTypeForParam(device, paramValue);
+                return fieldType === "int" || fieldType === "float";
+            }
+            if (isMeasurementDeviceType(typeId)) {
+                return true;
+            }
+            return false;
+        }
+
+        function userBindingNumericValue(device, binding) {
+            if (!device || !binding) {
+                return NaN;
+            }
+            var typeId = device.type || "";
+            var param = bindingParamId(binding);
+            var rawState = bindingResolvedState(device, binding);
+            if (isMeasurementDeviceType(typeId) && param !== "battery") {
+                return measurementNumericValue(typeId, rawState, binding.unit);
+            }
+            return parseBindingNumericValue(rawState);
+        }
+
+        function bindingUsesAsLogical(device, binding) {
+            if (!bindingAsLogicalEnabled(binding) || !device) {
+                return false;
+            }
+            return bindingParamIsNumeric(device, bindingParamId(binding));
+        }
+
         function buildConsoleGaugeElement(binding, numericValue, displayText) {
             var gauge = binding && binding.gauge ? binding.gauge : {};
             var minValue = gauge.min != null ? Number(gauge.min) : 0;
@@ -2064,6 +2130,19 @@
                     onOffSwitch.className = "console-switch" + (onOffIsOn ? " is-on" : "");
                     onOffSwitch.onclick = onOffToggle;
                     controls.appendChild(onOffSwitch);
+                }
+            } else if (bindingUsesAsLogical(device, binding)) {
+                var logicalState = bindingLogicalStateText(
+                    binding,
+                    userBindingNumericValue(device, binding)
+                );
+                if (binding.viewStyle === "icon") {
+                    controls.appendChild(buildConsoleIconElement(binding, logicalState));
+                } else {
+                    var logicalLabel = document.createElement("span");
+                    logicalLabel.className = "console-sensor-value";
+                    logicalLabel.textContent = logicalState;
+                    controls.appendChild(logicalLabel);
                 }
             } else if (binding.viewStyle === "icon"
                 && (isBinarySensorDeviceType(typeId)

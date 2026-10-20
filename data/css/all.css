@@ -2549,6 +2549,29 @@ button.console-binary-icon--control:disabled {
     display: none !important;
 }
 
+.console-as-logical-check {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.75rem;
+    min-height: 44px;
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+}
+
+.console-as-logical-check input[type="checkbox"] {
+    width: 1.35rem;
+    height: 1.35rem;
+    flex-shrink: 0;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+
 .console-binding-general-row label {
     font-size: 0.875rem;
     font-weight: 600;

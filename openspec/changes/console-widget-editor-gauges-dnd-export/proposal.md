@@ -12,6 +12,7 @@ Console operators editing composite widgets and gauges hit several small frictio
 - Arc gauge **digit font** scales proportionally with the rendered gauge size (option **B**: proportional with a small min/max clamp so tiny phone cells stay readable); **Place (operator) and simple-user (`user.html`) views MUST look identical** for the same layout.
 - Icon bindings with horizontal align **center** MUST appear visually centered in the cell (fix for composite cells such as `mdi:engine` on the Котел console).
 - Console **Export JSON** download filename MUST use the console name, with **transliteration** when the name is not Latin (instead of stripping Cyrillic to `_`).
+- Numeric (“digital”) device params: checkbox **as logical** (label to the right). When checked, show compare threshold (**value &lt; threshold → FALSE**, else **TRUE**); View style is **Default|Icon only** (variant B, Gauge hidden); icons use bool yellow/muted styling (display-only). Persist `asLogical` + `logicalThreshold`.
 
 ## Capabilities
 
@@ -21,8 +22,8 @@ _(none)_
 
 ### Modified Capabilities
 
-- `control-consoles`: proportional arc gauge digit scaling (replacing the fixed reduced-size-only rule for composite/grid fit); icon `alignH` center must visually center the glyph in its slot; Place and simple-user presentation parity for gauges/icons covered here at the model/view-behavior level.
-- `web-console`: in-place gauge range edit; composite cell drag-and-drop across rows with height recalculation; eight color presets on the gauge range color picker; Place / simple-user identical gauge digit scaling; centered icon rendering fix; console export filename from name with translit.
+- `control-consoles`: proportional arc gauge digit scaling; icon center; Place/simple-user parity; numeric **as-logical** conversion + Icon when enabled.
+- `web-console`: gauge range edit; composite DnD; color presets; digit scaling; centered icons; export translit; binding dialog **as logical** + threshold; Place/user render converted icons.
 
 ## Impact
 
@@ -30,3 +31,5 @@ _(none)_
 - Host: `FIRMWARE_VERSION` build bump only for this propose (`3.5.31` → `3.5.32`); no ConsoleStore JSON schema change expected (ranges already store `top` + `color`).
 - No SPI / fragile OTA zones.
 - `FIRMWARE_VERSION` build bumped to `3.5.32` at propose time.
+
+- Additional scope (same change): numeric as-logical; propose bump continued to `3.5.39`.

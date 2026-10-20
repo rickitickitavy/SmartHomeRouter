@@ -32,3 +32,11 @@
 
 - [x] 6.1 Bump `FIRMWARE_VERSION` build by 1 when applying source changes (propose already set `3.5.32`)
 - [x] 6.2 Manually verify all six behaviors in Consoles editor, Place, and simple-user view
+
+## 7. Numeric as-logical (icon via threshold)
+
+- [x] 7.1 Persist `asLogical` / `logicalThreshold` on numeric bindings in Consoles dialog save/load; verify in exported JSON
+- [x] 7.2 Dialog: **as logical** checkbox (label to the right) + threshold when checked; only for numeric params; verify hidden for On/Off and native bool
+- [x] 7.3 Variant B: as-logical on → Default|Icon only; off → Default|Gauge; coerce styles on toggle; verify Gauge hidden when checked
+- [x] 7.4 Conversion helper + Place/`user.html` Default ON/OFF text and Icon yellow/muted (display-only); verify value 9.9 vs 10 at threshold 10
+- [x] 7.5 Bump `FIRMWARE_VERSION` build when applying this source (currently `3.5.39` from propose fold); smoke across threshold on Place and user tab

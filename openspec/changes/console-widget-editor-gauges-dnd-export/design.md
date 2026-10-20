@@ -14,9 +14,10 @@ Approved digit rule: **option B** — proportional to rendered gauge size with a
 - Shared proportional arc digit scaling (option B) on Place and `user.html`.
 - Fix visual centering for centered icons (reproduce with Котел / `mdi:engine`).
 - Export filename from console name with Cyrillic→Latin translit.
+- Numeric as-logical checkbox + threshold; variant B view styles; bool-like icons.
 
 **Non-Goals:**
-- New gauge types, new JSON schema fields for ranges, or host API changes.
+- New gauge types or host API changes beyond optional binding keys `asLogical` / `logicalThreshold`.
 - Changing composite cm/`u` size math beyond re-running it after DnD.
 - Global color presets outside the Consoles gauge range picker.
 - SPI / OTA / fragile zones.
@@ -53,6 +54,11 @@ Approved digit rule: **option B** — proportional to rendered gauge size with a
    **Why:** Current `\w` class is ASCII-only, which caused `_` for `Котел`.  
    **Alt:** Prefer NFC Unicode filenames — worse cross-OS download behavior.
 
+7. **Numeric as-logical (folded into this change)**  
+   Store `asLogical` (bool, default false) and `logicalThreshold` (number, default 0). Conversion: `value < threshold` → FALSE, else TRUE. Variant **B**: as-logical on → Default|Icon only; off → Default|Gauge. Icon display-only with yellow/muted bool colors. Shared helper in Place + `user.html`.  
+   **Why:** Operator-approved.  
+   **Alt:** Keep Gauge alongside Icon (variant A) — rejected.
+
 ## Risks / Trade-offs
 
 - [Risk] Raising MIN too high makes small gauges look “all same size” → Mitigation: verify on Котел desktop + phone screenshots; keep MIN modest.  
@@ -68,4 +74,4 @@ Approved digit rule: **option B** — proportional to rendered gauge size with a
 
 ## Open Questions
 
-_(none — digit option B approved; translit map and preset hexes fixed above.)_
+_(none — digit option B, as-logical variant B, and bool-like icons approved.)_

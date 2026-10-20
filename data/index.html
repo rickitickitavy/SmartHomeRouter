@@ -5200,6 +5200,49 @@
             return match ? parseFloat(match[0]) : NaN;
         }
 
+        function normalizeLogicalThreshold(value) {
+            var number = Number(value);
+            return isNaN(number) ? 0 : number;
+        }
+
+        function bindingAsLogicalEnabled(binding) {
+            return !!(binding && binding.asLogical);
+        }
+
+        function bindingLogicalStateText(binding, numericValue) {
+            if (isNaN(numericValue)) {
+                return "OFF";
+            }
+            return numericValue < normalizeLogicalThreshold(binding && binding.logicalThreshold)
+                ? "OFF"
+                : "ON";
+        }
+
+        function placeBindingNumericValue(device, binding) {
+            if (!device || !binding) {
+                return NaN;
+            }
+            var typeId = device.type || "";
+            var param = placeBindingParam(binding);
+            var rawState = placeBindingResolvedState(device, binding);
+            if (isMeasurementDeviceType(typeId) && param !== "battery") {
+                return placeMeasurementNumericValue(typeId, rawState, binding.unit);
+            }
+            return parseBindingNumericValue(rawState);
+        }
+
+        function bindingUsesAsLogical(device, binding) {
+            if (!bindingAsLogicalEnabled(binding) || !device) {
+                return false;
+            }
+            return consoleBindingParamIsNumeric(device, placeBindingParam(binding));
+        }
+
+        function consoleDialogAsLogicalChecked() {
+            var check = document.getElementById("consoleDeviceAsLogical");
+            return !!(check && check.checked);
+        }
+
         function buildConsoleGaugeElement(binding, numericValue, displayText) {
             var gauge = binding && binding.gauge ? binding.gauge : {};
             var minValue = gauge.min != null ? Number(gauge.min) : 0;
@@ -5437,6 +5480,19 @@
                     onOffSwitch.className = "console-switch" + (onOffIsOn ? " is-on" : "");
                     onOffSwitch.onclick = onOffToggle;
                     controls.appendChild(onOffSwitch);
+                }
+            } else if (bindingUsesAsLogical(device, binding)) {
+                var logicalState = bindingLogicalStateText(
+                    binding,
+                    placeBindingNumericValue(device, binding)
+                );
+                if (binding.viewStyle === "icon") {
+                    controls.appendChild(buildConsoleIconElement(binding, logicalState));
+                } else {
+                    var logicalLabel = document.createElement("span");
+                    logicalLabel.className = "console-sensor-value";
+                    logicalLabel.textContent = logicalState;
+                    controls.appendChild(logicalLabel);
                 }
             } else if (binding.viewStyle === "icon"
                 && (isBinarySensorDeviceType(typeId)
@@ -9690,7 +9746,28 @@
             var previewParam = placeBindingParam(binding);
             var controls = document.createElement("div");
             controls.className = "console-device-row-controls";
-            if (binding.viewStyle === "icon"
+            if (bindingUsesAsLogical(previewDevice, binding)) {
+                var previewLogical = bindingLogicalStateText(
+                    binding,
+                    placeBindingNumericValue(previewDevice, binding)
+                );
+                if (binding.viewStyle === "icon") {
+                    controls.appendChild(buildConsoleIconElement(
+                        binding,
+                        previewLogical,
+                        {
+                            interactive: true,
+                            disabled: true,
+                            ariaLabel: "Icon preview"
+                        }
+                    ));
+                } else {
+                    var logicalPreviewLabel = document.createElement("span");
+                    logicalPreviewLabel.className = "console-sensor-value";
+                    logicalPreviewLabel.textContent = previewLogical;
+                    controls.appendChild(logicalPreviewLabel);
+                }
+            } else if (binding.viewStyle === "icon"
                 && (isBinarySensorDeviceType(previewType)
                     || (previewType === "userData"
                         && userDataFieldTypeForParam(previewDevice, previewParam) === "bool")
@@ -10108,6 +10185,12 @@
                 )) {
                     showIconPreview = true;
                     iconPreviewState = placeBindingResolvedState(previewDevice, binding) || "OFF";
+                } else if (previewDevice && bindingUsesAsLogical(previewDevice, binding)) {
+                    showIconPreview = true;
+                    iconPreviewState = bindingLogicalStateText(
+                        binding,
+                        placeBindingNumericValue(previewDevice, binding)
+                    );
                 } else if (binding.icon) {
                     showIconPreview = true;
                 }
@@ -10634,6 +10717,9 @@
         }
 
         function consoleBindingAllowsGauge(device, paramValue) {
+            if (consoleDialogAsLogicalChecked()) {
+                return false;
+            }
             return consoleBindingParamIsNumeric(device, paramValue);
         }
 
@@ -10649,10 +10735,29 @@
                 return true;
             }
             // userData bool fields use the same Icon path as binary sensors.
-            if (typeId === "userData") {
-                return userDataFieldTypeForParam(device, paramValue) === "bool";
+            // userData int/float must not return early — asLogical can unlock Icon below.
+            if (typeId === "userData"
+                && userDataFieldTypeForParam(device, paramValue) === "bool") {
+                return true;
+            }
+            if (consoleBindingParamIsNumeric(device, paramValue) && consoleDialogAsLogicalChecked()) {
+                return true;
             }
             return false;
+        }
+
+        function onConsoleDeviceAsLogicalChange() {
+            var viewStyleSelect = document.getElementById("consoleDeviceViewStyle");
+            if (consoleDialogAsLogicalChecked()) {
+                if (viewStyleSelect && viewStyleSelect.value === "gauge") {
+                    consoleDevicePreferredViewStyle = "default";
+                    viewStyleSelect.value = "default";
+                }
+            } else if (viewStyleSelect && viewStyleSelect.value === "icon") {
+                consoleDevicePreferredViewStyle = "default";
+                viewStyleSelect.value = "default";
+            }
+            refreshConsoleDeviceGaugeFields();
         }
 
         var CONSOLE_GAUGE_COLOR_PRESETS = [
@@ -10988,6 +11093,18 @@
             var device = consoleDialogSelectedDevice();
             var paramSelect = document.getElementById("consoleDeviceParam");
             var paramValue = paramSelect ? paramSelect.value : "";
+            var asLogicalField = document.getElementById("consoleDeviceAsLogicalField");
+            var thresholdField = document.getElementById("consoleDeviceLogicalThresholdField");
+            var isNumericParam = !isAutomation && !!device
+                && consoleBindingParamIsNumeric(device, paramValue);
+            setHidden(asLogicalField, !isNumericParam);
+            if (!isNumericParam) {
+                var asLogicalCheckClear = document.getElementById("consoleDeviceAsLogical");
+                if (asLogicalCheckClear) {
+                    asLogicalCheckClear.checked = false;
+                }
+            }
+            setHidden(thresholdField, !(isNumericParam && consoleDialogAsLogicalChecked()));
             var allowsIconStyle = isAutomation || consoleBindingAllowsIcon(device, paramValue);
             var allowsGauge = !isAutomation
                 && !allowsIconStyle
@@ -11050,6 +11167,8 @@
                 setHidden(document.getElementById("consoleDeviceViewStyleField"), true);
                 setHidden(document.getElementById("consoleDeviceGaugeGroup"), true);
                 setHidden(document.getElementById("consoleDeviceIconGroup"), true);
+                setHidden(document.getElementById("consoleDeviceAsLogicalField"), true);
+                setHidden(document.getElementById("consoleDeviceLogicalThresholdField"), true);
                 updateConsoleDeviceUnitField();
                 return;
             }
@@ -11178,6 +11297,14 @@
                 }
                 if (gaugeMax) {
                     gaugeMax.value = binding.gauge && binding.gauge.max != null ? String(binding.gauge.max) : "100";
+                }
+                var asLogicalCheck = document.getElementById("consoleDeviceAsLogical");
+                if (asLogicalCheck) {
+                    asLogicalCheck.checked = !!binding.asLogical;
+                }
+                var logicalThresholdInput = document.getElementById("consoleDeviceLogicalThreshold");
+                if (logicalThresholdInput) {
+                    logicalThresholdInput.value = String(normalizeLogicalThreshold(binding.logicalThreshold));
                 }
                 renderConsoleDeviceGaugeRangesList();
                 // Prefer binding param/channel over stale select leftovers from the previous open.
@@ -11410,6 +11537,13 @@
                 }
             }
             var device = consoleDialogSelectedDevice();
+            if (device && consoleBindingParamIsNumeric(device, body.param) && consoleDialogAsLogicalChecked()) {
+                body.asLogical = true;
+                var logicalThresholdInput = document.getElementById("consoleDeviceLogicalThreshold");
+                body.logicalThreshold = normalizeLogicalThreshold(
+                    logicalThresholdInput ? logicalThresholdInput.value : 0
+                );
+            }
             var allowsIconStyle = consoleBindingAllowsIcon(device, body.param);
             if (allowsIconStyle
                 && viewStyleSelect
@@ -12864,6 +12998,16 @@
                 <div id="consoleDeviceDecimalsField" class="console-binding-general-row" hidden>
                     <label for="consoleDeviceDecimals">Value decimals</label>
                     <select id="consoleDeviceDecimals"></select>
+                </div>
+                <div id="consoleDeviceAsLogicalField" class="console-binding-general-row" hidden>
+                    <label class="field-check console-as-logical-check" for="consoleDeviceAsLogical">
+                        <input id="consoleDeviceAsLogical" type="checkbox" onchange="onConsoleDeviceAsLogicalChange();">
+                        <span>as logical</span>
+                    </label>
+                </div>
+                <div id="consoleDeviceLogicalThresholdField" class="console-binding-general-row" hidden>
+                    <label for="consoleDeviceLogicalThreshold">Compare (≥ is TRUE)</label>
+                    <input id="consoleDeviceLogicalThreshold" type="number" step="any" value="0">
                 </div>
                 <div id="consoleDeviceViewStyleField" class="console-binding-general-row" hidden>
                     <label for="consoleDeviceViewStyle">View style</label>
