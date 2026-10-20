@@ -2784,7 +2784,10 @@
             "mdi:water-pump",
             "mdi:heat-pump",
             "mdi:engine",
-            "mdi:engine-off"
+            "mdi:engine-off",
+            "mdi:campfire",
+            "mdi:fire",
+            "mdi:fire-off"
         ];
 
         function normalizeMdiIconId(iconId) {
@@ -4816,6 +4819,7 @@
         var consoleDragWidgetIndex = null;
         var consoleDragBindingWidgetIndex = null;
         var consoleDragBindingIndex = null;
+        var consoleDragCompositeCell = null;
         var placeAssignedConsoles = [];
         var placeActiveConsoleIndex = 0;
         var placeAutomationStatusByName = {};
@@ -5199,6 +5203,49 @@
             return match ? parseFloat(match[0]) : NaN;
         }
 
+        function normalizeLogicalThreshold(value) {
+            var number = Number(value);
+            return isNaN(number) ? 0 : number;
+        }
+
+        function bindingAsLogicalEnabled(binding) {
+            return !!(binding && binding.asLogical);
+        }
+
+        function bindingLogicalStateText(binding, numericValue) {
+            if (isNaN(numericValue)) {
+                return "OFF";
+            }
+            return numericValue < normalizeLogicalThreshold(binding && binding.logicalThreshold)
+                ? "OFF"
+                : "ON";
+        }
+
+        function placeBindingNumericValue(device, binding) {
+            if (!device || !binding) {
+                return NaN;
+            }
+            var typeId = device.type || "";
+            var param = placeBindingParam(binding);
+            var rawState = placeBindingResolvedState(device, binding);
+            if (isMeasurementDeviceType(typeId) && param !== "battery") {
+                return placeMeasurementNumericValue(typeId, rawState, binding.unit);
+            }
+            return parseBindingNumericValue(rawState);
+        }
+
+        function bindingUsesAsLogical(device, binding) {
+            if (!bindingAsLogicalEnabled(binding) || !device) {
+                return false;
+            }
+            return consoleBindingParamIsNumeric(device, placeBindingParam(binding));
+        }
+
+        function consoleDialogAsLogicalChecked() {
+            var check = document.getElementById("consoleDeviceAsLogical");
+            return !!(check && check.checked);
+        }
+
         function buildConsoleGaugeElement(binding, numericValue, displayText) {
             var gauge = binding && binding.gauge ? binding.gauge : {};
             var minValue = gauge.min != null ? Number(gauge.min) : 0;
@@ -5436,6 +5483,19 @@
                     onOffSwitch.className = "console-switch" + (onOffIsOn ? " is-on" : "");
                     onOffSwitch.onclick = onOffToggle;
                     controls.appendChild(onOffSwitch);
+                }
+            } else if (bindingUsesAsLogical(device, binding)) {
+                var logicalState = bindingLogicalStateText(
+                    binding,
+                    placeBindingNumericValue(device, binding)
+                );
+                if (binding.viewStyle === "icon") {
+                    controls.appendChild(buildConsoleIconElement(binding, logicalState));
+                } else {
+                    var logicalLabel = document.createElement("span");
+                    logicalLabel.className = "console-sensor-value";
+                    logicalLabel.textContent = logicalState;
+                    controls.appendChild(logicalLabel);
                 }
             } else if (binding.viewStyle === "icon"
                 && (isBinarySensorDeviceType(typeId)
@@ -8532,6 +8592,66 @@
             bodyEl.classList.add("console-composite-cell-body--align-v-" + alignV);
         }
 
+        // FROZEN: composite cell drag-and-drop (clearCompositeCellDragOver / moveCompositeEditorCell
+        // and cellCol/cellsWrap drag handlers). Do not change without explicit human approval.
+        function clearCompositeCellDragOver() {
+            var overNodes = document.querySelectorAll(
+                ".console-composite-cell-col.is-drag-over, .console-composite-cells.is-drag-over"
+            );
+            var overIndex;
+            for (overIndex = 0; overIndex < overNodes.length; overIndex++) {
+                overNodes[overIndex].classList.remove("is-drag-over");
+            }
+        }
+
+        function moveCompositeEditorCell(fromWidgetIndex, fromRowIndex, fromCellIndex, toWidgetIndex, toRowIndex, toCellIndex) {
+            if (fromWidgetIndex !== toWidgetIndex) {
+                return;
+            }
+            syncConsoleEditorDraftFromDom();
+            var rowList = ensureCompositeRows(consoleEditorDraft.widgets[fromWidgetIndex]);
+            if (!rowList[fromRowIndex] || !rowList[fromRowIndex].cells) {
+                return;
+            }
+            if (fromCellIndex < 0 || fromCellIndex >= rowList[fromRowIndex].cells.length) {
+                return;
+            }
+            if (!rowList[toRowIndex]) {
+                return;
+            }
+            if (!rowList[toRowIndex].cells) {
+                rowList[toRowIndex].cells = [];
+            }
+            var movedCell = rowList[fromRowIndex].cells.splice(fromCellIndex, 1)[0];
+            if (!movedCell) {
+                return;
+            }
+            if (!rowList[fromRowIndex].cells.length) {
+                rowList.splice(fromRowIndex, 1);
+                if (toRowIndex > fromRowIndex) {
+                    toRowIndex -= 1;
+                }
+            }
+            if (!rowList[toRowIndex]) {
+                return;
+            }
+            if (!rowList[toRowIndex].cells) {
+                rowList[toRowIndex].cells = [];
+            }
+            var insertAt = toCellIndex;
+            if (insertAt == null || insertAt < 0 || insertAt > rowList[toRowIndex].cells.length) {
+                insertAt = rowList[toRowIndex].cells.length;
+            }
+            if (fromRowIndex === toRowIndex && fromCellIndex < insertAt) {
+                insertAt -= 1;
+            }
+            if (insertAt < 0) {
+                insertAt = 0;
+            }
+            rowList[toRowIndex].cells.splice(insertAt, 0, movedCell);
+            renderConsoleEditor();
+        }
+
         function makeDefaultCompositeRow() {
             return {
                 height: 0.1,
@@ -8707,9 +8827,22 @@
                         sumU += widthValue;
                     }
                 }
-                var unitPx = sumU > 0 ? (availableWidthPx - sumCm) / sumU : 0;
+                var cellColsEarly = rowEl.querySelectorAll(".console-composite-cell-col");
+                var cellCountEarly = Math.min(cellColsEarly.length, cells.length);
+                var gapPx = isEdit ? 10 : 8;
+                if (cellsWrap && !isEdit) {
+                    var gapStyle = window.getComputedStyle(cellsWrap);
+                    var parsedGap = parseFloat(gapStyle.columnGap || gapStyle.gap || "");
+                    if (parsedGap > 0) {
+                        gapPx = parsedGap;
+                    }
+                }
+                var gapsTotal = cellCountEarly > 1 ? gapPx * (cellCountEarly - 1) : 0;
+                var edgeSafetyPx = 2;
+                var fitBudget = Math.max(32, availableWidthPx - gapsTotal - edgeSafetyPx);
+                var unitPx = sumU > 0 ? (fitBudget - sumCm) / sumU : 0;
                 if (!(unitPx > 0)) {
-                    unitPx = Math.max(8, availableWidthPx * 0.05);
+                    unitPx = Math.max(8, fitBudget * 0.05);
                 }
                 var heightValue = Number(row.height);
                 if (!(heightValue > 0)) {
@@ -8737,11 +8870,8 @@
                 } else {
                     rowEl.style.height = String(specifiedHeightPx) + "px";
                 }
-                var cellCols = rowEl.querySelectorAll(".console-composite-cell-col");
-                var gapPx = isEdit ? 10 : 4;
-                var cellCount = Math.min(cellCols.length, cells.length);
-                var gapsTotal = cellCount > 1 ? gapPx * (cellCount - 1) : 0;
-                var fitBudget = Math.max(32, availableWidthPx - gapsTotal);
+                var cellCols = cellColsEarly;
+                var cellCount = cellCountEarly;
                 var finalWidths = [];
                 var minWidths = [];
                 var totalMin = 0;
@@ -8773,8 +8903,8 @@
                     totalProp += finalWidths[cellIndex];
                 }
                 var useScroll = false;
-                if (isEdit && cellCount > 0) {
-                    if (totalMin > fitBudget + 0.5) {
+                if (cellCount > 0) {
+                    if (isEdit && totalMin > fitBudget + 0.5) {
                         useScroll = true;
                         finalWidths = minWidths.slice();
                     } else if (totalProp > fitBudget + 0.5) {
@@ -8782,7 +8912,7 @@
                         var scaledOk = true;
                         for (cellIndex = 0; cellIndex < finalWidths.length; cellIndex++) {
                             var scaled = finalWidths[cellIndex] * scale;
-                            if (scaled + 0.5 < minWidths[cellIndex]) {
+                            if (isEdit && scaled + 0.5 < minWidths[cellIndex]) {
                                 scaledOk = false;
                                 break;
                             }
@@ -8817,13 +8947,17 @@
             if (!root) {
                 return;
             }
+            // Option B: proportional arc digits + labels with min/max clamp.
+            // Labels always stay smaller than digits. Keep identical in index.html and user.html.
             var GAUGE_ASPECT = 104 / 58;
             var TITLE_FONT_MAX = 15;
             var TITLE_FONT_MIN = 9;
-            var VALUE_FONT_BASE = 10.88;
-            var VALUE_FONT_MIN = 8;
-            var VALUE_FONT_MAX = 18;
+            var VALUE_FONT_BASE = 12;
+            var VALUE_FONT_MIN = 10;
+            var VALUE_FONT_MAX = 16;
+            var VALUE_FONT_REF = 104;
             var TITLE_GAP = 4;
+            var TITLE_TO_VALUE_RATIO = 0.9;
 
             function measureBodyFit(bodyEl) {
                 var cellW = bodyEl.clientWidth || bodyEl.offsetWidth || 0;
@@ -8834,7 +8968,13 @@
                 };
             }
 
-            function scaleTitleToBand(titleEl, maxWidthPx, maxHeightPx) {
+            function titleIsVisible(titleEl) {
+                return !!(titleEl
+                    && titleEl.offsetParent !== null
+                    && window.getComputedStyle(titleEl).display !== "none");
+            }
+
+            function fitTitleFont(titleEl, maxWidthPx, maxHeightPx, targetFontPx) {
                 if (!titleEl || !(maxWidthPx > 0) || !(maxHeightPx > 0)) {
                     return 0;
                 }
@@ -8845,7 +8985,7 @@
                 titleEl.style.overflowWrap = "anywhere";
                 titleEl.style.lineHeight = "1.15";
                 titleEl.style.minHeight = "";
-                var fontPx = TITLE_FONT_MAX;
+                var fontPx = Math.max(TITLE_FONT_MIN, Math.min(TITLE_FONT_MAX, targetFontPx));
                 titleEl.style.fontSize = String(fontPx) + "px";
                 while (fontPx > TITLE_FONT_MIN
                     && (titleEl.scrollHeight > maxHeightPx + 0.5
@@ -8873,46 +9013,88 @@
                     }
                     var icons = bodyEl.querySelectorAll(".console-binary-icon");
                     var iconIndex;
-                    var iconFit = Math.max(16, Math.min(fit.fitW, fit.fitH));
+                    // Size under cell bounds; MDI glyphs can extend past the em box (e.g. mdi:engine).
+                    var iconFit = Math.max(16, Math.min(fit.fitW, fit.fitH) * 0.7);
                     var iconScale = Math.max(0.5, Math.min(4, iconFit / 32));
                     for (iconIndex = 0; iconIndex < icons.length; iconIndex++) {
-                        icons[iconIndex].style.setProperty("--console-icon-scale", String(iconScale));
-                        icons[iconIndex].style.minWidth = "0";
-                        icons[iconIndex].style.minHeight = "0";
+                        (function (iconWrap, maxW, maxH, scale) {
+                            iconWrap.style.setProperty("--console-icon-scale", String(scale));
+                            iconWrap.style.minWidth = "0";
+                            iconWrap.style.minHeight = "0";
+                            iconWrap.style.maxWidth = "100%";
+                            iconWrap.style.maxHeight = "100%";
+                            var glyph = iconWrap.querySelector(".mdi");
+                            if (glyph) {
+                                glyph.style.transformOrigin = "center center";
+                                glyph.style.transform = "";
+                            }
+                            window.requestAnimationFrame(function () {
+                                var target = iconWrap.querySelector(".mdi") || iconWrap;
+                                var glyphW = target.scrollWidth || target.offsetWidth || 0;
+                                var glyphH = target.scrollHeight || target.offsetHeight || 0;
+                                if (!(glyphW > 0 && glyphH > 0)) {
+                                    return;
+                                }
+                                var fitScale = Math.min(1, (maxW * 0.85) / glyphW, (maxH * 0.85) / glyphH);
+                                target.style.transformOrigin = "center center";
+                                target.style.transform = fitScale < 0.999
+                                    ? ("scale(" + String(fitScale) + ")")
+                                    : "";
+                            });
+                        })(icons[iconIndex], fit.fitW, fit.fitH, iconScale);
                     }
                 }
-                if (!gaugeBodies.length) {
-                    continue;
-                }
-                var commonW = gaugeBodies[0].fitW;
-                var commonH = gaugeBodies[0].fitH;
                 var gIndex;
-                for (gIndex = 1; gIndex < gaugeBodies.length; gIndex++) {
-                    commonW = Math.min(commonW, gaugeBodies[gIndex].fitW);
-                    commonH = Math.min(commonH, gaugeBodies[gIndex].fitH);
-                }
-                // Fixed title band from designed cell size (up to ~2 lines), same for every gauge cell.
-                var titleBand = Math.max(
-                    TITLE_FONT_MIN * 1.15,
-                    Math.min(commonH * 0.34, TITLE_FONT_MAX * 1.15 * 2 + 2)
-                );
                 for (gIndex = 0; gIndex < gaugeBodies.length; gIndex++) {
-                    var titleEl = gaugeBodies[gIndex].bodyEl.querySelector(".console-device-row-title");
-                    if (!titleEl || titleEl.offsetParent === null
-                        || window.getComputedStyle(titleEl).display === "none") {
-                        continue;
+                    var gaugeBody = gaugeBodies[gIndex];
+                    var titleEl = gaugeBody.bodyEl.querySelector(".console-device-row-title");
+                    var hasTitle = titleIsVisible(titleEl);
+                    var provisionalTitleBand = hasTitle
+                        ? Math.max(
+                            TITLE_FONT_MIN * 1.15,
+                            Math.min(gaugeBody.fitH * 0.22, TITLE_FONT_MAX * 1.15 * 2 + 2)
+                        )
+                        : 0;
+                    var availH = Math.max(28, gaugeBody.fitH - provisionalTitleBand - TITLE_GAP);
+                    var gaugeSize = Math.max(36, Math.min(gaugeBody.fitW, availH * GAUGE_ASPECT));
+                    var valueFont = Math.max(
+                        VALUE_FONT_MIN,
+                        Math.min(VALUE_FONT_MAX, VALUE_FONT_BASE * (gaugeSize / VALUE_FONT_REF))
+                    );
+                    var titleBand = 0;
+                    if (hasTitle) {
+                        var titleFont = Math.min(
+                            TITLE_FONT_MAX,
+                            Math.max(TITLE_FONT_MIN, valueFont * TITLE_TO_VALUE_RATIO)
+                        );
+                        if (titleFont >= valueFont - 0.5) {
+                            titleFont = Math.max(TITLE_FONT_MIN, valueFont - 2);
+                        }
+                        titleBand = fitTitleFont(
+                            titleEl,
+                            gaugeBody.fitW,
+                            Math.max(provisionalTitleBand, titleFont * 1.15 * 2 + 2),
+                            titleFont
+                        );
+                        titleEl.style.minHeight = "";
+                        // Re-fit gauge with the real title height so digits stay larger than labels.
+                        availH = Math.max(28, gaugeBody.fitH - titleBand - TITLE_GAP);
+                        gaugeSize = Math.max(36, Math.min(gaugeBody.fitW, availH * GAUGE_ASPECT));
+                        valueFont = Math.max(
+                            VALUE_FONT_MIN,
+                            Math.min(VALUE_FONT_MAX, VALUE_FONT_BASE * (gaugeSize / VALUE_FONT_REF))
+                        );
+                        if (parseFloat(titleEl.style.fontSize) >= valueFont - 0.5) {
+                            titleFont = Math.max(TITLE_FONT_MIN, valueFont - 2);
+                            titleBand = fitTitleFont(
+                                titleEl,
+                                gaugeBody.fitW,
+                                Math.max(titleBand, titleFont * 1.15 * 2 + 2),
+                                titleFont
+                            );
+                        }
                     }
-                    scaleTitleToBand(titleEl, commonW, titleBand);
-                    titleEl.style.minHeight = String(titleBand) + "px";
-                }
-                var availH = Math.max(28, commonH - titleBand - TITLE_GAP);
-                var gaugeSize = Math.max(36, Math.min(commonW, availH * GAUGE_ASPECT));
-                var valueFont = Math.max(
-                    VALUE_FONT_MIN,
-                    Math.min(VALUE_FONT_MAX, VALUE_FONT_BASE * (gaugeSize / 104))
-                );
-                for (gIndex = 0; gIndex < gaugeBodies.length; gIndex++) {
-                    var gaugeSvgs = gaugeBodies[gIndex].bodyEl.querySelectorAll(".console-gauge-arc-svg");
+                    var gaugeSvgs = gaugeBody.bodyEl.querySelectorAll(".console-gauge-arc-svg");
                     var svgIndex;
                     for (svgIndex = 0; svgIndex < gaugeSvgs.length; svgIndex++) {
                         gaugeSvgs[svgIndex].style.width = String(gaugeSize) + "px";
@@ -9112,6 +9294,32 @@
                         contourLabel.appendChild(document.createTextNode("Contour"));
                         var chromeTop = document.createElement("div");
                         chromeTop.className = "console-composite-chrome-top";
+                        var cellDragHandle = document.createElement("span");
+                        cellDragHandle.className = "console-composite-cell-drag-handle";
+                        cellDragHandle.textContent = "⋮⋮";
+                        cellDragHandle.title = "Drag to move cell";
+                        cellDragHandle.draggable = true;
+                        cellDragHandle.ondragstart = (function (wIndex, rIndex, cIndex) {
+                            return function (event) {
+                                consoleDragCompositeCell = {
+                                    widgetIndex: wIndex,
+                                    rowIndex: rIndex,
+                                    cellIndex: cIndex
+                                };
+                                event.dataTransfer.effectAllowed = "move";
+                                try {
+                                    event.dataTransfer.setData("text/plain", "composite-cell");
+                                } catch (setDataError) {
+                                    /* ignore */
+                                }
+                                event.stopPropagation();
+                            };
+                        })(widgetIndex, rowIndex, cellIndex);
+                        cellDragHandle.ondragend = function () {
+                            consoleDragCompositeCell = null;
+                            clearCompositeCellDragOver();
+                        };
+                        chromeTop.appendChild(cellDragHandle);
                         var deleteCellBtn = document.createElement("button");
                         deleteCellBtn.type = "button";
                         deleteCellBtn.className = "console-widget-delete-btn console-composite-delete-cell";
@@ -9222,6 +9430,54 @@
                         alignWrap.appendChild(alignVLine);
                         chrome.appendChild(alignWrap);
                         cellCol.appendChild(chrome);
+                        cellCol.setAttribute("data-widget-index", String(widgetIndex));
+                        cellCol.setAttribute("data-row-index", String(rowIndex));
+                        cellCol.setAttribute("data-cell-index", String(cellIndex));
+                        cellCol.ondragover = (function (colEl) {
+                            return function (event) {
+                                if (!consoleDragCompositeCell) {
+                                    return;
+                                }
+                                event.preventDefault();
+                                event.stopPropagation();
+                                event.dataTransfer.dropEffect = "move";
+                                clearCompositeCellDragOver();
+                                colEl.classList.add("is-drag-over");
+                            };
+                        })(cellCol);
+                        cellCol.ondragleave = (function (colEl) {
+                            return function (event) {
+                                if (event.relatedTarget && colEl.contains(event.relatedTarget)) {
+                                    return;
+                                }
+                                colEl.classList.remove("is-drag-over");
+                            };
+                        })(cellCol);
+                        cellCol.ondrop = (function (wIndex, rIndex, cIndex) {
+                            return function (event) {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                clearCompositeCellDragOver();
+                                if (!consoleDragCompositeCell) {
+                                    return;
+                                }
+                                var source = consoleDragCompositeCell;
+                                consoleDragCompositeCell = null;
+                                if (source.widgetIndex === wIndex
+                                    && source.rowIndex === rIndex
+                                    && source.cellIndex === cIndex) {
+                                    return;
+                                }
+                                moveCompositeEditorCell(
+                                    source.widgetIndex,
+                                    source.rowIndex,
+                                    source.cellIndex,
+                                    wIndex,
+                                    rIndex,
+                                    cIndex
+                                );
+                            };
+                        })(widgetIndex, rowIndex, cellIndex);
                     }
                     var cellEl = document.createElement("div");
                     cellEl.className = "console-composite-cell"
@@ -9382,6 +9638,57 @@
                     cellsWrap.appendChild(cellCol);
                 }
                 if (isEdit) {
+                    cellsWrap.setAttribute("data-widget-index", String(widgetIndex));
+                    cellsWrap.setAttribute("data-row-index", String(rowIndex));
+                    cellsWrap.ondragover = (function (wrapEl) {
+                        return function (event) {
+                            if (!consoleDragCompositeCell) {
+                                return;
+                            }
+                            var overCell = event.target
+                                && event.target.closest
+                                && event.target.closest(".console-composite-cell-col");
+                            if (overCell && wrapEl.contains(overCell)) {
+                                return;
+                            }
+                            event.preventDefault();
+                            event.dataTransfer.dropEffect = "move";
+                            clearCompositeCellDragOver();
+                            wrapEl.classList.add("is-drag-over");
+                        };
+                    })(cellsWrap);
+                    cellsWrap.ondragleave = (function (wrapEl) {
+                        return function (event) {
+                            if (event.target !== wrapEl) {
+                                return;
+                            }
+                            wrapEl.classList.remove("is-drag-over");
+                        };
+                    })(cellsWrap);
+                    cellsWrap.ondrop = (function (wIndex, rIndex) {
+                        return function (event) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            clearCompositeCellDragOver();
+                            if (!consoleDragCompositeCell) {
+                                return;
+                            }
+                            var source = consoleDragCompositeCell;
+                            consoleDragCompositeCell = null;
+                            var targetCells = (consoleEditorDraft.widgets[wIndex]
+                                && consoleEditorDraft.widgets[wIndex].compositeRows
+                                && consoleEditorDraft.widgets[wIndex].compositeRows[rIndex]
+                                && consoleEditorDraft.widgets[wIndex].compositeRows[rIndex].cells) || [];
+                            moveCompositeEditorCell(
+                                source.widgetIndex,
+                                source.rowIndex,
+                                source.cellIndex,
+                                wIndex,
+                                rIndex,
+                                targetCells.length
+                            );
+                        };
+                    })(widgetIndex, rowIndex);
                     var addCellBtn = document.createElement("button");
                     addCellBtn.type = "button";
                     addCellBtn.className = "btn btn-secondary btn-inline console-composite-add-cell";
@@ -9442,7 +9749,28 @@
             var previewParam = placeBindingParam(binding);
             var controls = document.createElement("div");
             controls.className = "console-device-row-controls";
-            if (binding.viewStyle === "icon"
+            if (bindingUsesAsLogical(previewDevice, binding)) {
+                var previewLogical = bindingLogicalStateText(
+                    binding,
+                    placeBindingNumericValue(previewDevice, binding)
+                );
+                if (binding.viewStyle === "icon") {
+                    controls.appendChild(buildConsoleIconElement(
+                        binding,
+                        previewLogical,
+                        {
+                            interactive: true,
+                            disabled: true,
+                            ariaLabel: "Icon preview"
+                        }
+                    ));
+                } else {
+                    var logicalPreviewLabel = document.createElement("span");
+                    logicalPreviewLabel.className = "console-sensor-value";
+                    logicalPreviewLabel.textContent = previewLogical;
+                    controls.appendChild(logicalPreviewLabel);
+                }
+            } else if (binding.viewStyle === "icon"
                 && (isBinarySensorDeviceType(previewType)
                     || (previewType === "userData"
                         && userDataFieldTypeForParam(previewDevice, previewParam) === "bool")
@@ -9860,6 +10188,12 @@
                 )) {
                     showIconPreview = true;
                     iconPreviewState = placeBindingResolvedState(previewDevice, binding) || "OFF";
+                } else if (previewDevice && bindingUsesAsLogical(previewDevice, binding)) {
+                    showIconPreview = true;
+                    iconPreviewState = bindingLogicalStateText(
+                        binding,
+                        placeBindingNumericValue(previewDevice, binding)
+                    );
                 } else if (binding.icon) {
                     showIconPreview = true;
                 }
@@ -10157,11 +10491,41 @@
             });
         }
 
+        function consoleExportFileName(consoleName) {
+            var cyrillicMap = {
+                "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
+                "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
+                "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "ts",
+                "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu",
+                "я": "ya",
+                "А": "A", "Б": "B", "В": "V", "Г": "G", "Д": "D", "Е": "E", "Ё": "E", "Ж": "Zh",
+                "З": "Z", "И": "I", "Й": "Y", "К": "K", "Л": "L", "М": "M", "Н": "N", "О": "O",
+                "П": "P", "Р": "R", "С": "S", "Т": "T", "У": "U", "Ф": "F", "Х": "H", "Ц": "Ts",
+                "Ч": "Ch", "Ш": "Sh", "Щ": "Sch", "Ъ": "", "Ы": "Y", "Ь": "", "Э": "E", "Ю": "Yu",
+                "Я": "Ya"
+            };
+            var source = String(consoleName || "").trim() || "console";
+            var out = "";
+            var charIndex;
+            for (charIndex = 0; charIndex < source.length; charIndex++) {
+                var ch = source.charAt(charIndex);
+                if (Object.prototype.hasOwnProperty.call(cyrillicMap, ch)) {
+                    out += cyrillicMap[ch];
+                } else if (/[A-Za-z0-9._-]/.test(ch)) {
+                    out += ch;
+                } else {
+                    out += "_";
+                }
+            }
+            out = out.replace(/_+/g, "_").replace(/^[_.]+|[_.]+$/g, "");
+            return (out || "console") + ".json";
+        }
+
         function exportConsoleJson() {
             readConsoleEditorFields();
             var blob = new Blob([JSON.stringify(consoleEditorDraft, null, 2)], { type: "application/json" });
             var link = document.createElement("a");
-            var fileName = (consoleEditorDraft.name || "console").replace(/[^\w.-]+/g, "_") + ".json";
+            var fileName = consoleExportFileName(consoleEditorDraft.name);
             link.href = URL.createObjectURL(blob);
             link.download = fileName;
             link.click();
@@ -10356,6 +10720,9 @@
         }
 
         function consoleBindingAllowsGauge(device, paramValue) {
+            if (consoleDialogAsLogicalChecked()) {
+                return false;
+            }
             return consoleBindingParamIsNumeric(device, paramValue);
         }
 
@@ -10371,10 +10738,160 @@
                 return true;
             }
             // userData bool fields use the same Icon path as binary sensors.
-            if (typeId === "userData") {
-                return userDataFieldTypeForParam(device, paramValue) === "bool";
+            // userData int/float must not return early — asLogical can unlock Icon below.
+            if (typeId === "userData"
+                && userDataFieldTypeForParam(device, paramValue) === "bool") {
+                return true;
+            }
+            if (consoleBindingParamIsNumeric(device, paramValue) && consoleDialogAsLogicalChecked()) {
+                return true;
             }
             return false;
+        }
+
+        function onConsoleDeviceAsLogicalChange() {
+            var viewStyleSelect = document.getElementById("consoleDeviceViewStyle");
+            if (consoleDialogAsLogicalChecked()) {
+                if (viewStyleSelect && viewStyleSelect.value === "gauge") {
+                    consoleDevicePreferredViewStyle = "default";
+                    viewStyleSelect.value = "default";
+                }
+            } else if (viewStyleSelect && viewStyleSelect.value === "icon") {
+                consoleDevicePreferredViewStyle = "default";
+                viewStyleSelect.value = "default";
+            }
+            refreshConsoleDeviceGaugeFields();
+        }
+
+        var CONSOLE_GAUGE_COLOR_PRESETS = [
+            { name: "White", color: "#ffffff" },
+            { name: "Gray", color: "#808080" },
+            { name: "Light gray", color: "#c0c0c0" },
+            { name: "Red", color: "#e53935" },
+            { name: "Green", color: "#43a047" },
+            { name: "Light blue", color: "#4fc3f7" },
+            { name: "Yellow", color: "#fdd835" },
+            { name: "Orange", color: "#fb8c00" }
+        ];
+        var consoleColorPickerCloseHandler = null;
+
+        function sortConsoleDeviceGaugeRangesDraft() {
+            consoleDeviceGaugeRangesDraft.sort(function (left, right) {
+                return left.top - right.top;
+            });
+        }
+
+        function closeConsoleColorPicker() {
+            var existing = document.getElementById("consoleColorPickerPopover");
+            if (existing && existing.parentNode) {
+                existing.parentNode.removeChild(existing);
+            }
+            if (consoleColorPickerCloseHandler) {
+                document.removeEventListener("mousedown", consoleColorPickerCloseHandler, true);
+                consoleColorPickerCloseHandler = null;
+            }
+        }
+
+        function openConsoleColorPicker(anchorEl, currentColor, onPick) {
+            closeConsoleColorPicker();
+            var hex = String(currentColor || "#3b82f6");
+            var popover = document.createElement("div");
+            popover.id = "consoleColorPickerPopover";
+            popover.className = "console-color-picker-popover";
+            popover.setAttribute("role", "dialog");
+            popover.setAttribute("aria-label", "Color picker");
+            var presetsRow = document.createElement("div");
+            presetsRow.className = "console-gauge-color-presets";
+            var presetIndex;
+            for (presetIndex = 0; presetIndex < CONSOLE_GAUGE_COLOR_PRESETS.length; presetIndex++) {
+                (function (preset) {
+                    var button = document.createElement("button");
+                    button.type = "button";
+                    button.className = "console-gauge-color-preset";
+                    button.title = preset.name;
+                    button.setAttribute("aria-label", preset.name);
+                    button.style.background = preset.color;
+                    button.onclick = function (event) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (typeof onPick === "function") {
+                            onPick(preset.color);
+                        }
+                        closeConsoleColorPicker();
+                    };
+                    presetsRow.appendChild(button);
+                })(CONSOLE_GAUGE_COLOR_PRESETS[presetIndex]);
+            }
+            var customRow = document.createElement("div");
+            customRow.className = "console-color-picker-custom";
+            var customLabel = document.createElement("span");
+            customLabel.textContent = "Custom";
+            var customInput = document.createElement("input");
+            customInput.type = "color";
+            customInput.value = hex;
+            customInput.title = "Custom color";
+            customInput.setAttribute("aria-label", "Custom color");
+            customInput.oninput = function () {
+                if (typeof onPick === "function") {
+                    onPick(customInput.value || "#3b82f6");
+                }
+            };
+            customRow.appendChild(customLabel);
+            customRow.appendChild(customInput);
+            popover.appendChild(presetsRow);
+            popover.appendChild(customRow);
+            document.body.appendChild(popover);
+            var anchorRect = anchorEl.getBoundingClientRect();
+            var popWidth = popover.offsetWidth || 220;
+            var left = anchorRect.left;
+            if (left + popWidth > window.innerWidth - 8) {
+                left = Math.max(8, window.innerWidth - popWidth - 8);
+            }
+            var top = anchorRect.bottom + 6;
+            if (top + popover.offsetHeight > window.innerHeight - 8) {
+                top = Math.max(8, anchorRect.top - popover.offsetHeight - 6);
+            }
+            popover.style.left = String(left) + "px";
+            popover.style.top = String(top) + "px";
+            consoleColorPickerCloseHandler = function (event) {
+                if (!popover.contains(event.target) && event.target !== anchorEl) {
+                    closeConsoleColorPicker();
+                }
+            };
+            window.setTimeout(function () {
+                document.addEventListener("mousedown", consoleColorPickerCloseHandler, true);
+            }, 0);
+        }
+
+        function buildConsoleColorPickerControl(initialColor, onPick) {
+            var wrap = document.createElement("div");
+            wrap.className = "console-color-picker-control";
+            var swatchBtn = document.createElement("button");
+            swatchBtn.type = "button";
+            swatchBtn.className = "console-color-picker-swatch";
+            swatchBtn.title = "Color";
+            swatchBtn.setAttribute("aria-label", "Color");
+            function paint(hex) {
+                swatchBtn.style.background = hex || "#3b82f6";
+                swatchBtn.setAttribute("data-color", hex || "#3b82f6");
+            }
+            paint(initialColor || "#3b82f6");
+            swatchBtn.onclick = function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                openConsoleColorPicker(swatchBtn, swatchBtn.getAttribute("data-color"), function (hex) {
+                    paint(hex);
+                    if (typeof onPick === "function") {
+                        onPick(hex);
+                    }
+                });
+            };
+            wrap.appendChild(swatchBtn);
+            wrap.getColor = function () {
+                return swatchBtn.getAttribute("data-color") || "#3b82f6";
+            };
+            wrap.setColor = paint;
+            return wrap;
         }
 
         function renderConsoleDeviceGaugeRangesList() {
@@ -10395,24 +10912,44 @@
                 (function (rangeIndex) {
                     var row = document.createElement("div");
                     row.className = "console-gauge-range-row";
-                    var swatch = document.createElement("span");
-                    swatch.className = "console-gauge-range-swatch";
-                    swatch.style.background = consoleDeviceGaugeRangesDraft[rangeIndex].color || "#888";
-                    var label = document.createElement("span");
-                    label.textContent = "to "
-                        + String(consoleDeviceGaugeRangesDraft[rangeIndex].top)
-                        + "  "
-                        + (consoleDeviceGaugeRangesDraft[rangeIndex].color || "");
+                    var toLabel = document.createElement("span");
+                    toLabel.className = "console-gauge-range-to-label";
+                    toLabel.textContent = "to";
+                    var topInput = document.createElement("input");
+                    topInput.type = "number";
+                    topInput.step = "any";
+                    topInput.className = "console-gauge-range-top";
+                    topInput.value = String(consoleDeviceGaugeRangesDraft[rangeIndex].top);
+                    topInput.setAttribute("aria-label", "Range top value");
+                    topInput.onchange = function () {
+                        var nextTop = parseFloat(topInput.value);
+                        if (isNaN(nextTop)) {
+                            topInput.value = String(consoleDeviceGaugeRangesDraft[rangeIndex].top);
+                            return;
+                        }
+                        consoleDeviceGaugeRangesDraft[rangeIndex].top = nextTop;
+                        sortConsoleDeviceGaugeRangesDraft();
+                        renderConsoleDeviceGaugeRangesList();
+                    };
+                    var colorControl = buildConsoleColorPickerControl(
+                        consoleDeviceGaugeRangesDraft[rangeIndex].color || "#3b82f6",
+                        function (hex) {
+                            consoleDeviceGaugeRangesDraft[rangeIndex].color = hex || "#3b82f6";
+                        }
+                    );
                     var removeBtn = document.createElement("button");
                     removeBtn.type = "button";
-                    removeBtn.className = "btn btn-secondary btn-inline";
-                    removeBtn.textContent = "Remove";
+                    removeBtn.className = "console-widget-delete-btn console-gauge-range-delete";
+                    removeBtn.title = "Remove range";
+                    removeBtn.setAttribute("aria-label", "Remove range");
+                    removeBtn.textContent = "🗑";
                     removeBtn.onclick = function () {
                         consoleDeviceGaugeRangesDraft.splice(rangeIndex, 1);
                         renderConsoleDeviceGaugeRangesList();
                     };
-                    row.appendChild(swatch);
-                    row.appendChild(label);
+                    row.appendChild(toLabel);
+                    row.appendChild(topInput);
+                    row.appendChild(colorControl);
                     row.appendChild(removeBtn);
                     host.appendChild(row);
                 })(index);
@@ -10421,22 +10958,42 @@
 
         function addConsoleDeviceGaugeRange() {
             var topInput = document.getElementById("consoleDeviceGaugeRangeTop");
-            var colorInput = document.getElementById("consoleDeviceGaugeRangeColor");
+            var colorHost = document.getElementById("consoleDeviceGaugeRangeColorControl");
             var topValue = topInput ? parseFloat(topInput.value) : NaN;
             if (isNaN(topValue)) {
                 return;
             }
+            var colorValue = "#3b82f6";
+            if (colorHost && typeof colorHost.getColor === "function") {
+                colorValue = colorHost.getColor();
+            }
             consoleDeviceGaugeRangesDraft.push({
                 top: topValue,
-                color: colorInput && colorInput.value ? colorInput.value : "#3b82f6"
+                color: colorValue
             });
-            consoleDeviceGaugeRangesDraft.sort(function (left, right) {
-                return left.top - right.top;
-            });
+            sortConsoleDeviceGaugeRangesDraft();
             if (topInput) {
                 topInput.value = "";
             }
             renderConsoleDeviceGaugeRangesList();
+        }
+
+        function ensureConsoleDeviceGaugeAddColorControl() {
+            var host = document.getElementById("consoleDeviceGaugeRangeColorControl");
+            if (!host || host.getAttribute("data-ready") === "1") {
+                return;
+            }
+            host.innerHTML = "";
+            var control = buildConsoleColorPickerControl("#3b82f6", null);
+            control.id = "consoleDeviceGaugeRangeColorControlInner";
+            host.appendChild(control);
+            host.getColor = function () {
+                return control.getColor();
+            };
+            host.setColor = function (hex) {
+                control.setColor(hex);
+            };
+            host.setAttribute("data-ready", "1");
         }
 
         function refreshConsoleDeviceCustomAndGaugeFields() {
@@ -10539,6 +11096,18 @@
             var device = consoleDialogSelectedDevice();
             var paramSelect = document.getElementById("consoleDeviceParam");
             var paramValue = paramSelect ? paramSelect.value : "";
+            var asLogicalField = document.getElementById("consoleDeviceAsLogicalField");
+            var thresholdField = document.getElementById("consoleDeviceLogicalThresholdField");
+            var isNumericParam = !isAutomation && !!device
+                && consoleBindingParamIsNumeric(device, paramValue);
+            setHidden(asLogicalField, !isNumericParam);
+            if (!isNumericParam) {
+                var asLogicalCheckClear = document.getElementById("consoleDeviceAsLogical");
+                if (asLogicalCheckClear) {
+                    asLogicalCheckClear.checked = false;
+                }
+            }
+            setHidden(thresholdField, !(isNumericParam && consoleDialogAsLogicalChecked()));
             var allowsIconStyle = isAutomation || consoleBindingAllowsIcon(device, paramValue);
             var allowsGauge = !isAutomation
                 && !allowsIconStyle
@@ -10601,6 +11170,8 @@
                 setHidden(document.getElementById("consoleDeviceViewStyleField"), true);
                 setHidden(document.getElementById("consoleDeviceGaugeGroup"), true);
                 setHidden(document.getElementById("consoleDeviceIconGroup"), true);
+                setHidden(document.getElementById("consoleDeviceAsLogicalField"), true);
+                setHidden(document.getElementById("consoleDeviceLogicalThresholdField"), true);
                 updateConsoleDeviceUnitField();
                 return;
             }
@@ -10729,6 +11300,14 @@
                 }
                 if (gaugeMax) {
                     gaugeMax.value = binding.gauge && binding.gauge.max != null ? String(binding.gauge.max) : "100";
+                }
+                var asLogicalCheck = document.getElementById("consoleDeviceAsLogical");
+                if (asLogicalCheck) {
+                    asLogicalCheck.checked = !!binding.asLogical;
+                }
+                var logicalThresholdInput = document.getElementById("consoleDeviceLogicalThreshold");
+                if (logicalThresholdInput) {
+                    logicalThresholdInput.value = String(normalizeLogicalThreshold(binding.logicalThreshold));
                 }
                 renderConsoleDeviceGaugeRangesList();
                 // Prefer binding param/channel over stale select leftovers from the previous open.
@@ -10961,6 +11540,13 @@
                 }
             }
             var device = consoleDialogSelectedDevice();
+            if (device && consoleBindingParamIsNumeric(device, body.param) && consoleDialogAsLogicalChecked()) {
+                body.asLogical = true;
+                var logicalThresholdInput = document.getElementById("consoleDeviceLogicalThreshold");
+                body.logicalThreshold = normalizeLogicalThreshold(
+                    logicalThresholdInput ? logicalThresholdInput.value : 0
+                );
+            }
             var allowsIconStyle = consoleBindingAllowsIcon(device, body.param);
             if (allowsIconStyle
                 && viewStyleSelect
@@ -12416,6 +13002,16 @@
                     <label for="consoleDeviceDecimals">Value decimals</label>
                     <select id="consoleDeviceDecimals"></select>
                 </div>
+                <div id="consoleDeviceAsLogicalField" class="console-binding-general-row" hidden>
+                    <label class="field-check console-as-logical-check" for="consoleDeviceAsLogical">
+                        <input id="consoleDeviceAsLogical" type="checkbox" onchange="onConsoleDeviceAsLogicalChange();">
+                        <span>as logical</span>
+                    </label>
+                </div>
+                <div id="consoleDeviceLogicalThresholdField" class="console-binding-general-row" hidden>
+                    <label for="consoleDeviceLogicalThreshold">Compare (≥ is TRUE)</label>
+                    <input id="consoleDeviceLogicalThreshold" type="number" step="any" value="0">
+                </div>
                 <div id="consoleDeviceViewStyleField" class="console-binding-general-row" hidden>
                     <label for="consoleDeviceViewStyle">View style</label>
                     <select id="consoleDeviceViewStyle" onchange="refreshConsoleDeviceGaugeFields();">
@@ -12454,7 +13050,7 @@
                 <div class="console-gauge-range-add">
                     <label for="consoleDeviceGaugeRangeTop">To value</label>
                     <input id="consoleDeviceGaugeRangeTop" type="number" step="any">
-                    <input id="consoleDeviceGaugeRangeColor" type="color" value="#3b82f6" title="Color" aria-label="Color">
+                    <div id="consoleDeviceGaugeRangeColorControl" class="console-color-picker-control-host" aria-label="Color"></div>
                     <button type="button" class="btn btn-secondary btn-inline" onclick="addConsoleDeviceGaugeRange()">Add</button>
                 </div>
             </div>

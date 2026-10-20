@@ -708,6 +708,15 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         if (!extractJsonBool(object.c_str(), "showTitle", showTitleValue)) {
             showTitleValue = true;
         }
+        bool asLogicalValue = false;
+        double logicalThresholdValue = 0.0;
+        if (!extractJsonBool(object.c_str(), "asLogical", asLogicalValue)) {
+            asLogicalValue = false;
+        }
+        if (!extractJsonDouble(object.c_str(), "logicalThreshold", logicalThresholdValue)
+            || logicalThresholdValue != logicalThresholdValue) {
+            logicalThresholdValue = 0.0;
+        }
         if (channel < 1) {
             channel = 1;
         }
@@ -781,6 +790,8 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         }
         binding->showTitle = showTitleValue;
         binding->titlePosition = parseTitlePositionId(titlePositionText.c_str());
+        binding->asLogical = !isAutomation && asLogicalValue;
+        binding->logicalThreshold = isAutomation ? 0.0f : (float)logicalThresholdValue;
         binding->iconScale = (float)iconScaleValue;
         if (alignHText.length() > 0) {
             binding->alignH = parseIconAlignId(alignHText.c_str());
@@ -1492,6 +1503,11 @@ void ConsoleStore::appendOneBindingJson(String &json, const ConsoleBinding *bind
         if (binding->attrId >= 0) {
             json += ",\"attrId\":";
             json += String((long)binding->attrId);
+        }
+        if (binding->asLogical) {
+            json += ",\"asLogical\":true";
+            json += ",\"logicalThreshold\":";
+            json += String(binding->logicalThreshold, 4);
         }
         if (binding->viewStyle == CONSOLE_VIEW_STYLE_GAUGE) {
             json += ",\"viewStyle\":\"gauge\"";

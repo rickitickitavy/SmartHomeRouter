@@ -30,6 +30,8 @@ struct ConsoleBinding {
     uint8_t alignV;
     bool showTitle;
     uint8_t titlePosition;
+    bool asLogical;
+    float logicalThreshold;
     uint8_t gaugeType;
     float gaugeMin;
     float gaugeMax;
