@@ -1,4 +1,6 @@
 #include "AutomationStore.h"
+#include "DeviceTopicMap.h"
+#include "DeviceCustomCommand.h"
 #include "AutomationParam.h"
 #include "JsonField.h"
 #include "Logger.h"
@@ -35,7 +37,7 @@ const char *automationWriteResultText(AutomationWriteResult result) {
 }  // namespace
 
 AutomationStore::AutomationStore()
-    : head(nullptr), storedCount(0), persistEnabled(false), persistPending(false) {
+    : head(nullptr), deviceMap(nullptr), storedCount(0), persistEnabled(false), persistPending(false) {
 }
 
 AutomationStore::~AutomationStore() {
@@ -164,6 +166,7 @@ void AutomationStore::freeActionList(AutomationAction *&listHead) {
         free(listHead->param);
         free(listHead->payload);
         free(listHead->customValue);
+        free(listHead->deviceCustomName);
         free(listHead->automationName);
         free(listHead);
         listHead = next;
@@ -224,6 +227,21 @@ const AutomationRecord *AutomationStore::findByName(const char *name) const {
         }
     }
     return nullptr;
+}
+
+void AutomationStore::setDeviceMap(DeviceTopicMap *devices) {
+    deviceMap = devices;
+}
+
+bool AutomationStore::parseSingleActionJson(const char *actionObjectJson, AutomationAction **outActions) {
+    if (outActions == nullptr || actionObjectJson == nullptr) {
+        return false;
+    }
+    *outActions = nullptr;
+    String wrapped = "{\"actions\":[";
+    wrapped += actionObjectJson;
+    wrapped += "]}";
+    return parseActions(wrapped.c_str(), outActions);
 }
 
 bool AutomationStore::begin(bool persistToLittleFs) {
@@ -398,9 +416,47 @@ static bool validateTypedConditionNode(const AutomationCondition *node) {
     return true;
 }
 
-static bool validateTypedActions(const AutomationAction *actions) {
+static bool validateTypedActions(const AutomationAction *actions, DeviceTopicMap *devices) {
     for (const AutomationAction *action = actions; action != nullptr; action = action->next) {
         if (action->target != AutomationTargetDevice) {
+            continue;
+        }
+        if (action->hasDeviceCustomCommand || automationParamIsDeviceCmd(action->param)) {
+            if (!action->hasDeviceCustomCommand
+                || action->deviceCustomName == nullptr
+                || action->deviceCustomName[0] == '\0') {
+                return false;
+            }
+            if (devices == nullptr || action->ieeeText == nullptr) {
+                return false;
+            }
+            uint8_t ieee[8];
+            if (!devices->parseIeee(action->ieeeText, ieee)) {
+                return false;
+            }
+            const DeviceTopicEntry *entry = devices->findByIeee(ieee);
+            if (entry == nullptr || !entry->used) {
+                return false;
+            }
+            const DeviceCustomCommandDef *command = deviceCustomCommandFindByName(
+                entry->customCommands,
+                entry->customCommandCount,
+                action->deviceCustomName
+            );
+            if (command == nullptr) {
+                return false;
+            }
+            if (command->hasParam) {
+                char encoded[32];
+                if (!deviceCustomCommandEncodeValue(
+                        (DeviceCustomCommandParamType)command->paramType,
+                        action->customValue,
+                        encoded,
+                        sizeof(encoded)
+                    )) {
+                    return false;
+                }
+            }
             continue;
         }
         if (action->hasCustomCommand || automationParamIsCustom(action->param)) {
@@ -417,7 +473,7 @@ static bool validateTypedActions(const AutomationAction *actions) {
     return true;
 }
 
-bool AutomationStore::validateAutomation(const AutomationRecord *automation) {
+bool AutomationStore::validateAutomation(const AutomationRecord *automation) const {
     if (automation == nullptr || !isNameSafe(automation->name)) {
         return false;
     }
@@ -432,7 +488,7 @@ bool AutomationStore::validateAutomation(const AutomationRecord *automation) {
             return false;
         }
     }
-    if (!validateTypedActions(automation->actions)) {
+    if (!validateTypedActions(automation->actions, deviceMap)) {
         return false;
     }
     if (automation->timer.use
@@ -952,12 +1008,53 @@ bool AutomationStore::parseActions(const char *objectJson, AutomationAction **ou
             String paramText;
             extractJsonString(object.c_str(), "param", paramText);
             const bool isCustomParam = automationParamIsCustom(paramText.c_str());
+            const bool isDeviceCmd = automationParamIsDeviceCmd(paramText.c_str());
+            String deviceCmdName;
+            extractJsonString(object.c_str(), "command", deviceCmdName);
+            deviceCmdName.trim();
             if (!haveIeee) {
                 free(action);
                 freeActionList(*outActions);
                 return false;
             }
-            if (isCustomParam || (haveCustomCluster && haveCustomCommand)) {
+            if (isDeviceCmd) {
+                if (deviceCmdName.length() == 0
+                    || !deviceCustomCommandNameValid(deviceCmdName.c_str())) {
+                    free(action);
+                    freeActionList(*outActions);
+                    return false;
+                }
+                action->hasDeviceCustomCommand = true;
+                action->deviceCustomName = duplicateBoundedString(
+                    deviceCmdName.c_str(),
+                    kDeviceCustomCommandNameMaxChars
+                );
+                if (action->deviceCustomName == nullptr) {
+                    free(action);
+                    freeActionList(*outActions);
+                    return false;
+                }
+                if (customValue.length() > 0) {
+                    action->customValue = duplicateBoundedString(
+                        customValue.c_str(),
+                        AUTOMATION_VALUE_MAX - 1
+                    );
+                    if (action->customValue == nullptr) {
+                        free(action->deviceCustomName);
+                        free(action);
+                        freeActionList(*outActions);
+                        return false;
+                    }
+                }
+                action->payload = duplicateBoundedString(deviceCmdName.c_str(), AUTOMATION_VALUE_MAX - 1);
+                if (action->payload == nullptr) {
+                    free(action->deviceCustomName);
+                    free(action->customValue);
+                    free(action);
+                    freeActionList(*outActions);
+                    return false;
+                }
+            } else if (isCustomParam || (haveCustomCluster && haveCustomCommand)) {
                 if (!haveCustomCluster || !haveCustomCommand) {
                     free(action);
                     freeActionList(*outActions);
@@ -1002,6 +1099,7 @@ bool AutomationStore::parseActions(const char *objectJson, AutomationAction **ou
                 free(action->ieeeText);
                 free(action->payload);
                 free(action->customValue);
+                free(action->deviceCustomName);
                 free(action);
                 freeActionList(*outActions);
                 return false;
@@ -1012,6 +1110,7 @@ bool AutomationStore::parseActions(const char *objectJson, AutomationAction **ou
                     free(action->ieeeText);
                     free(action->payload);
                     free(action->customValue);
+                    free(action->deviceCustomName);
                     free(action);
                     freeActionList(*outActions);
                     return false;
@@ -1703,7 +1802,20 @@ void AutomationStore::appendActionJson(String &json, const AutomationAction *act
             appendJsonEscaped(json, action->param, AUTOMATION_PARAM_KEY_MAX);
             json += "\"";
         }
-        if (action->hasCustomCommand) {
+        if (action->hasDeviceCustomCommand) {
+            json += ",\"command\":\"";
+            appendJsonEscaped(
+                json,
+                action->deviceCustomName,
+                kDeviceCustomCommandNameMaxChars
+            );
+            json += "\"";
+            if (action->customValue != nullptr) {
+                json += ",\"value\":\"";
+                appendJsonEscaped(json, action->customValue, AUTOMATION_VALUE_MAX);
+                json += "\"";
+            }
+        } else if (action->hasCustomCommand) {
             json += ",\"cluster\":";
             json += String((unsigned)action->customCluster);
             json += ",\"command\":";

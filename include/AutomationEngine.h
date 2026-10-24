@@ -22,6 +22,7 @@ public:
         const char *newState,
         bool valueChanged
     );
+    void runAction(const AutomationAction *action);
 
 private:
     AutomationStore *store;

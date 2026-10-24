@@ -88,6 +88,8 @@ void ConsoleStore::freeBindingList(ConsoleBinding *&listHead) {
         free(listHead->unit);
         free(listHead->param);
         free(listHead->icon);
+        free(listHead->clickActionFalseJson);
+        free(listHead->clickActionTrueJson);
         freeGaugeRanges(listHead->gaugeRanges);
         free(listHead);
         listHead = next;
@@ -808,6 +810,8 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
                 free(binding->unit);
                 free(binding->param);
                 free(binding->icon);
+                free(binding->clickActionFalseJson);
+                free(binding->clickActionTrueJson);
                 free(binding);
                 freeBindingList(*outBindings);
                 return false;
@@ -826,6 +830,58 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
             free(binding->icon);
             binding->icon = nullptr;
             binding->iconScale = 1.0f;
+        }
+        binding->clickActionFalseJson = nullptr;
+        binding->clickActionTrueJson = nullptr;
+        {
+            String clickFalseSlice;
+            String clickTrueSlice;
+            String clickLegacySlice;
+            if (extractJsonKeyedSlice(object.c_str(), "clickActionFalse", '{', clickFalseSlice)
+                && clickFalseSlice.length() > 0) {
+                binding->clickActionFalseJson = duplicateBoundedString(
+                    clickFalseSlice.c_str(),
+                    CONSOLE_CLICK_ACTION_JSON_MAX - 1
+                );
+            }
+            if (extractJsonKeyedSlice(object.c_str(), "clickActionTrue", '{', clickTrueSlice)
+                && clickTrueSlice.length() > 0) {
+                binding->clickActionTrueJson = duplicateBoundedString(
+                    clickTrueSlice.c_str(),
+                    CONSOLE_CLICK_ACTION_JSON_MAX - 1
+                );
+            }
+            if (binding->clickActionFalseJson == nullptr && binding->clickActionTrueJson == nullptr
+                && extractJsonKeyedSlice(object.c_str(), "clickAction", '{', clickLegacySlice)
+                && clickLegacySlice.length() > 0) {
+                // Legacy single clickAction: keep for both states.
+                binding->clickActionFalseJson = duplicateBoundedString(
+                    clickLegacySlice.c_str(),
+                    CONSOLE_CLICK_ACTION_JSON_MAX - 1
+                );
+                binding->clickActionTrueJson = duplicateBoundedString(
+                    clickLegacySlice.c_str(),
+                    CONSOLE_CLICK_ACTION_JSON_MAX - 1
+                );
+            }
+            if ((clickFalseSlice.length() > 0 && binding->clickActionFalseJson == nullptr)
+                || (clickTrueSlice.length() > 0 && binding->clickActionTrueJson == nullptr)
+                || (clickLegacySlice.length() > 0
+                    && (binding->clickActionFalseJson == nullptr
+                        || binding->clickActionTrueJson == nullptr))) {
+                free(binding->ieeeText);
+                free(binding->automationName);
+                free(binding->title);
+                free(binding->unit);
+                free(binding->param);
+                free(binding->icon);
+                free(binding->clickActionFalseJson);
+                free(binding->clickActionTrueJson);
+                freeGaugeRanges(binding->gaugeRanges);
+                free(binding);
+                freeBindingList(*outBindings);
+                return false;
+            }
         }
         binding->next = nullptr;
         if (tail == nullptr) {
@@ -1521,6 +1577,14 @@ void ConsoleStore::appendOneBindingJson(String &json, const ConsoleBinding *bind
             }
         }
         appendBindingLayoutJson(json, binding);
+    }
+    if (binding->clickActionFalseJson != nullptr && binding->clickActionFalseJson[0] != '\0') {
+        json += ",\"clickActionFalse\":";
+        json += binding->clickActionFalseJson;
+    }
+    if (binding->clickActionTrueJson != nullptr && binding->clickActionTrueJson[0] != '\0') {
+        json += ",\"clickActionTrue\":";
+        json += binding->clickActionTrueJson;
     }
     json += "}";
 }

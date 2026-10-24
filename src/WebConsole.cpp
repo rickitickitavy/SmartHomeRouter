@@ -215,6 +215,15 @@ void WebConsole::begin() {
 
     // Child paths before collection; exact() so /api/consoles does not steal /item|/mine|/update.
     server.on("/api/consoles/mine", HTTP_GET, [this](AsyncWebServerRequest *request) { handleConsolesMineGet(request); });
+    server.on(
+        "/api/consoles/run-action",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleConsolesRunActionPost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
     server.on("/api/consoles/item", HTTP_GET, [this](AsyncWebServerRequest *request) { handleConsoleGet(request); });
     server.on("/api/consoles/store", HTTP_GET, [this](AsyncWebServerRequest *request) { handleConsolesStoreGet(request); });
     server.on(
@@ -960,6 +969,41 @@ void WebConsole::handleConsolesMineGet(AsyncWebServerRequest *request) {
     request->send(response);
 }
 
+void WebConsole::handleConsolesRunActionPost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    const UserRecord *user = nullptr;
+    if (!requireUser(request, &user)) {
+        return;
+    }
+    if (runConsoleAction == nullptr) {
+        request->send(503, "text/plain", "Action runner unavailable");
+        return;
+    }
+    body.trim();
+    if (body.length() == 0 || body.charAt(0) != '{') {
+        request->send(400, "text/plain", "Need action object");
+        return;
+    }
+    const int status = runConsoleAction(body.c_str());
+    if (status == 200) {
+        request->send(200, "text/plain", "OK");
+        return;
+    }
+    if (status == 400) {
+        request->send(400, "text/plain", "Bad action");
+        return;
+    }
+    if (status == 404) {
+        request->send(404, "text/plain", "Not found");
+        return;
+    }
+    request->send(status > 0 ? status : 500, "text/plain", "Action failed");
+}
+
+
 void WebConsole::handleConsolesPost(AsyncWebServerRequest *request) {
     String body;
     if (!takeRequestBody(request, &body)) {
@@ -1624,6 +1668,10 @@ void WebConsole::setMqttReloadHandler(WebConsole::VoidApplyFn handler) {
 
 void WebConsole::setZigbeeApplyHandler(WebConsole::VoidApplyFn handler) {
     applyZigbeeRuntime = handler;
+}
+
+void WebConsole::setActionRunner(WebConsole::ActionRunnerFn handler) {
+    runConsoleAction = handler;
 }
 
 void WebConsole::setDevicesFileHandler(WebConsole::DevicesFileFn handler) {
@@ -2317,6 +2365,23 @@ void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
                 &entry->userDataFieldCount,
                 fieldsSlice.c_str()
             );
+        }
+    }
+    deviceCustomCommandClear(&entry->customCommands, &entry->customCommandCount);
+    String customCommandsSlice;
+    if (extractJsonKeyedSlice(body.c_str(), "customCommands", '[', customCommandsSlice)) {
+        bool customValid = true;
+        if (customCommandsSlice.length() > 0) {
+            if (!deviceCustomCommandAssignFromJson(
+                    &entry->customCommands,
+                    &entry->customCommandCount,
+                    customCommandsSlice.c_str(),
+                    &customValid
+                )
+                || !customValid) {
+                request->send(400, "text/plain", "Invalid customCommands");
+                return;
+            }
         }
     }
     if (foundDevices != nullptr) {

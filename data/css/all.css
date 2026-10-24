@@ -906,6 +906,97 @@ html, body {
     border-color: var(--accent);
 }
 
+#deviceCustomCommandsSection #deviceCustomCommandAddBtn {
+    background: var(--surface);
+    color: var(--text);
+    border-color: var(--border);
+}
+
+#deviceCustomCommandsSection #deviceCustomCommandAddBtn:hover:not(:disabled) {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+#deviceCustomCommandsSection #deviceCustomCommandAddBtn:disabled {
+    color: var(--muted);
+    background: var(--chrome-idle);
+    opacity: 0.45;
+    cursor: default;
+}
+
+#deviceCustomCommandsTable td {
+    padding: 0.25rem 0.45rem;
+}
+
+#deviceCustomCommandsTable .custom-command-name,
+#deviceCustomCommandsTable .custom-command-param-type,
+.device-cmd-value-input,
+.device-cmd-value-bool {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    font-family: inherit;
+    font-size: 0.875rem;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+
+#deviceCustomCommandsTable .custom-command-name,
+.device-cmd-value-input {
+    min-height: 33px;
+    padding: 0.3rem 0.55rem;
+}
+
+#deviceCustomCommandsTable .custom-command-param-type,
+.device-cmd-value-bool {
+    min-height: 33px;
+    height: 33px;
+    padding: 0.2rem 0.45rem;
+    appearance: menulist;
+    -webkit-appearance: menulist;
+}
+
+#deviceCustomCommandsTable .custom-command-param-type:disabled {
+    color: var(--muted);
+    background: color-mix(in srgb, var(--muted) 18%, var(--surface));
+}
+
+.console-click-action-section {
+    margin-top: 0.75rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border);
+}
+
+.console-click-action-editor {
+    margin-top: 0.5rem;
+}
+
+.console-click-action-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.console-click-action-row select,
+.console-click-action-row input[type="text"],
+.console-click-action-row input[type="number"] {
+    min-height: 44px;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.35rem 0.55rem;
+    font: inherit;
+}
+
+.console-click-action-btn {
+    min-width: 4.5rem;
+}
+
 #deviceMqttGroup .field-inline {
     flex-direction: row;
     align-items: center;
@@ -3792,4 +3883,18 @@ button.console-binary-icon--control:disabled {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: var(--radius);
+}
+
+.console-click-action-section-state {
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+.console-click-action-section-state:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+.console-click-action-section-state .field-hint {
+  margin-bottom: 0.35rem;
 }

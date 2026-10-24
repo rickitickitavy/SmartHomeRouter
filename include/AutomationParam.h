@@ -16,6 +16,10 @@ inline bool automationParamIsCustom(const char *param) {
     return param != nullptr && strcmp(param, "custom") == 0;
 }
 
+inline bool automationParamIsDeviceCmd(const char *param) {
+    return param != nullptr && strcmp(param, "deviceCmd") == 0;
+}
+
 inline bool automationParamIsKnownKey(const char *param) {
     if (param == nullptr || param[0] == '\0' || automationParamIsCustom(param)) {
         return false;
