@@ -7,12 +7,14 @@ import json
 import sys
 
 CONTEXT = (
-    "HARD RULE (all projects): NEVER change behavior the human has described "
-    "without their explicit choice. If a fix or OpenSpec plan would redefine "
-    "product rules (triggers, conditions, value-must-change vs rising-edge, "
-    "re-fire semantics, etc.), STOP. Propose options, describe trade-offs, "
-    "ask which behavior they want, and wait. Do not implement or write "
-    "planning that picks a side until they answer."
+    "HARD RULE (all projects): Do NOT invent or replace product behavior "
+    "the human did not ask for. If YOU would redefine product rules "
+    "(triggers, conditions, value-must-change vs rising-edge, re-fire, etc.) "
+    "without the human requesting that change, STOP — propose options, "
+    "describe trade-offs, ask, and wait. "
+    "If the human already directed the behavior (including OpenSpec propose/"
+    "write proposal/add fix/do this in current change), implement or plan "
+    "that directed change — do NOT demand a separate approval for their own request."
 )
 
 

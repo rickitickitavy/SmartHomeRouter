@@ -14,6 +14,7 @@ struct ConsoleGaugeRange {
 struct ConsoleBinding {
     char *ieeeText;
     char *automationName;
+    uint8_t automationControl;
     uint8_t channel;
     char *title;
     char *unit;

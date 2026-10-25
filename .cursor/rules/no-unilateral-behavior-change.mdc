@@ -1,5 +1,5 @@
 ---
-description: Never change human-described behavior without asking (shared project copy)
+description: Never invent or replace product behavior the human did not ask for (shared project copy)
 alwaysApply: true
 ---
 
@@ -7,25 +7,34 @@ alwaysApply: true
 
 Keep in sync with `~/.cursor/rules/no-unilateral-behavior-change.mdc` when that file changes.
 
-NEVER change, reinterpret, replace, or “fix away” **behavior the human has described** (or a product rule they stated) on your own authority.
+NEVER invent, reinterpret, replace, or “fix away” **product behavior on your own authority** when the human did not ask for that change.
 
-## Required sequence
+## When this blocks (AI-initiated)
 
-1. **Propose** a concrete change (what would differ from today’s / from their rule).
-2. **Describe** options and trade-offs in plain language.
-3. **Ask** the human which option to take.
-4. **Wait** for an explicit choice that names the behavior (not a vague “fix it”).
+Stop, propose options, describe trade-offs, ask, and wait — only when **you** would:
 
-Only after that approval may you edit code, specs, OpenSpec deltas, or design that redefine that behavior.
+- Change behavior the human already described to something else they did not request
+- Pick a product-rule side they have not chosen (triggers, rising-edge vs value-must-change, re-fire, etc.)
+- Add or redefine product semantics they never asked for
 
-## Includes
+## When this does NOT block (human-directed)
+
+No extra “approve the behavior” step when the human already directed the change in this conversation. Go ahead and edit code, specs, OpenSpec proposal/design/tasks, or skills that implement **what they asked for**, including:
+
+- `/opsx-propose`, “write the proposal”, “add X”, “fix Y”, “do this in the current change”
+- OpenSpec deltas that encode their stated requirements
+- Clarifications they already answered (A/B choices, named semantics)
+
+Asking again for approval of their own request is wrong.
+
+## Includes (when AI would invent/replace)
 
 - Rising-edge vs value-must-change vs re-fire-on-same-report style rules
-- Trigger, condition, and automation semantics the human stated
+- Trigger, condition, and automation semantics the human stated — do not swap them without asking
 - Any conflict between your diagnosis and a human-stated rule — surface the conflict; do not pick a side by implementing
 
-## Does not block
+## Also does not block
 
 - Restoring behavior that already matches what the human described
 - Pure bugs with no product-rule ambiguity (crash, wrong pointer) when the intended behavior is already explicit
-- Formatting, renames with no semantic change, or edits the human explicitly ordered in the same turn
+- Formatting, renames with no semantic change
