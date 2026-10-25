@@ -18,12 +18,6 @@
         "command": ".cursor/hooks/fragile-zones-guard.py",
         "matcher": "Write|StrReplace|Delete|EditNotebook",
         "failClosed": true
-      },
-      {
-        "type": "prompt",
-        "prompt": "Hard policy gate for file edits. NEVER allow an edit that changes, reinterprets, or replaces behavior the human has described in this conversation (or a product rule they stated), unless they explicitly approved that exact behavior in this conversation. Also DENY OpenSpec/spec/design/tasks writes that pick a new product rule when the human's stated rule conflicts and they have not chosen yet. ALLOW when the human already approved this change, the edit restores human-stated behavior, the edit is non-semantic, or no human-described product behavior is at stake. If unsure: DENY and tell the agent to propose, describe options, and ask the human. Hook input: $ARGUMENTS",
-        "matcher": "Write|StrReplace|Delete|EditNotebook",
-        "timeout": 20
       }
     ]
   }

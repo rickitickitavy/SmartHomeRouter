@@ -492,6 +492,15 @@
             setHidden(document.getElementById("appShell"), false);
             applyChromeForRoles();
             applyThemeToDocument(user && user.theme);
+            var accountBtn = document.getElementById("sidebarAccountBtn");
+            var accountTitle = document.getElementById("accountSectionTitle");
+            var userLabel = (user && (user.userName || user.name || user.username)) || "Account";
+            if (accountBtn) {
+                accountBtn.textContent = userLabel;
+            }
+            if (accountTitle) {
+                accountTitle.textContent = userLabel;
+            }
             var picker = document.getElementById("uiTheme");
             if (picker) {
                 picker.value = normalizeThemeId(user && user.theme);
@@ -2979,9 +2988,12 @@
             if (interactive) {
                 wrap.type = "button";
             }
+            var toneClass = iconOptions.actionControl
+                ? (isBinaryStateOn(stateText) ? " is-action-ready" : " is-action-idle-off")
+                : (isBinaryStateOn(stateText) ? " is-on" : " is-off");
             wrap.className = "console-binary-icon"
                 + (interactive ? " console-binary-icon--control" : "")
-                + (isBinaryStateOn(stateText) ? " is-on" : " is-off")
+                + toneClass
                 + (iconOptions.disabled ? " is-disabled" : "");
             wrap.style.setProperty("--console-icon-scale", String(normalizeIconScale(binding && binding.iconScale)));
             wrap.title = stateText ? String(stateText) : iconId;
@@ -4736,6 +4748,40 @@
             fillParameterDialog(device, "Edit device");
         }
 
+        var appConfirmOnConfirm = null;
+
+        function closeAppConfirmDialog() {
+            appConfirmOnConfirm = null;
+            var dialog = document.getElementById("appConfirmDialog");
+            if (dialog) {
+                dialog.hidden = true;
+            }
+        }
+
+        function openAppConfirmDialog(options) {
+            var opts = options || {};
+            var dialog = document.getElementById("appConfirmDialog");
+            var titleEl = document.getElementById("appConfirmTitle");
+            var detailEl = document.getElementById("appConfirmDetail");
+            var confirmBtn = document.getElementById("appConfirmOk");
+            if (!dialog || !titleEl || !detailEl || !confirmBtn) {
+                return;
+            }
+            titleEl.textContent = opts.title || "Confirm";
+            detailEl.textContent = opts.message || "Are you sure?";
+            confirmBtn.textContent = opts.confirmLabel || "OK";
+            appConfirmOnConfirm = typeof opts.onConfirm === "function" ? opts.onConfirm : null;
+            dialog.hidden = false;
+        }
+
+        function confirmAppConfirmDialog() {
+            var action = appConfirmOnConfirm;
+            closeAppConfirmDialog();
+            if (typeof action === "function") {
+                action();
+            }
+        }
+
         function openDeleteConfirmDialog() {
             var device = findRegisteredDevice(selectedRegisteredIeee);
             if (!device || !device.ieee) {
@@ -5018,7 +5064,10 @@
                 var index;
                 for (index = 0; index < list.length; index++) {
                     if (list[index] && list[index].name) {
-                        map[list[index].name] = !!list[index].active;
+                        map[list[index].name] = {
+                            active: !!list[index].active,
+                            timerUse: !!(list[index].timer && list[index].timer.use)
+                        };
                     }
                 }
                 placeAutomationStatusByName = map;
@@ -5036,7 +5085,12 @@
                 if (!response.ok) {
                     throw new Error("active update failed");
                 }
-                placeAutomationStatusByName[name] = !!active;
+                var prev = placeAutomationStatusByName[name];
+                if (prev && typeof prev === "object") {
+                    prev.active = !!active;
+                } else {
+                    placeAutomationStatusByName[name] = { active: !!active, timerUse: false };
+                }
             });
         }
 
@@ -5650,6 +5704,49 @@
             return cloned;
         }
 
+
+        function placeAutomationControlMode(binding) {
+            return normalizeAutomationControl(binding && binding.automationControl);
+        }
+
+        function placeAutomationIsActive(name) {
+            var entry = placeAutomationStatusByName[name];
+            if (entry && typeof entry === "object") {
+                return !!entry.active;
+            }
+            return !!entry;
+        }
+
+        function placeRunAutomationControl(name, mode) {
+            var op = "RUN";
+            if (mode === "startTimer") {
+                op = "START TIMER";
+            } else if (mode === "stopTimer") {
+                op = "STOP TIMER";
+            } else if (mode === "restartTimer") {
+                op = "RESTART TIMER";
+            }
+            return fetch("/api/consoles/run-action", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ target: "automation", name: name, op: op })
+            }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error("automation control failed");
+                }
+            });
+        }
+
+        function flashAutomationIcon(iconEl) {
+            if (!iconEl) {
+                return;
+            }
+            iconEl.classList.add("is-action-flash");
+            window.setTimeout(function () {
+                iconEl.classList.remove("is-action-flash");
+            }, 600);
+        }
+
         function placeBuildDeviceRow(binding) {
             var row = document.createElement("div");
             if (binding && binding.spacer) {
@@ -5665,11 +5762,15 @@
             var useCustomClick = bindingHasAnyClickAction(binding);
             if (binding && binding.automation) {
                 var automationName = binding.automation;
-                var automationOn = !!placeAutomationStatusByName[automationName];
+                var automationOn = placeAutomationIsActive(automationName);
                 var automationKnown = Object.prototype.hasOwnProperty.call(
                     placeAutomationStatusByName,
                     automationName
                 );
+                var controlMode = placeAutomationControlMode(binding);
+                if (!automationOn) {
+                    row.classList.add("is-automation-inactive");
+                }
                 var automationToggle = (function (name, currentlyOn) {
                     return function () {
                         setPlaceAutomationActive(name, !currentlyOn).then(function () {
@@ -5679,17 +5780,65 @@
                         });
                     };
                 })(automationName, automationOn);
+                var actionLabel = controlMode === "run" ? "Run"
+                    : (controlMode === "startTimer" ? "Start timer"
+                        : (controlMode === "stopTimer" ? "Stop timer"
+                            : (controlMode === "restartTimer" ? "Restart timer" : "Automation on off")));
                 var autoClick = useCustomClick
                     ? makeBindingClickActionHandler(binding, automationOn)
-                    : (automationKnown ? automationToggle : null);
-                if (binding.viewStyle === "icon") {
+                    : null;
+                if (!autoClick && automationKnown && controlMode === "enableDisable") {
+                    autoClick = automationToggle;
+                } else if (!autoClick && automationKnown && controlMode !== "enableDisable") {
+                    autoClick = (function (name, mode) {
+                        return function (event) {
+                            var iconTarget = event && event.currentTarget;
+                            var canFlash = placeAutomationIsActive(name);
+                            placeRunAutomationControl(name, mode).then(function () {
+                                if (canFlash) {
+                                    flashAutomationIcon(iconTarget);
+                                }
+                                refreshPlaceConsolesIfActive();
+                            }).catch(function () {
+                                refreshPlaceConsolesIfActive();
+                            });
+                        };
+                    })(automationName, controlMode);
+                }
+                if (controlMode !== "enableDisable" && !useCustomClick) {
+                    if (binding.viewStyle === "icon") {
+                        var actionIcon = buildConsoleIconElement(
+                            binding,
+                            automationOn ? "ON" : "OFF",
+                            {
+                                interactive: true,
+                                actionControl: true,
+                                disabled: !automationKnown,
+                                ariaLabel: actionLabel,
+                                onclick: autoClick
+                            }
+                        );
+                        controls.appendChild(actionIcon);
+                    } else {
+                        var actionBtn = document.createElement("button");
+                        actionBtn.type = "button";
+                        actionBtn.className = "btn btn-secondary btn-inline";
+                        actionBtn.textContent = actionLabel;
+                        actionBtn.disabled = !automationKnown;
+                        if (autoClick) {
+                            actionBtn.onclick = autoClick;
+                        }
+                        controls.appendChild(actionBtn);
+                    }
+                } else if (binding.viewStyle === "icon") {
                     controls.appendChild(buildConsoleIconElement(
                         binding,
                         automationOn ? "ON" : "OFF",
                         {
                             interactive: true,
+                            actionControl: controlMode !== "enableDisable",
                             disabled: !useCustomClick && !automationKnown,
-                            ariaLabel: useCustomClick ? "Run click action" : "Automation on off",
+                            ariaLabel: useCustomClick ? "Run click action" : actionLabel,
                             onclick: autoClick
                         }
                     ));
@@ -6687,44 +6836,48 @@
                 ? ("Import merges this file into existing automations: matching names are updated, "
                     + "new names are added, and automations not in the file are kept. Continue?")
                 : "Import replaces all automations with this file. Continue?";
-            if (!window.confirm(confirmText)) {
-                return;
-            }
-            clearStoreActionErrors("automationsSaveError");
-            var reader = new FileReader();
-            reader.onerror = function () {
-                reportStoreActionError("automationsSaveError", null, "Failed to read the selected file");
-            };
-            reader.onload = function () {
-                var text = reader.result ? String(reader.result) : "";
-                var parsed;
-                try {
-                    parsed = JSON.parse(text);
-                } catch (parseError) {
-                    reportStoreActionError("automationsSaveError", null, "Selected file is not valid JSON");
-                    return;
-                }
-                if (!Array.isArray(parsed)) {
-                    reportStoreActionError("automationsSaveError", null, "Selected file must be an automations JSON array");
-                    return;
-                }
-                var url = mergeMode ? "/api/automations/restore?merge=1" : "/api/automations/restore";
-                fetch(url, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: text
-                }).then(function (response) {
-                    return response.text().then(function (bodyText) {
-                        if (!response.ok) {
-                            throw new Error(bodyText || ("HTTP " + response.status));
+            openAppConfirmDialog({
+                title: mergeMode ? "Import automations" : "Replace automations",
+                message: confirmText,
+                confirmLabel: "Continue",
+                onConfirm: function () {
+                    clearStoreActionErrors("automationsSaveError");
+                    var reader = new FileReader();
+                    reader.onerror = function () {
+                        reportStoreActionError("automationsSaveError", null, "Failed to read the selected file");
+                    };
+                    reader.onload = function () {
+                        var text = reader.result ? String(reader.result) : "";
+                        var parsed;
+                        try {
+                            parsed = JSON.parse(text);
+                        } catch (parseError) {
+                            reportStoreActionError("automationsSaveError", null, "Selected file is not valid JSON");
+                            return;
                         }
-                        loadAutomations();
-                    });
-                }).catch(function (error) {
-                    reportStoreActionError("automationsSaveError", error, "Import failed");
-                });
-            };
-            reader.readAsText(file);
+                        if (!Array.isArray(parsed)) {
+                            reportStoreActionError("automationsSaveError", null, "Selected file must be an automations JSON array");
+                            return;
+                        }
+                        var url = mergeMode ? "/api/automations/restore?merge=1" : "/api/automations/restore";
+                        fetch(url, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: text
+                        }).then(function (response) {
+                            return response.text().then(function (bodyText) {
+                                if (!response.ok) {
+                                    throw new Error(bodyText || ("HTTP " + response.status));
+                                }
+                                loadAutomations();
+                            });
+                        }).catch(function (error) {
+                            reportStoreActionError("automationsSaveError", error, "Import failed");
+                        });
+                    };
+                    reader.readAsText(file);
+                }
+            });
         }
 
         function createAutomationAndEdit() {
@@ -8474,12 +8627,16 @@
                     removeBtn.className = "btn btn-secondary btn-inline";
                     removeBtn.textContent = "Remove";
                     removeBtn.onclick = function () {
-                        if (!window.confirm("Remove this action?")) {
-                            return;
-                        }
-                        automationEditorDraft.actions.splice(actionIndex, 1);
-                        renderAutomationActionsEditor();
-                        updateAutomationImportEnabled();
+                        openAppConfirmDialog({
+                            title: "Remove action",
+                            message: "Remove this action?",
+                            confirmLabel: "Remove",
+                            onConfirm: function () {
+                                automationEditorDraft.actions.splice(actionIndex, 1);
+                                renderAutomationActionsEditor();
+                                updateAutomationImportEnabled();
+                            }
+                        });
                     };
                     toolbar.appendChild(upBtn);
                     toolbar.appendChild(downBtn);
@@ -8739,43 +8896,47 @@
             if (!file) {
                 return;
             }
-            if (!window.confirm("Import replaces all consoles with this file. Continue?")) {
-                return;
-            }
-            clearStoreActionErrors("consolesSaveError");
-            var reader = new FileReader();
-            reader.onerror = function () {
-                reportStoreActionError("consolesSaveError", null, "Failed to read the selected file");
-            };
-            reader.onload = function () {
-                var text = reader.result ? String(reader.result) : "";
-                var parsed;
-                try {
-                    parsed = JSON.parse(text);
-                } catch (parseError) {
-                    reportStoreActionError("consolesSaveError", null, "Selected file is not valid JSON");
-                    return;
-                }
-                if (!Array.isArray(parsed)) {
-                    reportStoreActionError("consolesSaveError", null, "Selected file must be a consoles JSON array");
-                    return;
-                }
-                fetch("/api/consoles/restore", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: text
-                }).then(function (response) {
-                    return response.text().then(function (bodyText) {
-                        if (!response.ok) {
-                            throw new Error(bodyText || ("HTTP " + response.status));
-                        }
-                        loadConsoles();
+            openAppConfirmDialog({
+                title: "Replace consoles",
+                message: "Import replaces all consoles with this file. Continue?",
+                confirmLabel: "Continue",
+                onConfirm: function () {
+    clearStoreActionErrors("consolesSaveError");
+                var reader = new FileReader();
+                reader.onerror = function () {
+                    reportStoreActionError("consolesSaveError", null, "Failed to read the selected file");
+                };
+                reader.onload = function () {
+                    var text = reader.result ? String(reader.result) : "";
+                    var parsed;
+                    try {
+                        parsed = JSON.parse(text);
+                    } catch (parseError) {
+                        reportStoreActionError("consolesSaveError", null, "Selected file is not valid JSON");
+                        return;
+                    }
+                    if (!Array.isArray(parsed)) {
+                        reportStoreActionError("consolesSaveError", null, "Selected file must be a consoles JSON array");
+                        return;
+                    }
+                    fetch("/api/consoles/restore", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: text
+                    }).then(function (response) {
+                        return response.text().then(function (bodyText) {
+                            if (!response.ok) {
+                                throw new Error(bodyText || ("HTTP " + response.status));
+                            }
+                            loadConsoles();
+                        });
+                    }).catch(function (error) {
+                        reportStoreActionError("consolesSaveError", error, "Import failed");
                     });
-                }).catch(function (error) {
-                    reportStoreActionError("consolesSaveError", error, "Import failed");
-                });
-            };
-            reader.readAsText(file);
+                };
+                reader.readAsText(file);
+                }
+            });
         }
 
         function renderConsoleTable(rows) {
@@ -9037,6 +9198,56 @@
             placeConsoleWidgetAtIndex(widgetIndex, targetIndex);
         }
 
+        function moveCompositeRow(widgetIndex, rowIndex, direction) {
+            syncConsoleEditorDraftFromDom();
+            var rows = ensureCompositeRows(consoleEditorDraft.widgets[widgetIndex]);
+            if (!rows || rowIndex < 0 || rowIndex >= rows.length) {
+                return;
+            }
+            var target = rowIndex;
+            if (direction === "up") {
+                if (rowIndex <= 0) {
+                    return;
+                }
+                target = rowIndex - 1;
+            } else if (direction === "down") {
+                if (rowIndex >= rows.length - 1) {
+                    return;
+                }
+                target = rowIndex + 1;
+            } else {
+                return;
+            }
+            var moved = rows.splice(rowIndex, 1)[0];
+            rows.splice(target, 0, moved);
+            renderConsoleEditor();
+        }
+
+        function moveGridBinding(widgetIndex, bindingIndex, direction) {
+            readConsoleEditorFields();
+            var list = consoleEditorDraft.widgets[widgetIndex].devices;
+            if (!list || bindingIndex < 0 || bindingIndex >= list.length) {
+                return;
+            }
+            var target = bindingIndex;
+            if (direction === "up") {
+                if (bindingIndex <= 0) {
+                    return;
+                }
+                target = bindingIndex - 1;
+            } else if (direction === "down") {
+                if (bindingIndex >= list.length - 1) {
+                    return;
+                }
+                target = bindingIndex + 1;
+            } else {
+                return;
+            }
+            var moved = list.splice(bindingIndex, 1)[0];
+            list.splice(target, 0, moved);
+            renderConsoleEditor();
+        }
+
         function buildConsoleWidgetMovePad(widgetIndex) {
             var pad = document.createElement("div");
             pad.className = "console-widget-move-pad console-widget-move-pad--vertical";
@@ -9168,10 +9379,14 @@
         }
 
         function confirmRemoveConsoleWidget(widgetIndex) {
-            if (!window.confirm("Delete this widget?")) {
-                return;
-            }
-            removeConsoleWidget(widgetIndex);
+            openAppConfirmDialog({
+                title: "Delete widget",
+                message: "Delete this widget?",
+                confirmLabel: "Delete",
+                onConfirm: function () {
+                    removeConsoleWidget(widgetIndex);
+                }
+            });
         }
 
         function consoleCmToPx(cmValue) {
@@ -9849,26 +10064,69 @@
                     heightCfg.appendChild(heightUnit);
                     var rowTools = document.createElement("div");
                     rowTools.className = "console-composite-row-tools";
-                    rowTools.appendChild(heightCfg);
+                    var toolsLine = document.createElement("div");
+                    toolsLine.className = "console-composite-row-tools-line";
                     var removeRowBtn = document.createElement("button");
                     removeRowBtn.type = "button";
-                    removeRowBtn.className = "btn btn-secondary btn-inline console-composite-remove-row";
-                    removeRowBtn.textContent = "Remove row";
+                    removeRowBtn.className = "console-widget-delete-btn console-composite-remove-row";
+                    removeRowBtn.textContent = "🗑";
+                    removeRowBtn.title = "Remove row";
+                    removeRowBtn.setAttribute("aria-label", "Remove row");
                     removeRowBtn.onclick = (function (wIndex, rIndex) {
                         return function () {
-                            if (!window.confirm("Remove this row?")) {
-                                return;
-                            }
-                            syncConsoleEditorDraftFromDom();
-                            var rowList = ensureCompositeRows(consoleEditorDraft.widgets[wIndex]);
-                            if (rIndex < 0 || rIndex >= rowList.length) {
-                                return;
-                            }
-                            rowList.splice(rIndex, 1);
-                            renderConsoleEditor();
+                            openAppConfirmDialog({
+                                title: "Remove row",
+                                message: "Remove this row?",
+                                confirmLabel: "Remove",
+                                onConfirm: function () {
+                                    syncConsoleEditorDraftFromDom();
+                                    var rowList = ensureCompositeRows(consoleEditorDraft.widgets[wIndex]);
+                                    if (rIndex < 0 || rIndex >= rowList.length) {
+                                        return;
+                                    }
+                                    rowList.splice(rIndex, 1);
+                                    renderConsoleEditor();
+                                }
+                            });
                         };
                     })(widgetIndex, rowIndex);
-                    rowTools.appendChild(removeRowBtn);
+                    toolsLine.appendChild(removeRowBtn);
+                    toolsLine.appendChild(heightCfg);
+                    rowTools.appendChild(toolsLine);
+                    var movePad = document.createElement("div");
+                    movePad.className = "console-widget-move-pad console-widget-move-pad--vertical console-composite-row-move";
+                    movePad.setAttribute("aria-label", "Move row");
+                    var moveUpBtn = document.createElement("button");
+                    moveUpBtn.type = "button";
+                    moveUpBtn.className = "console-widget-move-btn console-widget-move-up";
+                    moveUpBtn.textContent = "▲";
+                    moveUpBtn.title = "Move row up";
+                    moveUpBtn.setAttribute("aria-label", "Move row up");
+                    moveUpBtn.disabled = rowIndex <= 0;
+                    moveUpBtn.onclick = (function (wIndex, rIndex) {
+                        return function (event) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            moveCompositeRow(wIndex, rIndex, "up");
+                        };
+                    })(widgetIndex, rowIndex);
+                    var moveDownBtn = document.createElement("button");
+                    moveDownBtn.type = "button";
+                    moveDownBtn.className = "console-widget-move-btn console-widget-move-down";
+                    moveDownBtn.textContent = "▼";
+                    moveDownBtn.title = "Move row down";
+                    moveDownBtn.setAttribute("aria-label", "Move row down");
+                    moveDownBtn.disabled = rowIndex >= rows.length - 1;
+                    moveDownBtn.onclick = (function (wIndex, rIndex) {
+                        return function (event) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            moveCompositeRow(wIndex, rIndex, "down");
+                        };
+                    })(widgetIndex, rowIndex);
+                    movePad.appendChild(moveUpBtn);
+                    movePad.appendChild(moveDownBtn);
+                    rowTools.appendChild(movePad);
                     rowEl.appendChild(rowTools);
                 }
                 var cellsWrap = document.createElement("div");
@@ -9968,34 +10226,38 @@
                             return function (event) {
                                 event.preventDefault();
                                 event.stopPropagation();
-                                if (!window.confirm("Remove this cell?")) {
-                                    return;
-                                }
-                                syncConsoleEditorDraftFromDom();
-                                var rowList = ensureCompositeRows(consoleEditorDraft.widgets[wIndex]);
-                                var targetRow = rowList[rIndex];
-                                if (!targetRow || !targetRow.cells || cIndex < 0
-                                    || cIndex >= targetRow.cells.length) {
-                                    return;
-                                }
-                                if ((targetRow.heightUnit || "u") !== "cm") {
-                                    var removed = targetRow.cells[cIndex];
-                                    var removedWidth = Number(removed && removed.width);
-                                    if (!(removedWidth > 0) || (removed && removed.widthUnit === "cm")) {
-                                        removedWidth = 0;
+                                openAppConfirmDialog({
+                                    title: "Remove cell",
+                                    message: "Remove this cell?",
+                                    confirmLabel: "Remove",
+                                    onConfirm: function () {
+                                        syncConsoleEditorDraftFromDom();
+                                        var rowList = ensureCompositeRows(consoleEditorDraft.widgets[wIndex]);
+                                        var targetRow = rowList[rIndex];
+                                        if (!targetRow || !targetRow.cells || cIndex < 0
+                                            || cIndex >= targetRow.cells.length) {
+                                            return;
+                                        }
+                                        if ((targetRow.heightUnit || "u") !== "cm") {
+                                            var removed = targetRow.cells[cIndex];
+                                            var removedWidth = Number(removed && removed.width);
+                                            if (!(removedWidth > 0) || (removed && removed.widthUnit === "cm")) {
+                                                removedWidth = 0;
+                                            }
+                                            var sumUnitsBefore = compositeRowSumUnitWidths(targetRow);
+                                            var oldHeight = Number(targetRow.height);
+                                            if (!(oldHeight > 0)) {
+                                                oldHeight = 0.1;
+                                            }
+                                            var sumAfter = sumUnitsBefore - removedWidth;
+                                            if (sumUnitsBefore > 0 && sumAfter > 0) {
+                                                targetRow.height = (oldHeight / sumUnitsBefore) * sumAfter;
+                                            }
+                                        }
+                                        targetRow.cells.splice(cIndex, 1);
+                                        renderConsoleEditor();
                                     }
-                                    var sumUnitsBefore = compositeRowSumUnitWidths(targetRow);
-                                    var oldHeight = Number(targetRow.height);
-                                    if (!(oldHeight > 0)) {
-                                        oldHeight = 0.1;
-                                    }
-                                    var sumAfter = sumUnitsBefore - removedWidth;
-                                    if (sumUnitsBefore > 0 && sumAfter > 0) {
-                                        targetRow.height = (oldHeight / sumUnitsBefore) * sumAfter;
-                                    }
-                                }
-                                targetRow.cells.splice(cIndex, 1);
-                                renderConsoleEditor();
+                                });
                             };
                         })(widgetIndex, rowIndex, cellIndex);
                         chromeTop.appendChild(deleteCellBtn);
@@ -10574,9 +10836,12 @@
             fullWidthLabel.appendChild(fullWidthCheck);
             fullWidthLabel.appendChild(document.createTextNode("Full width"));
             toolbarRow2.appendChild(fullWidthLabel);
-            var viewportField = document.createElement("div");
-            viewportField.className = "field";
-            var viewportLabel = document.createElement("label");
+            var gridSizeField = document.createElement("div");
+            gridSizeField.className = "console-widget-grid-size";
+            var viewportField = document.createElement("label");
+            viewportField.className = "console-widget-grid-inline console-widget-viewport-field console-composite-field-line";
+            var viewportLabel = document.createElement("span");
+            viewportLabel.className = "console-composite-field-label";
             viewportLabel.textContent = "View style";
             var viewportSelect = document.createElement("select");
             viewportSelect.className = "console-widget-viewport";
@@ -10605,10 +10870,13 @@
             };
             viewportField.appendChild(viewportLabel);
             viewportField.appendChild(viewportSelect);
-            toolbarRow2.appendChild(viewportField);
-            var gridSizeField = document.createElement("div");
-            gridSizeField.className = "field console-widget-grid-size";
-            gridSizeField.hidden = viewportSelect.value !== "grid";
+            gridSizeField.appendChild(viewportField);
+            var colsField = document.createElement("label");
+            colsField.className = "console-widget-grid-inline console-widget-grid-cols-field console-composite-field-line";
+            colsField.hidden = viewportSelect.value !== "grid";
+            var colsLabel = document.createElement("span");
+            colsLabel.className = "console-composite-field-label";
+            colsLabel.textContent = "Columns";
             var colsInput = document.createElement("input");
             colsInput.type = "number";
             colsInput.min = "1";
@@ -10616,6 +10884,14 @@
             colsInput.className = "console-widget-grid-columns";
             colsInput.setAttribute("data-widget-index", String(widgetIndex));
             colsInput.value = String(widget.gridColumns > 0 ? widget.gridColumns : 2);
+            colsField.appendChild(colsLabel);
+            colsField.appendChild(colsInput);
+            var rowsField = document.createElement("label");
+            rowsField.className = "console-widget-grid-inline console-widget-grid-rows-field console-composite-field-line";
+            rowsField.hidden = viewportSelect.value !== "grid";
+            var rowsLabel = document.createElement("span");
+            rowsLabel.className = "console-composite-field-label";
+            rowsLabel.textContent = "Rows";
             var rowsInput = document.createElement("input");
             rowsInput.type = "number";
             rowsInput.min = "1";
@@ -10623,10 +10899,10 @@
             rowsInput.className = "console-widget-grid-rows";
             rowsInput.setAttribute("data-widget-index", String(widgetIndex));
             rowsInput.value = String(widget.gridRows > 0 ? widget.gridRows : 2);
-            gridSizeField.appendChild(document.createTextNode("Columns "));
-            gridSizeField.appendChild(colsInput);
-            gridSizeField.appendChild(document.createTextNode(" Rows "));
-            gridSizeField.appendChild(rowsInput);
+            rowsField.appendChild(rowsLabel);
+            rowsField.appendChild(rowsInput);
+            gridSizeField.appendChild(colsField);
+            gridSizeField.appendChild(rowsField);
             toolbarRow2.appendChild(gridSizeField);
             toolbar.appendChild(toolbarRow2);
             header.appendChild(toolbar);
@@ -10670,7 +10946,7 @@
                 var addDeviceButton = document.createElement("button");
                 addDeviceButton.type = "button";
                 addDeviceButton.className = "btn btn-secondary btn-inline";
-                addDeviceButton.textContent = "Add binding";
+                addDeviceButton.textContent = "Add cell";
                 addDeviceButton.onclick = (function (storedIndex) {
                     return function () {
                         openConsoleDeviceDialog(storedIndex, -1);
@@ -10787,7 +11063,7 @@
             } else if (binding && binding.automation) {
                 var previewControls = document.createElement("div");
                 previewControls.className = "console-device-row-controls";
-                var previewOn = !!placeAutomationStatusByName[binding.automation];
+                var previewOn = placeAutomationIsActive(binding.automation);
                 if (binding.viewStyle === "icon") {
                     previewControls.appendChild(buildConsoleIconElement(
                         binding,
@@ -11275,18 +11551,75 @@
             return parseInt(channels, 10) || 1;
         }
 
+
+        function normalizeAutomationControl(value) {
+            var text = String(value || "");
+            if (text === "run" || text === "startTimer" || text === "stopTimer" || text === "restartTimer") {
+                return text;
+            }
+            return "enableDisable";
+        }
+
+        function refreshConsoleAutomationControlOptions(preferred) {
+            var controlSelect = document.getElementById("consoleAutomationControl");
+            var automationSelect = document.getElementById("consoleAutomationSelect");
+            if (!controlSelect) {
+                return;
+            }
+            var previous = preferred != null ? preferred : controlSelect.value;
+            var timerUse = false;
+            if (automationSelect && automationSelect.selectedIndex >= 0) {
+                var option = automationSelect.options[automationSelect.selectedIndex];
+                timerUse = !!(option && option.getAttribute("data-timer-use") === "1");
+            }
+            var choices = [
+                { value: "enableDisable", label: "Enable/Disable" },
+                { value: "run", label: "Run" }
+            ];
+            if (timerUse) {
+                choices.push(
+                    { value: "startTimer", label: "Start timer" },
+                    { value: "stopTimer", label: "Stop timer" },
+                    { value: "restartTimer", label: "Restart timer" }
+                );
+            }
+            controlSelect.innerHTML = "";
+            var index;
+            for (index = 0; index < choices.length; index++) {
+                var opt = document.createElement("option");
+                opt.value = choices[index].value;
+                opt.textContent = choices[index].label;
+                controlSelect.appendChild(opt);
+            }
+            controlSelect.value = normalizeAutomationControl(previous);
+            if (!controlSelect.value) {
+                controlSelect.value = "enableDisable";
+            }
+        }
+
         function updateConsoleBindingTargetFields() {
             var target = document.getElementById("consoleBindingTarget");
             var isAutomation = target && target.value === "automation";
             setHidden(document.getElementById("consoleDeviceSelectField"), isAutomation);
             setHidden(document.getElementById("consoleAutomationSelectField"), !isAutomation);
+            setHidden(document.getElementById("consoleAutomationControlField"), !isAutomation);
+            setHidden(document.getElementById("consoleDeviceClickActionSection"), isAutomation);
             if (isAutomation) {
+                refreshConsoleAutomationControlOptions();
                 setHidden(document.getElementById("consoleDeviceChannelField"), true);
                 setHidden(document.getElementById("consoleDeviceParamField"), true);
                 setHidden(document.getElementById("consoleDeviceClusterField"), true);
                 setHidden(document.getElementById("consoleDeviceAttrField"), true);
                 setHidden(document.getElementById("consoleDeviceUnitField"), true);
                 setHidden(document.getElementById("consoleDeviceDecimalsField"), true);
+                consoleDeviceClickActionEnabled = false;
+                consoleDeviceClickActionFalseDraft = null;
+                consoleDeviceClickActionTrueDraft = null;
+                var clickEnable = document.getElementById("consoleDeviceClickActionEnable");
+                if (clickEnable) {
+                    clickEnable.checked = false;
+                }
+                renderConsoleDeviceClickActionEditor();
                 refreshConsoleDeviceGaugeFields();
             } else {
                 refreshConsoleDeviceParamFields();
@@ -11410,7 +11743,8 @@
             { name: "Blue", color: "#1B2FC0" },
             { name: "Yellow", color: "#BBBE13" },
             { name: "Orange", color: "#fb8c00" },
-            { name: "Violet", color: "#2E329E" }
+            { name: "Violet", color: "#2E329E" },
+            { name: "Cyan", color: "#3b82f6" }
         ];
         var consoleColorPickerCloseHandler = null;
 
@@ -11755,10 +12089,10 @@
             var viewStyleSelect = document.getElementById("consoleDeviceViewStyle");
             var gaugeGroup = document.getElementById("consoleDeviceGaugeGroup");
             var iconGroup = document.getElementById("consoleDeviceIconGroup");
-            // Always show View style for device bindings so string/text params keep a Text option.
-            var showViewStyle = !isAutomation && !!device;
+            // Device bindings always; automation bindings get Default/Icon like On/Off.
+            var showViewStyle = isAutomation || !!device;
             var defaultStyleLabel = "Default";
-            if (device && (device.type || "") === "userData"
+            if (!isAutomation && device && (device.type || "") === "userData"
                 && userDataFieldTypeForParam(device, paramValue) === "string") {
                 defaultStyleLabel = "Text";
             }
@@ -12290,11 +12624,16 @@
                     autoOption.textContent = automations[index].title
                         ? (automations[index].title + " (" + automations[index].name + ")")
                         : (automations[index].name || "Automation");
+                    autoOption.setAttribute(
+                        "data-timer-use",
+                        (automations[index].timer && automations[index].timer.use) ? "1" : "0"
+                    );
                     if (binding.automation && binding.automation === automations[index].name) {
                         autoOption.selected = true;
                     }
                     automationSelect.appendChild(autoOption);
                 }
+                refreshConsoleAutomationControlOptions(binding.automationControl);
                 document.getElementById("consoleDeviceTitle").value = binding.title || "";
                 var showTitleCheck = document.getElementById("consoleDeviceShowTitle");
                 if (showTitleCheck) {
@@ -12393,7 +12732,11 @@
                 var loadedFalse = normalizeLoadedClickAction(binding.clickActionFalse);
                 var loadedTrue = normalizeLoadedClickAction(binding.clickActionTrue);
                 var loadedLegacy = normalizeLoadedClickAction(binding.clickAction);
-                if (loadedFalse || loadedTrue || loadedLegacy) {
+                if (targetSelect.value === "automation") {
+                    consoleDeviceClickActionEnabled = false;
+                    consoleDeviceClickActionFalseDraft = null;
+                    consoleDeviceClickActionTrueDraft = null;
+                } else if (loadedFalse || loadedTrue || loadedLegacy) {
                     consoleDeviceClickActionEnabled = true;
                     consoleDeviceClickActionFalseDraft = loadedFalse
                         || (loadedLegacy ? cloneAutomationActionObject(loadedLegacy) : null)
@@ -12566,10 +12909,17 @@
             if (target && target.value === "automation") {
                 var automationSelect = document.getElementById("consoleAutomationSelect");
                 var automationName = automationSelect ? automationSelect.value : "";
+                var automationControlSelect = document.getElementById("consoleAutomationControl");
                 var automationBody = {
                     automation: automationName,
-                    title: title || automationName
+                    title: title || automationName,
+                    automationControl: normalizeAutomationControl(
+                        automationControlSelect ? automationControlSelect.value : "enableDisable"
+                    )
                 };
+                if (automationBody.automationControl === "enableDisable") {
+                    delete automationBody.automationControl;
+                }
                 if (viewStyleSelect && viewStyleSelect.value === "icon") {
                     automationBody.viewStyle = "icon";
                     automationBody.icon = normalizeMdiIconId(consoleDeviceIconDraft);
@@ -12577,7 +12927,8 @@
                     automationBody.viewStyle = "default";
                 }
                 automationBody = applyDialogLayoutFieldsToBody(automationBody);
-                return applyClickActionsToBindingBody(automationBody);
+                // Automation bindings do not support click actions.
+                return automationBody;
             }
             var deviceSelect = document.getElementById("consoleDeviceSelect");
             var channelSelect = document.getElementById("consoleDeviceChannel");
@@ -12944,6 +13295,10 @@
                 closeDeleteConfirmDialog();
                 return true;
             }
+            if (dialogId === "appConfirmDialog") {
+                closeAppConfirmDialog();
+                return true;
+            }
             if (dialogId === "rebootConfirmFirstDialog") {
                 closeRebootConfirmFirst();
                 return true;
@@ -13056,9 +13411,8 @@
         <button type="button" class="sidebar-btn" data-section="automation" onclick="showMainSection('automation')">Automation</button>
         <button type="button" class="sidebar-btn" data-section="consoles" onclick="showMainSection('consoles')">Consoles</button>
         <button type="button" class="sidebar-btn" data-section="security" onclick="showMainSection('security')">Security</button>
-        <button type="button" class="sidebar-btn" data-section="appearance" onclick="showMainSection('appearance')">Appearance</button>
         <button type="button" class="sidebar-btn" data-section="system" onclick="showMainSection('system')">System</button>
-        <button type="button" class="sidebar-btn sidebar-signout" onclick="openSignOutConfirm()">Sign out</button>
+        <button type="button" class="sidebar-btn sidebar-account" data-section="account" id="sidebarAccountBtn" onclick="showMainSection('account')">Account</button>
     </nav>
     <div class="main-panel">
         <section id="section-status" class="section-panel active" aria-label="Status">
@@ -13397,8 +13751,8 @@
             </div>
         </section>
 
-        <section id="section-appearance" class="section-panel" aria-label="Appearance">
-            <h2 class="section-title">Appearance</h2>
+        <section id="section-account" class="section-panel" aria-label="Account">
+            <h2 class="section-title" id="accountSectionTitle">Account</h2>
             <div class="settings-scroll">
                 <p id="themeSaveError" class="save-error" hidden></p>
                 <div class="field">
@@ -13410,6 +13764,9 @@
                         </select>
                         <button type="button" class="btn btn-primary" onclick="saveTheme()">Save</button>
                     </div>
+                </div>
+                <div class="field" style="margin-top:1rem;">
+                    <button type="button" class="btn btn-secondary" onclick="openSignOutConfirm()">Sign out</button>
                 </div>
             </div>
         </section>
@@ -13814,6 +14171,17 @@
             </div>
         </div>
 
+        <div id="appConfirmDialog" class="dialog-overlay dialog-overlay-front" hidden>
+            <div class="dialog-panel" role="dialog" aria-label="Confirm">
+                <h3 id="appConfirmTitle" class="upload-title">Confirm</h3>
+                <p id="appConfirmDetail" class="field-hint">Are you sure?</p>
+                <div class="dialog-actions">
+                    <button type="button" id="appConfirmOk" class="btn btn-primary" onclick="confirmAppConfirmDialog()">OK</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeAppConfirmDialog()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
         <div id="settingsRestoreConfirmDialog" class="dialog-overlay dialog-overlay-front" hidden>
             <div class="dialog-panel" role="dialog" aria-label="Confirm restore settings">
                 <h3 class="upload-title">Restore settings</h3>
@@ -14063,7 +14431,11 @@
                 </div>
                 <div id="consoleAutomationSelectField" class="console-binding-general-row" hidden>
                     <label for="consoleAutomationSelect">Automation</label>
-                    <select id="consoleAutomationSelect"></select>
+                    <select id="consoleAutomationSelect" onchange="refreshConsoleAutomationControlOptions();"></select>
+                </div>
+                <div id="consoleAutomationControlField" class="console-binding-general-row" hidden>
+                    <label for="consoleAutomationControl">Control</label>
+                    <select id="consoleAutomationControl"></select>
                 </div>
                 <div id="consoleDeviceChannelField" class="console-binding-general-row" hidden>
                     <label for="consoleDeviceChannel">Channel</label>

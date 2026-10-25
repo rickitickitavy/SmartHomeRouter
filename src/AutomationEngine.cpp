@@ -392,16 +392,22 @@ void AutomationEngine::applyAction(const AutomationAction *action) {
             store->stopTimer(target);
             break;
         case AutomationOpStartTimer:
-            if (!target->timer.use) {
+            if (!target->active || !target->timer.use) {
                 return;
             }
             store->startTimer(target, action->hasStartTime ? action->startTime : 0);
             break;
         case AutomationOpRestartTimer:
-            if (!target->timer.use) {
+            if (!target->active || !target->timer.use) {
                 return;
             }
             store->restartTimer(target, action->hasStartTime ? action->startTime : 0);
+            break;
+        case AutomationOpRun:
+            if (!target->active) {
+                return;
+            }
+            runActions(target);
             break;
         default:
             break;
@@ -409,7 +415,7 @@ void AutomationEngine::applyAction(const AutomationAction *action) {
 }
 
 void AutomationEngine::runActions(AutomationRecord *automation) {
-    if (automation == nullptr || actionDepth >= 4) {
+    if (automation == nullptr || !automation->active || actionDepth >= 4) {
         return;
     }
     actionDepth++;

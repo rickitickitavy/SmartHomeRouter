@@ -588,6 +588,7 @@ const char *AutomationStore::automationOpToText(AutomationAutomationOp op) {
         case AutomationOpStopTimer: return "STOP TIMER";
         case AutomationOpStartTimer: return "START TIMER";
         case AutomationOpRestartTimer: return "RESTART TIMER";
+        case AutomationOpRun: return "RUN";
         case AutomationOpEnable:
         default: return "ENABLE";
     }
@@ -615,6 +616,10 @@ bool AutomationStore::automationOpFromText(const char *text, AutomationAutomatio
     }
     if (strcmp(text, "RESTART TIMER") == 0) {
         op = AutomationOpRestartTimer;
+        return true;
+    }
+    if (strcmp(text, "RUN") == 0) {
+        op = AutomationOpRun;
         return true;
     }
     return false;
@@ -1720,7 +1725,7 @@ void AutomationStore::stopTimer(AutomationRecord *automation) {
 }
 
 bool AutomationStore::startTimer(AutomationRecord *automation, uint32_t secondsOrZero) {
-    if (automation == nullptr || !automation->timer.use) {
+    if (automation == nullptr || !automation->active || !automation->timer.use) {
         return false;
     }
     uint32_t seconds = secondsOrZero;

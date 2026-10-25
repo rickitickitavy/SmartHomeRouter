@@ -481,6 +481,37 @@ bool ConsoleStore::persistNow() {
     return true;
 }
 
+
+static uint8_t parseAutomationControlId(const char *text) {
+    if (text == nullptr || text[0] == '\0') {
+        return CONSOLE_AUTO_CTRL_ENABLE_DISABLE;
+    }
+    if (strcmp(text, "run") == 0) {
+        return CONSOLE_AUTO_CTRL_RUN;
+    }
+    if (strcmp(text, "startTimer") == 0) {
+        return CONSOLE_AUTO_CTRL_START_TIMER;
+    }
+    if (strcmp(text, "stopTimer") == 0) {
+        return CONSOLE_AUTO_CTRL_STOP_TIMER;
+    }
+    if (strcmp(text, "restartTimer") == 0) {
+        return CONSOLE_AUTO_CTRL_RESTART_TIMER;
+    }
+    return CONSOLE_AUTO_CTRL_ENABLE_DISABLE;
+}
+
+static const char *automationControlJsonId(uint8_t value) {
+    switch (value) {
+        case CONSOLE_AUTO_CTRL_RUN: return "run";
+        case CONSOLE_AUTO_CTRL_START_TIMER: return "startTimer";
+        case CONSOLE_AUTO_CTRL_STOP_TIMER: return "stopTimer";
+        case CONSOLE_AUTO_CTRL_RESTART_TIMER: return "restartTimer";
+        case CONSOLE_AUTO_CTRL_ENABLE_DISABLE:
+        default: return "enableDisable";
+    }
+}
+
 bool ConsoleStore::parseGaugeConfig(const char *bindingJson, ConsoleBinding *binding) {
     if (bindingJson == nullptr || binding == nullptr) {
         return false;
@@ -683,6 +714,8 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         if (automationName.length() == 0) {
             extractJsonString(object.c_str(), "automationName", automationName);
         }
+        String automationControlText;
+        extractJsonString(object.c_str(), "automationControl", automationControlText);
         extractJsonString(object.c_str(), "ieee", ieeeText);
         if (ieeeText.length() == 0) {
             extractJsonString(object.c_str(), "deviceIeee", ieeeText);
@@ -760,6 +793,9 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         binding->automationName = isAutomation
             ? duplicateBoundedString(automationName.c_str(), AUTOMATION_NAME_MAX - 1)
             : nullptr;
+        binding->automationControl = isAutomation
+            ? parseAutomationControlId(automationControlText.c_str())
+            : CONSOLE_AUTO_CTRL_ENABLE_DISABLE;
         binding->title = duplicateBoundedString(title.c_str(), CONSOLE_BINDING_TITLE_MAX - 1);
         binding->unit = duplicateBoundedString(unit.c_str(), CONSOLE_UNIT_MAX - 1);
         binding->param = (!isAutomation && paramText.length() > 0)
@@ -1534,6 +1570,11 @@ void ConsoleStore::appendOneBindingJson(String &json, const ConsoleBinding *bind
                 appendJsonEscaped(json, binding->icon, CONSOLE_ICON_MAX);
                 json += "\"";
             }
+        }
+        if (binding->automationControl != CONSOLE_AUTO_CTRL_ENABLE_DISABLE) {
+            json += ",\"automationControl\":\"";
+            json += automationControlJsonId(binding->automationControl);
+            json += "\"";
         }
         appendBindingLayoutJson(json, binding);
     } else {

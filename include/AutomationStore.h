@@ -42,7 +42,8 @@ enum AutomationAutomationOp : uint8_t {
     AutomationOpDisable = 1,
     AutomationOpStopTimer = 2,
     AutomationOpStartTimer = 3,
-    AutomationOpRestartTimer = 4
+    AutomationOpRestartTimer = 4,
+    AutomationOpRun = 5
 };
 
 struct AutomationTimer {

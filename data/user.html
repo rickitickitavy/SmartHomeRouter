@@ -22,6 +22,7 @@
 
         var assignedConsoles = [];
         var activeConsoleIndex = 0;
+        var showingAccountTab = false;
         var registeredDeviceRows = [];
         var automationStatusByName = {};
         var LIVE_WS_PING_MS = 15000;
@@ -288,17 +289,103 @@
         }
 
         function selectConsoleTab(index) {
+            showingAccountTab = false;
             activeConsoleIndex = index;
             renderConsoleTabs();
         }
 
-        function appendUserConsoleSignOutTab(tabsHost) {
-            var signOutButton = document.createElement("button");
-            signOutButton.type = "button";
-            signOutButton.className = "tab-btn user-console-signout-tab";
-            signOutButton.textContent = "Sign out";
-            signOutButton.onclick = openSignOutConfirm;
-            tabsHost.appendChild(signOutButton);
+        function selectAccountTab() {
+            showingAccountTab = true;
+            renderConsoleTabs();
+        }
+
+        function fillUserAccountPanel(panelsHost) {
+            var userLabel = (signedInUser && (signedInUser.userName || signedInUser.name)) || "Account";
+            panelsHost.innerHTML = "";
+            var panel = document.createElement("div");
+            panel.className = "tab-content user-console-tab";
+            var title = document.createElement("h2");
+            title.className = "section-title";
+            title.textContent = userLabel;
+            panel.appendChild(title);
+            var err = document.createElement("p");
+            err.className = "save-error";
+            err.id = "userThemeSaveError";
+            err.hidden = true;
+            panel.appendChild(err);
+            var field = document.createElement("div");
+            field.className = "field";
+            var label = document.createElement("label");
+            label.setAttribute("for", "userUiTheme");
+            label.textContent = "Theme";
+            field.appendChild(label);
+            var row = document.createElement("div");
+            row.className = "theme-control-row";
+            var select = document.createElement("select");
+            select.id = "userUiTheme";
+            [["light", "Light"], ["dark", "Dark"]].forEach(function (pair) {
+                var option = document.createElement("option");
+                option.value = pair[0];
+                option.textContent = pair[1];
+                select.appendChild(option);
+            });
+            select.value = normalizeThemeId(signedInUser && signedInUser.theme);
+            select.onchange = function () {
+                applyThemeToDocument(select.value);
+            };
+            var saveBtn = document.createElement("button");
+            saveBtn.type = "button";
+            saveBtn.className = "btn btn-primary";
+            saveBtn.textContent = "Save";
+            saveBtn.onclick = function () {
+                var themeId = normalizeThemeId(select.value);
+                applyThemeToDocument(themeId);
+                fetch("/api/theme", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ theme: themeId })
+                }).then(function (response) {
+                    if (!response.ok) {
+                        throw new Error("theme save failed");
+                    }
+                    if (signedInUser) {
+                        signedInUser.theme = themeId;
+                    }
+                    err.hidden = true;
+                }).catch(function () {
+                    err.hidden = false;
+                    err.textContent = "Could not save theme";
+                });
+            };
+            row.appendChild(select);
+            row.appendChild(saveBtn);
+            field.appendChild(row);
+            panel.appendChild(field);
+            var signOutWrap = document.createElement("div");
+            signOutWrap.className = "field";
+            signOutWrap.style.marginTop = "1rem";
+            var signOutBtn = document.createElement("button");
+            signOutBtn.type = "button";
+            signOutBtn.className = "btn btn-secondary";
+            signOutBtn.textContent = "Sign out";
+            signOutBtn.onclick = openSignOutConfirm;
+            signOutWrap.appendChild(signOutBtn);
+            panel.appendChild(signOutWrap);
+            panelsHost.appendChild(panel);
+            panelsHost.hidden = false;
+        }
+
+        function appendUserConsoleAccountTab(tabsHost) {
+            var userLabel = (signedInUser && (signedInUser.userName || signedInUser.name)) || "Account";
+            var accountButton = document.createElement("button");
+            accountButton.type = "button";
+            accountButton.className = "tab-btn user-console-signout-tab"
+                + (showingAccountTab ? " active" : "");
+            accountButton.textContent = userLabel;
+            accountButton.onclick = function () {
+                selectAccountTab();
+            };
+            tabsHost.appendChild(accountButton);
         }
 
         function renderConsoleTabs() {
@@ -310,25 +397,13 @@
             }
             tabsHost.innerHTML = "";
             panelsHost.innerHTML = "";
-            if (!assignedConsoles.length) {
-                tabsHost.hidden = false;
-                panelsHost.hidden = true;
-                if (emptyState) {
-                    emptyState.hidden = false;
-                }
-                appendUserConsoleSignOutTab(tabsHost);
-                return;
-            }
             tabsHost.hidden = false;
-            panelsHost.hidden = false;
-            if (emptyState) {
-                emptyState.hidden = true;
-            }
             var tabIndex;
             for (tabIndex = 0; tabIndex < assignedConsoles.length; tabIndex++) {
                 var tabButton = document.createElement("button");
                 tabButton.type = "button";
-                tabButton.className = "tab-btn" + (tabIndex === activeConsoleIndex ? " active" : "");
+                tabButton.className = "tab-btn"
+                    + ((!showingAccountTab && tabIndex === activeConsoleIndex) ? " active" : "");
                 tabButton.textContent = assignedConsoles[tabIndex].name || "Console";
                 tabButton.onclick = (function (storedIndex) {
                     return function () {
@@ -337,7 +412,25 @@
                 })(tabIndex);
                 tabsHost.appendChild(tabButton);
             }
-            appendUserConsoleSignOutTab(tabsHost);
+            appendUserConsoleAccountTab(tabsHost);
+            if (showingAccountTab) {
+                if (emptyState) {
+                    emptyState.hidden = true;
+                }
+                fillUserAccountPanel(panelsHost);
+                return;
+            }
+            if (!assignedConsoles.length) {
+                panelsHost.hidden = true;
+                if (emptyState) {
+                    emptyState.hidden = false;
+                }
+                return;
+            }
+            panelsHost.hidden = false;
+            if (emptyState) {
+                emptyState.hidden = true;
+            }
             var panel = document.createElement("div");
             panel.className = "tab-content user-console-tab";
             renderConsoleGrid(panel, assignedConsoles[activeConsoleIndex]);
@@ -356,13 +449,62 @@
                 var index;
                 for (index = 0; index < list.length; index++) {
                     if (list[index] && list[index].name) {
-                        map[list[index].name] = !!list[index].active;
+                        map[list[index].name] = {
+                            active: !!list[index].active,
+                            timerUse: !!(list[index].timer && list[index].timer.use)
+                        };
                     }
                 }
                 automationStatusByName = map;
             }).catch(function () {
                 automationStatusByName = {};
             });
+        }
+
+        function normalizeAutomationControl(value) {
+            var text = String(value || "");
+            if (text === "run" || text === "startTimer" || text === "stopTimer" || text === "restartTimer") {
+                return text;
+            }
+            return "enableDisable";
+        }
+
+        function automationIsActive(name) {
+            var entry = automationStatusByName[name];
+            if (entry && typeof entry === "object") {
+                return !!entry.active;
+            }
+            return !!entry;
+        }
+
+        function runAutomationControl(name, mode) {
+            var op = "RUN";
+            if (mode === "startTimer") {
+                op = "START TIMER";
+            } else if (mode === "stopTimer") {
+                op = "STOP TIMER";
+            } else if (mode === "restartTimer") {
+                op = "RESTART TIMER";
+            }
+            return fetch("/api/consoles/run-action", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ target: "automation", name: name, op: op })
+            }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error("automation control failed");
+                }
+            });
+        }
+
+        function flashAutomationIcon(iconEl) {
+            if (!iconEl) {
+                return;
+            }
+            iconEl.classList.add("is-action-flash");
+            window.setTimeout(function () {
+                iconEl.classList.remove("is-action-flash");
+            }, 600);
         }
 
         function setAutomationActive(name, active) {
@@ -374,7 +516,12 @@
                 if (!response.ok) {
                     throw new Error("active update failed");
                 }
-                automationStatusByName[name] = !!active;
+                var prev = automationStatusByName[name];
+                if (prev && typeof prev === "object") {
+                    prev.active = !!active;
+                } else {
+                    automationStatusByName[name] = { active: !!active, timerUse: false };
+                }
             });
         }
 
@@ -779,9 +926,12 @@
             if (interactive) {
                 wrap.type = "button";
             }
+            var toneClass = iconOptions.actionControl
+                ? (isBinaryStateOn(stateText) ? " is-action-ready" : " is-action-idle-off")
+                : (isBinaryStateOn(stateText) ? " is-on" : " is-off");
             wrap.className = "console-binary-icon"
                 + (interactive ? " console-binary-icon--control" : "")
-                + (isBinaryStateOn(stateText) ? " is-on" : " is-off")
+                + toneClass
                 + (iconOptions.disabled ? " is-disabled" : "");
             wrap.style.setProperty("--console-icon-scale", String(normalizeIconScale(binding && binding.iconScale)));
             wrap.title = stateText ? String(stateText) : iconId;
@@ -2099,7 +2249,11 @@
             if (binding && binding.automation) {
                 var automationName = binding.automation;
                 var known = Object.prototype.hasOwnProperty.call(automationStatusByName, automationName);
-                var automationOn = known && !!automationStatusByName[automationName];
+                var automationOn = known && automationIsActive(automationName);
+                var controlMode = normalizeAutomationControl(binding.automationControl);
+                if (!automationOn) {
+                    row.classList.add("is-automation-inactive");
+                }
                 var automationToggle = (function (name, currentlyOn) {
                     return function () {
                         setAutomationActive(name, !currentlyOn).then(function () {
@@ -2109,17 +2263,64 @@
                         });
                     };
                 })(automationName, automationOn);
+                var actionLabel = controlMode === "run" ? "Run"
+                    : (controlMode === "startTimer" ? "Start timer"
+                        : (controlMode === "stopTimer" ? "Stop timer"
+                            : (controlMode === "restartTimer" ? "Restart timer" : "Automation on off")));
                 var autoClick = useCustomClick
                     ? makeBindingClickActionHandler(binding, automationOn)
-                    : (known ? automationToggle : null);
-                if (binding.viewStyle === "icon") {
+                    : null;
+                if (!autoClick && known && controlMode === "enableDisable") {
+                    autoClick = automationToggle;
+                } else if (!autoClick && known && controlMode !== "enableDisable") {
+                    autoClick = (function (name, mode) {
+                        return function (event) {
+                            var iconTarget = event && event.currentTarget;
+                            var canFlash = automationIsActive(name);
+                            runAutomationControl(name, mode).then(function () {
+                                if (canFlash) {
+                                    flashAutomationIcon(iconTarget);
+                                }
+                                refreshConsoleControls();
+                            }).catch(function () {
+                                refreshConsoleControls();
+                            });
+                        };
+                    })(automationName, controlMode);
+                }
+                if (controlMode !== "enableDisable" && !useCustomClick) {
+                    if (binding.viewStyle === "icon") {
+                        controls.appendChild(buildConsoleIconElement(
+                            binding,
+                            automationOn ? "ON" : "OFF",
+                            {
+                                interactive: true,
+                                actionControl: true,
+                                disabled: !known,
+                                ariaLabel: actionLabel,
+                                onclick: autoClick
+                            }
+                        ));
+                    } else {
+                        var actionBtn = document.createElement("button");
+                        actionBtn.type = "button";
+                        actionBtn.className = "btn btn-secondary btn-inline";
+                        actionBtn.textContent = actionLabel;
+                        actionBtn.disabled = !known;
+                        if (autoClick) {
+                            actionBtn.onclick = autoClick;
+                        }
+                        controls.appendChild(actionBtn);
+                    }
+                } else if (binding.viewStyle === "icon") {
                     controls.appendChild(buildConsoleIconElement(
                         binding,
                         automationOn ? "ON" : "OFF",
                         {
                             interactive: true,
+                            actionControl: controlMode !== "enableDisable",
                             disabled: !useCustomClick && !known,
-                            ariaLabel: useCustomClick ? "Run click action" : "Automation on off",
+                            ariaLabel: useCustomClick ? "Run click action" : actionLabel,
                             onclick: autoClick
                         }
                     ));
