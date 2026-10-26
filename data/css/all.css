@@ -241,13 +241,21 @@ html, body {
     gap: var(--gap);
 }
 
-.status-online-time {
+.status-col-1 {
     grid-column: 1;
 }
 
-.status-memory-group {
+.status-col-2 {
     grid-column: 2;
-    grid-row: 1 / span 2;
+}
+
+.status-stack-single {
+    grid-template-columns: minmax(0, 24rem);
+}
+
+.status-stack-single .status-col-1,
+.status-stack-single .status-col-2 {
+    grid-column: 1;
 }
 
 .status-online-time,
@@ -3911,9 +3919,9 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
         grid-template-columns: minmax(0, 24rem);
     }
 
-    .status-memory-group {
+    .status-col-1,
+    .status-col-2 {
         grid-column: 1;
-        grid-row: auto;
     }
 }
 

@@ -421,6 +421,10 @@ void WebConsole::loop() {
     consolesSocket.cleanupClients();
 }
 
+int WebConsole::activeWebSocketCount() const {
+    return (int)devicesSocket.count() + (int)consolesSocket.count();
+}
+
 void WebConsole::handleLiveSocketEvent(
     AsyncWebSocket *socket,
     AsyncWebSocketClient *client,

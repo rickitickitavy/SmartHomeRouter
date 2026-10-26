@@ -24,6 +24,10 @@ public:
     void pumpNetwork();
     void reloadFromSettings();
     bool isConnected() const;
+    void notePacketReceived();
+    void notePacketSent();
+    uint32_t packetsReceived() const { return packetsRx; }
+    uint32_t packetsSent() const { return packetsTx; }
     void publishStatus(const char *payload);
     void publishDevices(const String &json);
     void publishDeviceState(const DeviceTopicEntry *entry, const char *message, uint8_t endpoint);
@@ -80,6 +84,8 @@ private:
     String topicServerBorn;
     String lastDevicesJson;
     TopicSubscription *subscriptionHead = nullptr;
+    uint32_t packetsRx = 0;
+    uint32_t packetsTx = 0;
 
     void rebuildTopics();
     bool usesLocalBroker() const;

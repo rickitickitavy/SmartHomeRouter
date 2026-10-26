@@ -306,7 +306,6 @@ static void pumpWifiDeviceCommands() {
             LOGGER.warning("WiFi command publish failed");
             continue;
         }
-        ZIGBEE_SPI_PROXY.notePacketSent();
         // Drain MQTT I/O between automation/action bursts so a tight queue flush
         // does not fill the TCP send buffer and fail later publishes.
         mqttClient->pumpNetwork();
@@ -572,7 +571,9 @@ static void applyWifiMqttState(const char *topic, const char *payload) {
         LOGGER.info("WiFi state " + String(topic) + " = " + body);
     }
     ZIGBEE_SPI_PROXY.noteMqttState(entry->ieee, statusEndpoint, body.c_str());
-    ZIGBEE_SPI_PROXY.notePacketReceived();
+    if (mqttClient != nullptr) {
+        mqttClient->notePacketReceived();
+    }
 }
 
 static bool wifiAvailabilityIsOffline(const String &body) {
@@ -608,7 +609,9 @@ static void applyWifiMqttAvailability(const char *topic, const char *payload) {
             LOGGER.info("WiFi availability " + String(topic) + " = " + body);
         }
         ZIGBEE_SPI_PROXY.noteSeen(entry->ieee);
-        ZIGBEE_SPI_PROXY.notePacketReceived();
+        if (mqttClient != nullptr) {
+            mqttClient->notePacketReceived();
+        }
     }
 }
 
@@ -705,8 +708,8 @@ static void onMqttLogicalMessage(const char *topic, const char *payload) {
     }
     if (entry->transport == DeviceTransportMqtt) {
         uint8_t stateEndpoint = 0;
-        if (findWifiStateEntry(topic, &stateEndpoint) == nullptr) {
-            ZIGBEE_SPI_PROXY.notePacketReceived();
+        if (findWifiStateEntry(topic, &stateEndpoint) == nullptr && mqttClient != nullptr) {
+            mqttClient->notePacketReceived();
         }
     }
     applyRegisteredDeviceCommand(entry, payload, topicEndpoint);
@@ -797,18 +800,33 @@ static bool hostLastDeviceRssi(const uint8_t ieee[8], int8_t *rssiDbm) {
 
 #if defined(BOARD_ROLE_HOST)
 static String hostGatewayStatusJson() {
-    int registeredCount = topicMap != nullptr ? topicMap->usedCount() : 0;
-    int onlineCount = 0;
+    int zigbeeDevices = 0;
+    int zigbeeOnline = 0;
+    int mqttDevices = 0;
+    int mqttOnline = 0;
     if (topicMap != nullptr) {
         int slotIndex = topicMap->nextUsedIndex(0);
         while (slotIndex >= 0) {
             DeviceTopicEntry *entry = topicMap->slotAt(slotIndex);
-            if (entry != nullptr && ZIGBEE_SPI_PROXY.isOnline(entry->ieee)) {
-                onlineCount++;
+            if (entry != nullptr) {
+                const bool deviceOnline = ZIGBEE_SPI_PROXY.isOnline(entry->ieee);
+                if (clampDeviceTransport(entry->transport) == DeviceTransportMqtt) {
+                    mqttDevices++;
+                    if (deviceOnline) {
+                        mqttOnline++;
+                    }
+                } else {
+                    zigbeeDevices++;
+                    if (deviceOnline) {
+                        zigbeeOnline++;
+                    }
+                }
             }
             slotIndex = topicMap->nextUsedIndex(slotIndex + 1);
         }
     }
+    const int registeredCount = zigbeeDevices + mqttDevices;
+    const int onlineCount = zigbeeOnline + mqttOnline;
     const GlobalSettings *globalSettings = settingsManager != nullptr ? settingsManager->getSettings() : nullptr;
     const MqttServerType mqttServerType =
         globalSettings != nullptr ? globalSettings->mqtt.serverType : MqttServerTypeDisable;
@@ -817,11 +835,14 @@ static String hostGatewayStatusJson() {
     const bool mqttClientConnected = mqttClient != nullptr && mqttClient->isConnected();
     int mqttTopicCount = topicMap != nullptr ? topicMap->uniqueMqttTopicCount() : 0;
     int mqttConnectionCount = 0;
+    int mqttInboundConnections = 0;
+    const int mqttOutboundConnections = mqttClientConnected ? 1 : 0;
     if (mqttServerType == MqttServerTypeLocal) {
         if (mqttBroker != nullptr && mqttBroker->isListening()) {
             mqttLocalStatus = "listening";
             mqttStatus = "listening";
-            mqttConnectionCount = mqttBroker->connectionCount();
+            mqttInboundConnections = mqttBroker->connectionCount();
+            mqttConnectionCount = mqttInboundConnections;
             if (mqttClientConnected) {
                 mqttConnectionCount++;
             }
@@ -837,6 +858,11 @@ static String hostGatewayStatusJson() {
     } else {
         mqttStatus = "off";
     }
+    const int webActiveConnections = webConsole != nullptr ? webConsole->activeWebSocketCount() : 0;
+    const int totalInboundConnections = webActiveConnections + mqttInboundConnections;
+    const int totalOutboundConnections = mqttOutboundConnections;
+    const uint32_t mqttPacketsRx = mqttClient != nullptr ? mqttClient->packetsReceived() : 0;
+    const uint32_t mqttPacketsTx = mqttClient != nullptr ? mqttClient->packetsSent() : 0;
 
     const char *wifiModeText = "AP";
     wifi_mode_t radioMode = WiFi.getMode();
@@ -854,10 +880,22 @@ static String hostGatewayStatusJson() {
     json += String(registeredCount);
     json += ",\"online\":";
     json += String(onlineCount);
+    json += ",\"zigbeeDevices\":";
+    json += String(zigbeeDevices);
+    json += ",\"zigbeeOnline\":";
+    json += String(zigbeeOnline);
+    json += ",\"mqttDevices\":";
+    json += String(mqttDevices);
+    json += ",\"mqttOnline\":";
+    json += String(mqttOnline);
     json += ",\"packetsRx\":";
     json += String((unsigned long)ZIGBEE_SPI_PROXY.packetsReceived());
     json += ",\"packetsTx\":";
     json += String((unsigned long)ZIGBEE_SPI_PROXY.packetsSent());
+    json += ",\"mqttPacketsRx\":";
+    json += String((unsigned long)mqttPacketsRx);
+    json += ",\"mqttPacketsTx\":";
+    json += String((unsigned long)mqttPacketsTx);
     json += ",\"version\":\"";
     json += FIRMWARE_VERSION;
     json += "\",\"masterVersion\":\"";
@@ -878,6 +916,16 @@ static String hostGatewayStatusJson() {
     json += String(mqttTopicCount);
     json += ",\"mqttConnectionCount\":";
     json += String(mqttConnectionCount);
+    json += ",\"webActiveConnections\":";
+    json += String(webActiveConnections);
+    json += ",\"mqttInboundConnections\":";
+    json += String(mqttInboundConnections);
+    json += ",\"mqttOutboundConnections\":";
+    json += String(mqttOutboundConnections);
+    json += ",\"totalInboundConnections\":";
+    json += String(totalInboundConnections);
+    json += ",\"totalOutboundConnections\":";
+    json += String(totalOutboundConnections);
     json += ",\"wifiMode\":\"";
     json += wifiModeText;
     json += "\",\"wifiBssid\":\"";
