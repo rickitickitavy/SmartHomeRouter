@@ -884,23 +884,26 @@
             return normalizeIconAlign(binding && binding.iconAlign);
         }
 
-        function applyBindingTitleLayout(row, binding) {
+        function applyBindingTitleLayout(row, binding, layoutOptions) {
             if (!row) {
                 return;
             }
             var showTitle = bindingShowsTitle(binding);
             var alignH = bindingContentAlignH(binding);
             var alignV = normalizeAlignV(binding && binding.alignV);
+            var applyAlignH = !showTitle || !!(layoutOptions && layoutOptions.alignHWithTitle);
             if (!showTitle) {
                 row.classList.add("console-device-row--no-title");
-                row.classList.add("console-device-row--align-h-" + alignH);
-                if (binding && binding.viewStyle === "icon") {
-                    row.classList.add("console-device-row--icon-align-" + alignH);
-                }
             } else {
                 row.classList.add(
                     "console-device-row--title-" + normalizeTitlePosition(binding && binding.titlePosition)
                 );
+            }
+            if (applyAlignH) {
+                row.classList.add("console-device-row--align-h-" + alignH);
+                if (binding && binding.viewStyle === "icon") {
+                    row.classList.add("console-device-row--icon-align-" + alignH);
+                }
             }
             row.classList.add("console-device-row--align-v-" + alignV);
         }
@@ -1285,8 +1288,11 @@
                 applyWidgetViewportListClass(list, widget);
                 var bindings = widget.devices || [];
                 var bindingIndex;
+                var userLayoutOpts = widget.viewport === "grid"
+                    ? { alignHWithTitle: true }
+                    : null;
                 for (bindingIndex = 0; bindingIndex < bindings.length; bindingIndex++) {
-                    list.appendChild(buildBindingRow(bindings[bindingIndex]));
+                    list.appendChild(buildBindingRow(bindings[bindingIndex], userLayoutOpts));
                 }
                 card.appendChild(list);
             }
@@ -2233,7 +2239,7 @@
             };
         }
 
-        function buildBindingRow(binding) {
+        function buildBindingRow(binding, layoutOptions) {
             var row = document.createElement("div");
             if (binding && binding.spacer) {
                 row.className = "console-device-row console-device-row--empty";
@@ -2241,7 +2247,7 @@
                 return row;
             }
             row.className = "console-device-row";
-            applyBindingTitleLayout(row, binding);
+            applyBindingTitleLayout(row, binding, layoutOptions || null);
             appendBindingTitleElement(row, binding, "Device");
             var controls = document.createElement("div");
             controls.className = "console-device-row-controls";

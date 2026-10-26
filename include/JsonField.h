@@ -81,26 +81,40 @@ inline const char *findJsonKeyAtRootDepth(const char *json, const char *key) {
 }
 
 inline bool extractJsonString(const char *json, const char *key, String &out) {
+    if (json == nullptr || key == nullptr || key[0] == '\0') {
+        return false;
+    }
     String pattern = String("\"") + key + "\"";
-    const char *found = strstr(json, pattern.c_str());
-    if (found == nullptr) {
-        return false;
+    const size_t patternLength = pattern.length();
+    const char *searchFrom = json;
+    while (searchFrom != nullptr && *searchFrom != '\0') {
+        const char *found = strstr(searchFrom, pattern.c_str());
+        if (found == nullptr) {
+            return false;
+        }
+        const char *afterKey = found + patternLength;
+        while (*afterKey == ' ' || *afterKey == '\t' || *afterKey == '\n' || *afterKey == '\r') {
+            afterKey++;
+        }
+        // Require `"key":` so a string *value* equal to the key (e.g. "content":"text")
+        // is not treated as the key — otherwise the next field's value is stolen.
+        if (*afterKey != ':') {
+            searchFrom = found + 1;
+            continue;
+        }
+        const char *quote = strchr(afterKey, '"');
+        if (quote == nullptr) {
+            return false;
+        }
+        quote++;
+        const char *end = strchr(quote, '"');
+        if (end == nullptr) {
+            return false;
+        }
+        out = String(quote).substring(0, (unsigned int)(end - quote));
+        return true;
     }
-    const char *colon = strchr(found + pattern.length(), ':');
-    if (colon == nullptr) {
-        return false;
-    }
-    const char *quote = strchr(colon, '"');
-    if (quote == nullptr) {
-        return false;
-    }
-    quote++;
-    const char *end = strchr(quote, '"');
-    if (end == nullptr) {
-        return false;
-    }
-    out = String(quote).substring(0, (unsigned int)(end - quote));
-    return true;
+    return false;
 }
 
 inline bool extractJsonStringRoot(const char *json, const char *key, String &out) {
