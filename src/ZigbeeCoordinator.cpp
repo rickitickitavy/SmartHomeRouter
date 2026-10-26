@@ -5,6 +5,7 @@
 #include "StatusRgb.h"
 #include "ZigbeeCluster.h"
 
+#include <esp_zigbee_core.h>
 #include <nwk/esp_zigbee_nwk.h>
 #include <zdo/esp_zigbee_zdo_command.h>
 #include <math.h>
@@ -19,6 +20,7 @@ extern "C" {
 #include "zcl/esp_zigbee_zcl_power_config.h"
 
 static constexpr uint8_t kSwitchEndpoint = 5;
+static constexpr int8_t kZigbeeTxPowerDbm = 20;
 
 static String formatIeeeText(const uint8_t ieee[8]) {
     char buffer[24];
@@ -471,6 +473,18 @@ bool ZigbeeCoordinator::begin(uint8_t channel, uint8_t permitJoinSec) {
         LOGGER.error("Zigbee.begin failed");
         STATUS_RGB.setCritical(true);
         return false;
+    }
+
+    esp_zb_set_tx_power(kZigbeeTxPowerDbm);
+    int8_t txPowerDbm = 0;
+    esp_zb_get_tx_power(&txPowerDbm);
+    if (txPowerDbm != kZigbeeTxPowerDbm) {
+        LOGGER.warning(
+            "Zigbee TX power read-back " + String((int)txPowerDbm)
+            + " dBm (requested " + String((int)kZigbeeTxPowerDbm) + " dBm)"
+        );
+    } else {
+        LOGGER.info("Zigbee TX power " + String((int)txPowerDbm) + " dBm");
     }
 
     started = true;
