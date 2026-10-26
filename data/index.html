@@ -2393,6 +2393,8 @@
         var searchAwaitingClose = false;
         var parameterDialogTypeId = "unknown";
         var parameterDialogTransport = "zigbee";
+        var parameterDialogModel = "";
+        var parameterDialogManufacturerId = "unknown";
         var parameterDialogBaseline = null;
         var parameterDialogIsEdit = false;
         var proposedWifiTopics = null;
@@ -2557,6 +2559,108 @@
             return "Zigbee";
         }
 
+        function deviceManufacturerLabel(manufacturerId) {
+            var labels = {
+                unknown: "Unknown",
+                tuya: "Tuya",
+                aqara: "Aqara",
+                philipsHue: "Philips Hue",
+                ikea: "IKEA",
+                sonoff: "Sonoff",
+                ledvance: "LEDVANCE / OSRAM",
+                innr: "Innr",
+                gledopto: "Gledopto",
+                sengled: "Sengled",
+                thirdReality: "Third Reality",
+                heiman: "Heiman",
+                legrand: "Legrand",
+                schneider: "Schneider",
+                namron: "Namron",
+                develco: "Develco"
+            };
+            var key = deviceManufacturerJsonId(manufacturerId);
+            return labels[key] || "Unknown";
+        }
+
+        function deviceManufacturerJsonId(manufacturerValue) {
+            var text = String(manufacturerValue || "").trim();
+            if (!text) {
+                return "unknown";
+            }
+            if (Object.prototype.hasOwnProperty.call(
+                {
+                    unknown: 1,
+                    tuya: 1,
+                    aqara: 1,
+                    philipsHue: 1,
+                    ikea: 1,
+                    sonoff: 1,
+                    ledvance: 1,
+                    innr: 1,
+                    gledopto: 1,
+                    sengled: 1,
+                    thirdReality: 1,
+                    heiman: 1,
+                    legrand: 1,
+                    schneider: 1,
+                    namron: 1,
+                    develco: 1
+                },
+                text
+            )) {
+                return text;
+            }
+            var folded = text.toLowerCase();
+            if (folded.indexOf("_tz") >= 0 || folded.indexOf("tuya") >= 0) {
+                return "tuya";
+            }
+            if (folded.indexOf("lumi") >= 0
+                || folded.indexOf("aqara") >= 0
+                || folded.indexOf("xiaomi") >= 0) {
+                return "aqara";
+            }
+            if (folded.indexOf("philips") >= 0 || folded.indexOf("signify") >= 0) {
+                return "philipsHue";
+            }
+            if (folded.indexOf("ikea") >= 0) {
+                return "ikea";
+            }
+            if (folded.indexOf("sonoff") >= 0 || folded.indexOf("ewelink") >= 0) {
+                return "sonoff";
+            }
+            if (folded.indexOf("ledvance") >= 0 || folded.indexOf("osram") >= 0) {
+                return "ledvance";
+            }
+            if (folded.indexOf("innr") >= 0) {
+                return "innr";
+            }
+            if (folded.indexOf("gledopto") >= 0) {
+                return "gledopto";
+            }
+            if (folded.indexOf("sengled") >= 0) {
+                return "sengled";
+            }
+            if (folded.indexOf("third reality") >= 0 || folded.indexOf("thirdreality") >= 0) {
+                return "thirdReality";
+            }
+            if (folded.indexOf("heiman") >= 0) {
+                return "heiman";
+            }
+            if (folded.indexOf("legrand") >= 0 || folded.indexOf("netatmo") >= 0) {
+                return "legrand";
+            }
+            if (folded.indexOf("schneider") >= 0) {
+                return "schneider";
+            }
+            if (folded.indexOf("namron") >= 0) {
+                return "namron";
+            }
+            if (folded.indexOf("develco") >= 0) {
+                return "develco";
+            }
+            return "unknown";
+        }
+
         function applyMqttPublishControls() {
             var publishField = document.getElementById("devicePublishToMqttField");
             var topicFields = document.getElementById("deviceMqttTopicFields");
@@ -2580,6 +2684,7 @@
             var typeReadonly = document.getElementById("deviceType");
             var typeSelect = document.getElementById("deviceTypeSelect");
             var ieeeField = document.getElementById("deviceIeeeField");
+            var manufacturerField = document.getElementById("deviceManufacturerField");
             var transportInput = document.getElementById("deviceTransport");
             if (transportInput) {
                 transportInput.value = deviceTransportLabel(parameterDialogTransport);
@@ -2593,6 +2698,9 @@
             }
             if (typeSelectField) {
                 typeSelectField.hidden = !mqttDevice;
+            }
+            if (manufacturerField) {
+                manufacturerField.hidden = mqttDevice;
             }
             if (!mqttDevice && typeReadonly) {
                 typeReadonly.value = zigbeeDeviceTypeLabel(parameterDialogTypeId);
@@ -3473,6 +3581,10 @@
             }
         }
 
+        function deviceHasConfigure(device) {
+            return !!(device && device.configurable);
+        }
+
         function openDeviceActionsMenu(event, device) {
             event.stopPropagation();
             event.preventDefault();
@@ -3482,7 +3594,8 @@
                 return;
             }
             var payloads = deviceTypeActionPayloads(device.type);
-            if (!payloads.length) {
+            var showConfigure = deviceHasConfigure(device);
+            if (!payloads.length && !showConfigure) {
                 return;
             }
             var host = event.currentTarget.parentNode;
@@ -3495,6 +3608,19 @@
             menu.onclick = function (clickEvent) {
                 clickEvent.stopPropagation();
             };
+            if (showConfigure) {
+                var configureItem = document.createElement("li");
+                var configureButton = document.createElement("button");
+                configureButton.type = "button";
+                configureButton.textContent = "Configure";
+                configureButton.onclick = function (clickEvent) {
+                    clickEvent.stopPropagation();
+                    closeDeviceActionsMenu();
+                    openDeviceConfigureDialog(device);
+                };
+                configureItem.appendChild(configureButton);
+                menu.appendChild(configureItem);
+            }
             var channelList = deviceActionChannels(device);
             var showChannelSubmenu = channelList.length > 1;
             var payloadIndex;
@@ -3568,7 +3694,7 @@
                 return;
             }
             var payloads = deviceTypeActionPayloads(device.type);
-            if (!payloads.length) {
+            if (!payloads.length && !deviceHasConfigure(device)) {
                 return;
             }
             var holder = document.createElement("div");
@@ -3591,6 +3717,193 @@
                     devicesSection.classList.add("device-actions-open");
                 }
             }
+        }
+
+        var deviceConfigureBaseline = {};
+        var deviceConfigureIeee = "";
+
+        function closeDeviceConfigureDialog() {
+            var dialog = document.getElementById("deviceConfigureDialog");
+            if (dialog) {
+                dialog.hidden = true;
+            }
+            deviceConfigureBaseline = {};
+            deviceConfigureIeee = "";
+            var errorEl = document.getElementById("deviceConfigureError");
+            if (errorEl) {
+                errorEl.hidden = true;
+                errorEl.textContent = "";
+            }
+        }
+
+        function setDeviceConfigureBusy(isBusy) {
+            var saveBtn = document.getElementById("deviceConfigureSaveBtn");
+            var cancelBtn = document.getElementById("deviceConfigureCancelBtn");
+            var statusEl = document.getElementById("deviceConfigureStatus");
+            if (saveBtn) {
+                saveBtn.disabled = !!isBusy;
+            }
+            if (cancelBtn) {
+                cancelBtn.disabled = !!isBusy;
+            }
+            if (statusEl) {
+                statusEl.hidden = !isBusy;
+                statusEl.textContent = isBusy ? "Reading from device…" : "";
+            }
+        }
+
+        function buildDeviceConfigureControl(attr) {
+            var control;
+            if (attr.type === "bool") {
+                control = document.createElement("input");
+                control.type = "checkbox";
+                control.checked = !!attr.value;
+            } else if (attr.type === "enum" && attr.choices && attr.choices.length) {
+                control = document.createElement("select");
+                var choiceIndex;
+                for (choiceIndex = 0; choiceIndex < attr.choices.length; choiceIndex++) {
+                    var option = document.createElement("option");
+                    option.value = String(attr.choices[choiceIndex].value);
+                    option.textContent = attr.choices[choiceIndex].label;
+                    control.appendChild(option);
+                }
+                if (attr.value !== null && attr.value !== undefined) {
+                    control.value = String(attr.value);
+                }
+            } else {
+                control = document.createElement("input");
+                control.type = "number";
+                if (attr.value !== null && attr.value !== undefined) {
+                    control.value = String(attr.value);
+                }
+            }
+            control.dataset.configId = attr.id;
+            control.dataset.configType = attr.type || "";
+            control.className = "device-configure-control";
+            return control;
+        }
+
+        function readDeviceConfigureControlValue(control) {
+            var typeId = control.dataset.configType || "";
+            if (typeId === "bool") {
+                return !!control.checked;
+            }
+            if (typeId === "enum") {
+                return Number(control.value);
+            }
+            return Number(control.value);
+        }
+
+        function fillDeviceConfigureGrid(attrs) {
+            var grid = document.getElementById("deviceConfigureGrid");
+            if (!grid) {
+                return;
+            }
+            grid.innerHTML = "";
+            deviceConfigureBaseline = {};
+            var index;
+            for (index = 0; index < attrs.length; index++) {
+                var attr = attrs[index];
+                var valueMissing = attr.value === null || attr.value === undefined;
+                var label = document.createElement("label");
+                label.className = "device-configure-label";
+                label.textContent = (valueMissing ? "! " : "") + (attr.label || attr.id);
+                var control = buildDeviceConfigureControl(attr);
+                deviceConfigureBaseline[attr.id] = readDeviceConfigureControlValue(control);
+                grid.appendChild(label);
+                grid.appendChild(control);
+            }
+        }
+
+        function openDeviceConfigureDialog(device) {
+            var dialog = document.getElementById("deviceConfigureDialog");
+            if (!dialog || !device || !device.ieee) {
+                return;
+            }
+            deviceConfigureIeee = device.ieee;
+            var title = document.getElementById("deviceConfigureTitle");
+            if (title) {
+                title.textContent = "Configure — " + (device.name || device.ieee);
+            }
+            var errorEl = document.getElementById("deviceConfigureError");
+            if (errorEl) {
+                errorEl.hidden = true;
+                errorEl.textContent = "";
+            }
+            fillDeviceConfigureGrid([]);
+            dialog.hidden = false;
+            setDeviceConfigureBusy(true);
+            fetch("/api/devices/configure?ieee=" + encodeURIComponent(device.ieee), {
+                credentials: "same-origin"
+            }).then(function (response) {
+                if (!response.ok) {
+                    return response.text().then(function (text) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    });
+                }
+                return response.json();
+            }).then(function (payload) {
+                setDeviceConfigureBusy(false);
+                fillDeviceConfigureGrid(payload.attrs || []);
+            }).catch(function (error) {
+                setDeviceConfigureBusy(false);
+                if (errorEl) {
+                    errorEl.hidden = false;
+                    errorEl.textContent = error && error.message ? error.message : "Failed to load";
+                }
+            });
+        }
+
+        function saveDeviceConfigureDialog() {
+            var errorEl = document.getElementById("deviceConfigureError");
+            if (errorEl) {
+                errorEl.hidden = true;
+                errorEl.textContent = "";
+            }
+            if (!deviceConfigureIeee) {
+                return;
+            }
+            var controls = document.querySelectorAll("#deviceConfigureGrid .device-configure-control");
+            var changes = [];
+            var index;
+            for (index = 0; index < controls.length; index++) {
+                var control = controls[index];
+                var configId = control.dataset.configId || "";
+                if (!configId || !Object.prototype.hasOwnProperty.call(deviceConfigureBaseline, configId)) {
+                    continue;
+                }
+                var nextValue = readDeviceConfigureControlValue(control);
+                var baseline = deviceConfigureBaseline[configId];
+                if (nextValue === baseline) {
+                    continue;
+                }
+                changes.push({ id: configId, value: nextValue });
+            }
+            if (!changes.length) {
+                closeDeviceConfigureDialog();
+                return;
+            }
+            setDeviceConfigureBusy(true);
+            fetch("/api/devices/configure", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ieee: deviceConfigureIeee, changes: changes })
+            }).then(function (response) {
+                if (!response.ok) {
+                    return response.text().then(function (text) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    });
+                }
+                setDeviceConfigureBusy(false);
+                closeDeviceConfigureDialog();
+            }).catch(function (error) {
+                setDeviceConfigureBusy(false);
+                if (errorEl) {
+                    errorEl.hidden = false;
+                    errorEl.textContent = error && error.message ? error.message : "Save failed";
+                }
+            });
         }
 
         function renderDeviceTable(rows) {
@@ -4030,10 +4343,13 @@
                 ieeeCell.textContent = rows[index].ieee || "";
                 var typeCell = document.createElement("td");
                 typeCell.textContent = zigbeeDeviceTypeLabel(rows[index].type);
+                var manufacturerCell = document.createElement("td");
+                manufacturerCell.textContent = rows[index].manufacturer || "";
                 var modelCell = document.createElement("td");
-                modelCell.textContent = (rows[index].manufacturer || "") + " " + (rows[index].model || "");
+                modelCell.textContent = rows[index].model || "";
                 row.appendChild(ieeeCell);
                 row.appendChild(typeCell);
+                row.appendChild(manufacturerCell);
                 row.appendChild(modelCell);
                 body.appendChild(row);
             }
@@ -4132,7 +4448,8 @@
             document.getElementById("searchDialogStatus").textContent =
                 "Click Search to open pairing. If several devices appear, select one row and click Add.";
             document.getElementById("searchDialog").hidden = false;
-            startFoundPolling();
+            stopFoundPolling();
+            renderFoundTable([]);
             startPairingPolling();
         }
 
@@ -4142,6 +4459,7 @@
             stopPairingPolling();
             searchAwaitingClose = false;
             setSearchRunning(false);
+            renderFoundTable([]);
             if (sendStop !== false) {
                 pairingSessionActive = false;
                 fetch("/api/devices/search/stop", {
@@ -4159,6 +4477,9 @@
             errorLine.hidden = true;
             searchAwaitingClose = true;
             setSearchRunning(true);
+            selectedFoundIeee = "";
+            document.getElementById("foundAddBtn").disabled = true;
+            renderFoundTable([]);
             if (statusLine) {
                 statusLine.textContent = "Searching… put the device in join mode.";
             }
@@ -4179,6 +4500,8 @@
                 });
             }).catch(function (error) {
                 searchAwaitingClose = false;
+                stopFoundPolling();
+                renderFoundTable([]);
                 setSearchRunning(false);
                 errorLine.hidden = false;
                 errorLine.textContent = error && error.message ? error.message : "Search start failed";
@@ -4196,7 +4519,13 @@
             document.getElementById("deviceIeee").value = device.ieee || "";
             parameterDialogTypeId = device.type || "unknown";
             parameterDialogTransport = device.transport == "mqtt" ? "mqtt" : "zigbee";
+            parameterDialogModel = device.model || "";
+            parameterDialogManufacturerId = deviceManufacturerJsonId(device.manufacturer);
             applyParameterTypeControls();
+            var manufacturerInput = document.getElementById("deviceManufacturer");
+            if (manufacturerInput) {
+                manufacturerInput.value = deviceManufacturerLabel(device.manufacturer);
+            }
             document.getElementById("deviceName").value = device.name || device.friendlyName || "";
             if (parameterDialogTransport == "mqtt" && !parameterDialogIsEdit) {
                 var wifiTopics = wifiDeviceTopics(document.getElementById("deviceName").value);
@@ -4777,6 +5106,8 @@
                 {
                     ieee: selectedFoundIeee,
                     type: found && found.type,
+                    manufacturer: found && found.manufacturer,
+                    model: found && found.model,
                     transport: "zigbee"
                 },
                 "Device parameters"
@@ -4991,6 +5322,8 @@
             if (parameterDialogTransport != "mqtt") {
                 body.publishToMqtt = !!(document.getElementById("devicePublishToMqtt")
                     && document.getElementById("devicePublishToMqtt").checked);
+                body.manufacturer = parameterDialogManufacturerId || "unknown";
+                body.model = parameterDialogModel || "";
             }
             if ((typeId || "unknown") === "userData") {
                 var fields = normalizeUserDataFields(parameterDialogUserDataFields);
@@ -14122,6 +14455,7 @@
                             <tr>
                                 <th>IEEE</th>
                                 <th>Type</th>
+                                <th>Manufacturer</th>
                                 <th>Model</th>
                             </tr>
                         </thead>
@@ -14136,6 +14470,19 @@
                     <button type="button" id="foundAddBtn" class="btn btn-primary" onclick="openParameterDialog()" disabled>Add</button>
                     <button type="button" id="mqttDeviceBtn" class="btn btn-secondary" onclick="openMqttDeviceDialog()">MQTT DEVICE</button>
                     <button type="button" class="btn btn-secondary" onclick="closeSearchDialog(true)">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="deviceConfigureDialog" class="dialog-overlay" hidden>
+            <div class="dialog-panel" role="dialog" aria-label="Configure device">
+                <h3 id="deviceConfigureTitle" class="upload-title">Configure</h3>
+                <p id="deviceConfigureStatus" class="muted" hidden></p>
+                <p id="deviceConfigureError" class="save-error" hidden></p>
+                <div id="deviceConfigureGrid" class="device-configure-grid"></div>
+                <div class="dialog-actions">
+                    <button type="button" id="deviceConfigureSaveBtn" class="btn btn-primary" onclick="saveDeviceConfigureDialog()">Save</button>
+                    <button type="button" id="deviceConfigureCancelBtn" class="btn btn-secondary" onclick="closeDeviceConfigureDialog()">Cancel</button>
                 </div>
             </div>
         </div>
@@ -14165,6 +14512,10 @@
                         <div class="field" id="deviceTypeSelectField" hidden>
                             <label for="deviceTypeSelect">DEVICE CLASS</label>
                             <select id="deviceTypeSelect"></select>
+                        </div>
+                        <div class="field" id="deviceManufacturerField" hidden>
+                            <label for="deviceManufacturer">MANUFACTURER</label>
+                            <input id="deviceManufacturer" type="text" readonly>
                         </div>
                         <div class="field">
                             <label for="deviceName">NAME</label>

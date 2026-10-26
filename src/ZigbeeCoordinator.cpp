@@ -108,6 +108,34 @@ static bool formatMeasurementText(
     return false;
 }
 
+static bool copyZclCharStringAttr(
+    char **destination,
+    const esp_zb_zcl_attribute_t *attribute,
+    size_t maxLen
+) {
+    if (destination == nullptr || attribute == nullptr || attribute->data.value == nullptr) {
+        return false;
+    }
+    if (attribute->data.type != ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING || attribute->data.size < 1) {
+        return false;
+    }
+    const uint8_t *bytes = (const uint8_t *)attribute->data.value;
+    const uint8_t stringLen = bytes[0];
+    if (stringLen == 0 || (size_t)(stringLen + 1) > attribute->data.size) {
+        return false;
+    }
+    char buffer[33];
+    const size_t copyLen = stringLen < maxLen ? (size_t)stringLen : maxLen;
+    if (copyLen >= sizeof(buffer)) {
+        return false;
+    }
+    memcpy(buffer, bytes + 1, copyLen);
+    buffer[copyLen] = '\0';
+    free(*destination);
+    *destination = DeviceTopicMap::duplicateBoundedString(buffer, maxLen);
+    return *destination != nullptr && (*destination)[0] != '\0';
+}
+
 static void formatAttrEventName(
     char *buffer,
     size_t bufferSize,
@@ -221,6 +249,16 @@ void ZigbeeCoordinator::CoordinatorSwitch::zbAttributeRead(
     }
 }
 
+void ZigbeeCoordinator::CoordinatorSwitch::zbReadBasicCluster(
+    const esp_zb_zcl_attribute_t *attribute
+) {
+    // Do not call ZigbeeEP::zbReadBasicCluster — it xSemaphoreGive(s) a lock only
+    // meant for blocking readManufacturer/readModel, and crashes on async reads.
+    if (owner != nullptr) {
+        owner->handleBasicIdentityRead(attribute);
+    }
+}
+
 void ZigbeeCoordinator::CoordinatorSwitch::zbIASZoneStatusChangeNotification(
     const esp_zb_zcl_ias_zone_status_change_notification_message_t *message
 ) {
@@ -264,6 +302,14 @@ void ZigbeeCoordinator::IasCieEndpoint::zbAttributeRead(
 ) {
     if (owner != nullptr) {
         owner->handleAttributeReport(clusterId, attribute, srcEndpoint, srcAddress);
+    }
+}
+
+void ZigbeeCoordinator::IasCieEndpoint::zbReadBasicCluster(
+    const esp_zb_zcl_attribute_t *attribute
+) {
+    if (owner != nullptr) {
+        owner->handleBasicIdentityRead(attribute);
     }
 }
 
@@ -672,6 +718,142 @@ void ZigbeeCoordinator::emitDeviceJoin(BoundZigbeeDevice *slot) {
         zigbeeDeviceTypeJsonId(slot->zigbeeType)
     );
     logDeviceEvent(pairingEvent, slot->ieee, slot->shortAddr, slot->endpoint, registeredName(slot->ieee), registeredMap);
+    // Enqueue only — never pump/send ZCL from the join/ZDO callback path.
+    queueBasicIdentityReads(slot);
+}
+
+void ZigbeeCoordinator::emitDeviceJoinIdentity(BoundZigbeeDevice *slot) {
+    if (slot == nullptr || deviceBoundHandler == nullptr) {
+        return;
+    }
+    if (zigbeeJoinShouldEmit(slot->lastEmittedType, slot->zigbeeType)) {
+        emitDeviceJoin(slot);
+        return;
+    }
+    deviceBoundHandler(slot);
+    logDeviceEvent(
+        "pairing identity",
+        slot->ieee,
+        slot->shortAddr,
+        slot->endpoint,
+        registeredName(slot->ieee),
+        registeredMap
+    );
+}
+
+void ZigbeeCoordinator::queueBasicIdentityReads(BoundZigbeeDevice *slot) {
+    if (slot == nullptr || !slot->occupied || slot->basicIdentityQueued) {
+        return;
+    }
+    const char *existingManufacturer = deviceTopicCStr(slot->manufacturer);
+    const char *existingModel = deviceTopicCStr(slot->model);
+    if (existingManufacturer[0] != '\0' && existingModel[0] != '\0') {
+        return;
+    }
+    uint8_t endpoint = slot->endpoint;
+    if (!DeviceTopicMap::isUsableEndpoint(endpoint)) {
+        if (slot->knownEndpointCount == 0) {
+            return;
+        }
+        endpoint = slot->knownEndpoints[0];
+    }
+    if (!DeviceTopicMap::isUsableEndpoint(endpoint)) {
+        return;
+    }
+    slot->basicIdentityQueued = true;
+    const unsigned long basicGiveUpMs = millis() + kBasicIdentityReadTimeoutMs;
+    if (existingManufacturer[0] == '\0') {
+        enqueueStatusRead(
+            slot->ieee,
+            endpoint,
+            kZigbeeClusterBasic,
+            kZigbeeAttrBasicManufacturerName
+        );
+    }
+    if (existingModel[0] == '\0') {
+        enqueueStatusRead(
+            slot->ieee,
+            endpoint,
+            kZigbeeClusterBasic,
+            kZigbeeAttrBasicModelIdentifier
+        );
+    }
+    for (StatusReadItem *item = statusReadHead; item != nullptr; item = item->next) {
+        if (!item->used || item->clusterId != kZigbeeClusterBasic) {
+            continue;
+        }
+        if (memcmp(item->ieee, slot->ieee, 8) != 0) {
+            continue;
+        }
+        item->giveUpMs = basicGiveUpMs;
+    }
+}
+
+bool ZigbeeCoordinator::applyBasicIdentityAttribute(
+    BoundZigbeeDevice *slot,
+    uint16_t attributeId,
+    const esp_zb_zcl_attribute_t *attribute
+) {
+    if (slot == nullptr || attribute == nullptr) {
+        return false;
+    }
+    char **destination = nullptr;
+    if (attributeId == kZigbeeAttrBasicManufacturerName) {
+        destination = &slot->manufacturer;
+    } else if (attributeId == kZigbeeAttrBasicModelIdentifier) {
+        destination = &slot->model;
+    } else {
+        return false;
+    }
+    if (!copyZclCharStringAttr(destination, attribute, 31)) {
+        return false;
+    }
+    emitDeviceJoinIdentity(slot);
+    return true;
+}
+
+void ZigbeeCoordinator::handleBasicIdentityRead(const esp_zb_zcl_attribute_t *attribute) {
+    if (attribute == nullptr) {
+        return;
+    }
+    if (attribute->id != kZigbeeAttrBasicManufacturerName
+        && attribute->id != kZigbeeAttrBasicModelIdentifier) {
+        return;
+    }
+    StatusReadItem *inflight = nullptr;
+    for (StatusReadItem *item = statusReadHead; item != nullptr; item = item->next) {
+        if (!item->used || !item->inFlight || item->clusterId != kZigbeeClusterBasic) {
+            continue;
+        }
+        if (item->attributeId == attribute->id) {
+            inflight = item;
+            break;
+        }
+        if (inflight == nullptr) {
+            inflight = item;
+        }
+    }
+    BoundZigbeeDevice *slot = nullptr;
+    if (inflight != nullptr) {
+        slot = findByIeee(inflight->ieee);
+    } else {
+        // Late reply after the status-read timeout: still apply if we asked for this attr.
+        for (BoundZigbeeDevice *candidate = boundDeviceHead; candidate != nullptr; candidate = candidate->next) {
+            if (!candidate->occupied || candidate->pendingBasicAttributeId != attribute->id) {
+                continue;
+            }
+            slot = candidate;
+            break;
+        }
+    }
+    if (slot == nullptr) {
+        return;
+    }
+    slot->pendingBasicAttributeId = 0;
+    applyBasicIdentityAttribute(slot, attribute->id, attribute);
+    if (inflight != nullptr) {
+        completeStatusRead(inflight->ieee, kZigbeeClusterBasic, inflight->endpoint, attribute->id);
+    }
 }
 
 uint8_t ZigbeeCoordinator::registeredZigbeeType(const uint8_t ieee[8]) const {
@@ -888,6 +1070,32 @@ void ZigbeeCoordinator::dispatch() {
     serviceTypeProbes();
     if (!started) {
         return;
+    }
+    for (BoundZigbeeDevice *bound = boundDeviceHead; bound != nullptr; bound = bound->next) {
+        if (!bound->occupied || !bound->basicIdentityQueued) {
+            continue;
+        }
+        const char *manufacturer = deviceTopicCStr(bound->manufacturer);
+        const char *model = deviceTopicCStr(bound->model);
+        if (manufacturer[0] != '\0' && model[0] != '\0') {
+            continue;
+        }
+        bool hasBasicQueued = false;
+        for (StatusReadItem *queued = statusReadHead; queued != nullptr; queued = queued->next) {
+            if (!queued->used || queued->clusterId != kZigbeeClusterBasic) {
+                continue;
+            }
+            if (memcmp(queued->ieee, bound->ieee, 8) == 0) {
+                hasBasicQueued = true;
+                break;
+            }
+        }
+        if (hasBasicQueued || bound->basicIdentityRetries >= 1) {
+            continue;
+        }
+        bound->basicIdentityRetries++;
+        bound->basicIdentityQueued = false;
+        queueBasicIdentityReads(bound);
     }
     if ((millis() - lastRefreshMs) < 10000) {
         return;
@@ -1261,6 +1469,16 @@ void ZigbeeCoordinator::handleAttributeReport(
     completeStatusRead(ieee, clusterId, srcEndpoint);
     BoundZigbeeDevice *slot = findByIeee(ieee);
     mergeBoundDeviceType(slot, zigbeeDeviceTypeFromCluster(clusterId));
+    if (clusterId == kZigbeeClusterBasic
+        && (attribute->id == kZigbeeAttrBasicManufacturerName
+            || attribute->id == kZigbeeAttrBasicModelIdentifier)) {
+        char eventName[96];
+        formatAttrEventName(eventName, sizeof(eventName), clusterId, attribute->id, value);
+        logDeviceEvent(eventName, ieee, shortAddr, srcEndpoint, registeredName(ieee), registeredMap);
+        pulseInboundDevice(ieee);
+        applyBasicIdentityAttribute(slot, attribute->id, attribute);
+        return;
+    }
     char eventName[96];
     formatAttrEventName(eventName, sizeof(eventName), clusterId, attribute->id, value);
     logDeviceEvent(eventName, ieee, shortAddr, srcEndpoint, registeredName(ieee), registeredMap);
@@ -1327,6 +1545,19 @@ void ZigbeeCoordinator::handleAttributeReport(
     if (lightStateHandler != nullptr
         && formatMeasurementText(clusterId, attribute->id, value, measurementText, sizeof(measurementText))) {
         lightStateHandler(measurementText, ieee, srcEndpoint, shortAddr, rssiForShortAddr(shortAddr));
+        return;
+    }
+    if (lightStateHandler != nullptr && haveAttributeValue) {
+        char attrMessage[80];
+        snprintf(
+            attrMessage,
+            sizeof(attrMessage),
+            "cl=0x%04X,attr=0x%04X,val=0x%lX",
+            (unsigned int)clusterId,
+            (unsigned int)attribute->id,
+            (unsigned long)value
+        );
+        lightStateHandler(attrMessage, ieee, srcEndpoint, shortAddr, rssiForShortAddr(shortAddr));
     }
 }
 
@@ -1683,12 +1914,19 @@ void ZigbeeCoordinator::pumpStatusReads() {
         }
         if (item->inFlight && (long)(nowMs - item->deadlineMs) >= 0) {
             LOGGER.warning("Status read timeout ep=" + String(item->endpoint));
+            // Keep BoundZigbeeDevice::pendingBasicAttributeId so a late Basic reply can still apply.
             releaseStatusRead(item);
             item = next;
             continue;
         }
         if (!item->inFlight && (long)(nowMs - item->giveUpMs) >= 0) {
             LOGGER.warning("Status read dropped ep=" + String(item->endpoint));
+            if (item->clusterId == kZigbeeClusterBasic) {
+                BoundZigbeeDevice *bound = findByIeee(item->ieee);
+                if (bound != nullptr && bound->pendingBasicAttributeId == item->attributeId) {
+                    bound->pendingBasicAttributeId = 0;
+                }
+            }
             releaseStatusRead(item);
         }
         item = next;
@@ -1704,7 +1942,16 @@ void ZigbeeCoordinator::pumpStatusReads() {
             continue;
         }
         item->inFlight = true;
-        item->deadlineMs = nowMs + kCommandInFlightTimeoutMs;
+        const unsigned long replyTimeoutMs = item->clusterId == kZigbeeClusterBasic
+            ? kBasicIdentityReadTimeoutMs
+            : kCommandInFlightTimeoutMs;
+        item->deadlineMs = nowMs + replyTimeoutMs;
+        if (item->clusterId == kZigbeeClusterBasic) {
+            BoundZigbeeDevice *bound = findByIeee(item->ieee);
+            if (bound != nullptr) {
+                bound->pendingBasicAttributeId = item->attributeId;
+            }
+        }
     }
 }
 
@@ -1762,7 +2009,8 @@ bool ZigbeeCoordinator::suppressStatusReplacement(
 void ZigbeeCoordinator::completeStatusRead(
     const uint8_t ieee[8],
     uint16_t clusterId,
-    uint8_t endpoint
+    uint8_t endpoint,
+    uint16_t attributeId
 ) {
     if (ieee == nullptr) {
         return;
@@ -1774,8 +2022,12 @@ void ZigbeeCoordinator::completeStatusRead(
         if (memcmp(item->ieee, ieee, 8) != 0 || item->clusterId != clusterId || item->endpoint != endpoint) {
             continue;
         }
+        if (attributeId != 0xFFFF && item->attributeId != attributeId) {
+            continue;
+        }
         releaseStatusRead(item);
-        pumpStatusReads();
+        // Do not pump here — response callbacks can run on the Zigbee task; dispatch
+        // serviceCommandFlights() pumps the next status read safely.
         return;
     }
 }

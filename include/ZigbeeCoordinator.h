@@ -21,6 +21,9 @@ struct BoundZigbeeDevice {
     unsigned long typeProbeDeadlineMs;
     bool occupied;
     bool pairingOffered;
+    bool basicIdentityQueued;
+    uint8_t basicIdentityRetries;
+    uint16_t pendingBasicAttributeId;
     bool hasPowerConfig;
     uint8_t knownEndpointCount;
     uint8_t knownEndpoints[DEVICE_CHANNEL_COUNT_MAX];
@@ -98,6 +101,7 @@ public:
         uint8_t srcEndpoint,
         esp_zb_zcl_addr_t srcAddress
     );
+    void handleBasicIdentityRead(const esp_zb_zcl_attribute_t *attribute);
     void noteDefaultResponse(uint8_t endpoint, uint16_t cluster);
     void setRegisteredMap(DeviceTopicMap *deviceMap);
     void clearRegisteredDevices();
@@ -115,6 +119,7 @@ public:
     static constexpr int kMaxStatusAnswers = 32;
     static constexpr unsigned long kCommandInFlightTimeoutMs = 1500UL;
     static constexpr unsigned long kStatusReadGiveUpMs = 8000UL;
+    static constexpr unsigned long kBasicIdentityReadTimeoutMs = 10000UL;
     static constexpr unsigned long kTypeProbeTimeoutMs = 2000UL;
 
 private:
@@ -130,6 +135,7 @@ private:
             uint8_t srcEndpoint,
             esp_zb_zcl_addr_t srcAddress
         ) override;
+        void zbReadBasicCluster(const esp_zb_zcl_attribute_t *attribute) override;
         void zbIASZoneStatusChangeNotification(
             const esp_zb_zcl_ias_zone_status_change_notification_message_t *message
         ) override;
@@ -148,6 +154,7 @@ private:
             uint8_t srcEndpoint,
             esp_zb_zcl_addr_t srcAddress
         ) override;
+        void zbReadBasicCluster(const esp_zb_zcl_attribute_t *attribute) override;
         void zbIASZoneStatusChangeNotification(
             const esp_zb_zcl_ias_zone_status_change_notification_message_t *message
         ) override;
@@ -247,9 +254,16 @@ private:
     void updatePairingLed();
     void storeBoundDevice(zb_device_params_t *device);
     void emitDeviceJoin(BoundZigbeeDevice *slot);
+    void emitDeviceJoinIdentity(BoundZigbeeDevice *slot);
     void mergeBoundDeviceType(BoundZigbeeDevice *slot, uint8_t incomingType);
     uint8_t registeredZigbeeType(const uint8_t ieee[8]) const;
     bool applySavedDeviceClass(BoundZigbeeDevice *slot);
+    void queueBasicIdentityReads(BoundZigbeeDevice *slot);
+    bool applyBasicIdentityAttribute(
+        BoundZigbeeDevice *slot,
+        uint16_t attributeId,
+        const esp_zb_zcl_attribute_t *attribute
+    );
     void startDescriptorProbe(BoundZigbeeDevice *slot);
     void requestActiveEndpoints(uint16_t shortAddr);
     void requestSimpleDescriptor(uint16_t shortAddr, uint8_t endpoint);
@@ -340,7 +354,12 @@ private:
     DescriptorProbe *allocateDescriptorProbe(uint16_t shortAddr);
     void releaseDescriptorProbe(DescriptorProbe *probe);
     bool ieeeHasInFlightStatusRead(const uint8_t ieee[8]) const;
-    void completeStatusRead(const uint8_t ieee[8], uint16_t clusterId, uint8_t endpoint);
+    void completeStatusRead(
+        const uint8_t ieee[8],
+        uint16_t clusterId,
+        uint8_t endpoint,
+        uint16_t attributeId = 0xFFFF
+    );
     bool suppressStatusReplacement(
         const uint8_t ieee[8],
         uint8_t endpoint,

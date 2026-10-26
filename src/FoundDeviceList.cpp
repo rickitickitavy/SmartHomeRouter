@@ -1,4 +1,5 @@
 #include "FoundDeviceList.h"
+#include "DeviceManufacturer.h"
 #include "JsonField.h"
 #include "ZigbeeDeviceType.h"
 
@@ -59,6 +60,10 @@ void FoundDeviceList::clear() {
     foundCount = 0;
 }
 
+void FoundDeviceList::setAcceptingJoins(bool accepting) {
+    joinsAccepted = accepting;
+}
+
 void FoundDeviceList::removeIeee(const uint8_t ieee[8]) {
     FoundDevice **link = &foundHead;
     while (*link != nullptr) {
@@ -81,6 +86,22 @@ uint8_t FoundDeviceList::zigbeeTypeForIeee(const uint8_t ieee[8]) const {
     return device->zigbeeType;
 }
 
+const char *FoundDeviceList::manufacturerForIeee(const uint8_t ieee[8]) const {
+    const FoundDevice *device = findByIeee(ieee);
+    if (device == nullptr) {
+        return nullptr;
+    }
+    return device->manufacturer;
+}
+
+const char *FoundDeviceList::modelForIeee(const uint8_t ieee[8]) const {
+    const FoundDevice *device = findByIeee(ieee);
+    if (device == nullptr) {
+        return nullptr;
+    }
+    return device->model;
+}
+
 bool FoundDeviceList::noteJoin(const SpiFrame &frame, DeviceTopicMap *registered) {
     if (frame.cmd != SpiEvtDeviceJoin || frame.length < SPI_DEVICE_JOIN_MIN_LEN) {
         return false;
@@ -95,11 +116,21 @@ bool FoundDeviceList::noteJoin(const SpiFrame &frame, DeviceTopicMap *registered
     if (registered != nullptr) {
         DeviceTopicEntry *entry = registered->findByIeee(ieee);
         if (entry != nullptr && entry->used) {
+            bool changed = false;
             if (entry->zigbeeType == ZigbeeDeviceTypeUnknown && joinType != ZigbeeDeviceTypeUnknown) {
                 entry->zigbeeType = joinType;
-                return true;
+                changed = true;
             }
-            return false;
+            if (entry->manufacturer == DeviceManufacturerUnknown) {
+                const uint8_t mapped = deviceManufacturerFromJoinString(
+                    (const char *)frame.payload + SPI_DEVICE_JOIN_MANUFACTURER_OFFSET
+                );
+                if (mapped != DeviceManufacturerUnknown) {
+                    entry->manufacturer = mapped;
+                    changed = true;
+                }
+            }
+            return changed;
         }
     }
     noteIdentity(
@@ -148,6 +179,9 @@ void FoundDeviceList::noteIdentity(
         preservedType = slot->zigbeeType;
     }
     if (slot == nullptr) {
+        if (!joinsAccepted) {
+            return;
+        }
         slot = allocateFoundDevice();
         if (slot == nullptr && foundHead != nullptr) {
             FoundDevice *oldest = foundHead;
@@ -167,10 +201,18 @@ void FoundDeviceList::noteIdentity(
     if (slot == nullptr) {
         return;
     }
-    free(slot->manufacturer);
-    free(slot->model);
-    slot->manufacturer = DeviceTopicMap::duplicateBoundedString(manufacturer, 32);
-    slot->model = DeviceTopicMap::duplicateBoundedString(model, 32);
+    if (manufacturer != nullptr && manufacturer[0] != '\0') {
+        free(slot->manufacturer);
+        slot->manufacturer = DeviceTopicMap::duplicateBoundedString(manufacturer, 32);
+    } else if (slot->manufacturer == nullptr) {
+        slot->manufacturer = DeviceTopicMap::duplicateBoundedString("", 32);
+    }
+    if (model != nullptr && model[0] != '\0') {
+        free(slot->model);
+        slot->model = DeviceTopicMap::duplicateBoundedString(model, 32);
+    } else if (slot->model == nullptr) {
+        slot->model = DeviceTopicMap::duplicateBoundedString("", 32);
+    }
     memcpy(slot->ieee, ieee, 8);
     slot->shortAddr = shortAddr;
     slot->endpoint = endpoint;
@@ -179,6 +221,9 @@ void FoundDeviceList::noteIdentity(
 }
 
 String FoundDeviceList::listJson(DeviceTopicMap *formatter) {
+    if (!joinsAccepted) {
+        return String("[]");
+    }
     String json = "[";
     bool first = true;
     for (const FoundDevice *device = foundHead; device != nullptr; device = device->next) {

@@ -90,7 +90,25 @@ public:
     void pumpOnlineWindows();
     bool commandsAllowed() const;
 
+    bool beginConfigReads(const uint8_t ieee[8], const uint16_t *clusterIds, const uint16_t *attributeIds, uint8_t count);
+    bool noteConfigAttrReply(
+        const uint8_t ieee[8],
+        uint16_t clusterId,
+        uint16_t attributeId,
+        uint32_t value
+    );
+    bool configReadsComplete(unsigned long startedMs, unsigned long timeoutMs) const;
+    bool configReadValue(
+        const uint8_t ieee[8],
+        uint16_t clusterId,
+        uint16_t attributeId,
+        uint32_t *valueOut,
+        bool *haveValueOut
+    ) const;
+    void clearConfigReads();
+
 private:
+    static constexpr uint8_t kConfigReadSlots = 8;
     static constexpr int kPendingChangeSlots = 1;
     static constexpr unsigned long kOnlineWindowMs = 15UL * 60UL * 1000UL;
 
@@ -190,6 +208,16 @@ private:
     int pendingDeleteIndex = 0;
     int pendingUpsertWalk = 0;
     bool fullPushActive = false;
+
+    struct ConfigReadSlot {
+        bool used;
+        bool haveValue;
+        uint8_t ieee[8];
+        uint16_t clusterId;
+        uint16_t attributeId;
+        uint32_t value;
+    };
+    ConfigReadSlot configReads[kConfigReadSlots]{};
 
     CachedDevice *findByIeee(const uint8_t ieee[8]);
     const CachedDevice *findByIeee(const uint8_t ieee[8]) const;
