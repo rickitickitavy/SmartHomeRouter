@@ -30,6 +30,8 @@
 #include "ZigbeeSpiProxy.h"
 #include "FoundDeviceList.h"
 #include "DeviceStore.h"
+#include "DeviceConfigCatalog.h"
+#include "DeviceManufacturer.h"
 #include "ZigbeeDeviceType.h"
 #include "ZigbeeCluster.h"
 #include "UserDataPayload.h"
@@ -779,11 +781,26 @@ static bool startDeviceSearch() {
     if (seconds == 0) {
         seconds = DEFAULT_PERMIT_JOIN_SEC;
     }
+    if (foundDevices != nullptr) {
+        foundDevices->clear();
+        foundDevices->setAcceptingJoins(true);
+    }
     LOGGER.info("Search permit join " + String(seconds) + "s");
-    return ZIGBEE_SPI_PROXY.permitJoin(seconds);
+    if (!ZIGBEE_SPI_PROXY.permitJoin(seconds)) {
+        if (foundDevices != nullptr) {
+            foundDevices->setAcceptingJoins(false);
+            foundDevices->clear();
+        }
+        return false;
+    }
+    return true;
 }
 
 static void stopDeviceSearch() {
+    if (foundDevices != nullptr) {
+        foundDevices->setAcceptingJoins(false);
+        foundDevices->clear();
+    }
     ZIGBEE_SPI_PROXY.closeJoin();
 }
 
@@ -1126,6 +1143,115 @@ static void runDeviceRegistryFixtures() {
         LOGGER.info("Device type classifier fixture ok");
     }
 
+    if (deviceManufacturerFromJoinString("_TZ3000_wn65ixz9") != DeviceManufacturerTuya
+        || deviceManufacturerFromJoinString("LUMI") != DeviceManufacturerAqara
+        || deviceManufacturerFromJoinString("AcmeWidgets") != DeviceManufacturerUnknown
+        || strcmp(deviceManufacturerJsonId(DeviceManufacturerPhilipsHue), "philipsHue") != 0
+        || deviceManufacturerFromJoinString("LEDVANCE") != DeviceManufacturerLedvance
+        || deviceManufacturerFromJoinString("OSRAM") != DeviceManufacturerLedvance
+        || deviceManufacturerFromJoinString("innr") != DeviceManufacturerInnr
+        || deviceManufacturerFromJoinString("GLEDOPTO") != DeviceManufacturerGledopto
+        || deviceManufacturerFromJoinString("sengled") != DeviceManufacturerSengled
+        || deviceManufacturerFromJoinString("Third Reality") != DeviceManufacturerThirdReality
+        || deviceManufacturerFromJoinString("Heiman") != DeviceManufacturerHeiman
+        || deviceManufacturerFromJoinString("Legrand") != DeviceManufacturerLegrand
+        || deviceManufacturerFromJoinString("Schneider Electric") != DeviceManufacturerSchneider
+        || deviceManufacturerFromJoinString("Namron") != DeviceManufacturerNamron
+        || deviceManufacturerFromJoinString("Develco") != DeviceManufacturerDevelco
+        || deviceConfigListFor(DeviceManufacturerInnr, ZigbeeDeviceTypeOnOff, nullptr) == 0
+        || deviceConfigListFor(DeviceManufacturerDevelco, ZigbeeDeviceTypeOnOff, nullptr) == 0
+        || deviceConfigListFor(DeviceManufacturerPhilipsHue, 11 /* levelControl */, nullptr) == 0
+        || deviceConfigListFor(DeviceManufacturerIkea, 40 /* colorControl */, nullptr) == 0
+        || deviceConfigListFor(DeviceManufacturerNamron, 36 /* thermostat */, nullptr) == 0
+        || deviceConfigListFor(DeviceManufacturerHeiman, ZigbeeDeviceTypeIasZone, nullptr) == 0
+        || deviceConfigListFor(DeviceManufacturerSonoff, ZigbeeDeviceTypeOnOff, nullptr) < 2) {
+        LOGGER.error("Device manufacturer mapper fixture failed");
+    } else {
+        LOGGER.info("Device manufacturer mapper fixture ok");
+    }
+
+    {
+        const DeviceConfigAttr *tuyaFirst = nullptr;
+        const DeviceConfigAttr *unknownFirst = nullptr;
+        const size_t tuyaCount =
+            deviceConfigListFor(DeviceManufacturerTuya, ZigbeeDeviceTypeOnOff, &tuyaFirst);
+        const size_t unknownCount =
+            deviceConfigListFor(DeviceManufacturerUnknown, ZigbeeDeviceTypeOnOff, &unknownFirst);
+        const DeviceConfigAttr *coverMatched[kDeviceConfigMatchMax];
+        const size_t coverCount = deviceConfigCollectFor(
+            DeviceManufacturerTuya,
+            ZigbeeDeviceTypeWindowCovering,
+            "TS130F",
+            coverMatched,
+            kDeviceConfigMatchMax
+        );
+        if (tuyaCount == 0 || tuyaFirst == nullptr || unknownCount != 0
+            || deviceConfigCatalogHasForbiddenRuntimeIds()
+            || deviceHasConfigurableAttrs(DeviceTransportMqtt, DeviceManufacturerTuya, ZigbeeDeviceTypeOnOff)
+            || !deviceHasConfigurableAttrs(
+                   DeviceTransportZigbee,
+                   DeviceManufacturerTuya,
+                   ZigbeeDeviceTypeOnOff
+               )
+            || !deviceHasConfigurableAttrs(
+                   DeviceTransportZigbee,
+                   DeviceManufacturerTuya,
+                   ZigbeeDeviceTypeWindowCovering,
+                   "TS130F"
+               )
+            || coverCount < 4
+            || !deviceHasConfigurableAttrs(
+                   DeviceTransportZigbee,
+                   DeviceManufacturerAqara,
+                   ZigbeeDeviceTypeOnOff
+               )
+            || !deviceHasConfigurableAttrs(
+                   DeviceTransportZigbee,
+                   DeviceManufacturerLedvance,
+                   11
+               )) {
+            LOGGER.error("Device config catalog fixture failed");
+        } else {
+            LOGGER.info("Device config catalog fixture ok");
+        }
+    }
+
+    if (topicMap != nullptr) {
+        uint8_t manufIeee[8];
+        memset(manufIeee, 0xAB, sizeof(manufIeee));
+        DeviceTopicEntry *manufEntry = topicMap->upsert(
+            manufIeee,
+            "ManufFixture",
+            "",
+            "",
+            "",
+            1
+        );
+        if (manufEntry != nullptr) {
+            manufEntry->manufacturer = DeviceManufacturerTuya;
+            manufEntry->zigbeeType = ZigbeeDeviceTypeOnOff;
+            manufEntry->transport = DeviceTransportZigbee;
+            const String manufJson = topicMap->entryJson(manufIeee, nullptr, nullptr, nullptr);
+            topicMap->removeByIeee(manufIeee);
+            if (manufJson.indexOf("\"manufacturer\":\"tuya\"") < 0
+                || manufJson.indexOf("\"configurable\":true") < 0) {
+                LOGGER.error("Device manufacturer persist fixture failed");
+            } else {
+                String wrapped = "[";
+                wrapped += manufJson;
+                wrapped += "]";
+                DeviceTopicMap reloadMap;
+                reloadMap.replaceFromJson(wrapped);
+                const DeviceTopicEntry *reloaded = reloadMap.findByIeee(manufIeee);
+                if (reloaded == nullptr || reloaded->manufacturer != DeviceManufacturerTuya) {
+                    LOGGER.error("Device manufacturer reload fixture failed");
+                } else {
+                    LOGGER.info("Device manufacturer persist fixture ok");
+                }
+            }
+        }
+    }
+
     uint8_t packedJoin[SPI_DEVICE_JOIN_LEN];
     uint8_t packIeee[8];
     memset(packIeee, 0, sizeof(packIeee));
@@ -1142,6 +1268,7 @@ static void runDeviceRegistryFixtures() {
     }
 
     foundDevices->clear();
+    foundDevices->setAcceptingJoins(false);
     SpiFrame joinFrame;
     memset(&joinFrame, 0, sizeof(joinFrame));
     joinFrame.cmd = SpiEvtDeviceJoin;
@@ -1154,6 +1281,16 @@ static void runDeviceRegistryFixtures() {
     strncpy((char *)joinFrame.payload + SPI_DEVICE_JOIN_MODEL_OFFSET, "Plug", 31);
     foundDevices->noteJoin(joinFrame, topicMap);
     String foundJson = foundDevices->listJson(topicMap);
+    if (foundJson != "[]") {
+        LOGGER.error("Found-join before search fixture failed");
+    } else {
+        LOGGER.info("Found-join before search fixture ok");
+    }
+
+    foundDevices->setAcceptingJoins(true);
+    foundDevices->clear();
+    foundDevices->noteJoin(joinFrame, topicMap);
+    foundJson = foundDevices->listJson(topicMap);
     if (foundJson.indexOf("AA") < 0 || foundJson.indexOf("\"type\":\"unknown\"") < 0) {
         LOGGER.error("Found-join fixture failed");
     } else {
@@ -1161,6 +1298,7 @@ static void runDeviceRegistryFixtures() {
     }
 
     foundDevices->clear();
+    foundDevices->setAcceptingJoins(true);
     memcpy(joinFrame.payload, packedJoin, SPI_DEVICE_JOIN_LEN);
     joinFrame.length = SPI_DEVICE_JOIN_LEN;
     foundDevices->noteJoin(joinFrame, topicMap);
@@ -1286,6 +1424,7 @@ static void runDeviceRegistryFixtures() {
     if (createdProbe && probe != nullptr) {
         topicMap->removeByIeee(probe->ieee);
     }
+    foundDevices->setAcceptingJoins(false);
     foundDevices->clear();
     topicMap->replaceFromJson(savedDeviceList);
 

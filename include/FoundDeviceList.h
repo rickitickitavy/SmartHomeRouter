@@ -24,6 +24,9 @@ public:
     ~FoundDeviceList();
 
     void clear();
+    // Found list stays empty until Search starts; only then may joins appear.
+    void setAcceptingJoins(bool accepting);
+    bool acceptingJoins() const { return joinsAccepted; }
     bool noteJoin(const SpiFrame &frame, DeviceTopicMap *registered);
     void noteIdentity(
         const uint8_t ieee[8],
@@ -35,12 +38,15 @@ public:
         uint8_t zigbeeType = 0
     );
     uint8_t zigbeeTypeForIeee(const uint8_t ieee[8]) const;
+    const char *manufacturerForIeee(const uint8_t ieee[8]) const;
+    const char *modelForIeee(const uint8_t ieee[8]) const;
     void removeIeee(const uint8_t ieee[8]);
     String listJson(DeviceTopicMap *formatter);
 
 private:
     FoundDevice *foundHead = nullptr;
     int foundCount = 0;
+    bool joinsAccepted = false;
 
     FoundDevice *findByIeee(const uint8_t ieee[8]);
     const FoundDevice *findByIeee(const uint8_t ieee[8]) const;

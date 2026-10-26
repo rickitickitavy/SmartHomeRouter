@@ -1,9 +1,12 @@
 #include "WebConsole.h"
 #include "Logger.h"
 #include "Defines.h"
+#include "DeviceConfigCatalog.h"
+#include "DeviceManufacturer.h"
 #include "JsonField.h"
 #include "UserDataPayload.h"
 #include "ZigbeeDeviceType.h"
+#include "ZigbeeSpiProxy.h"
 #include "FirmwareOta.h"
 #include "InterChipHost.h"
 #include "UserStore.h"
@@ -322,6 +325,26 @@ void WebConsole::begin() {
     );
 
     server.on("/api/devices/store", HTTP_GET, [this](AsyncWebServerRequest *request) { handleDevicesStoreGet(request); });
+    server.on(
+        "/api/devices/configure",
+        HTTP_GET,
+        [this](AsyncWebServerRequest *request) { handleDevicesConfigureGet(request); }
+    );
+    server.on(
+        "/api/devices/configure",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleDevicesConfigurePost(request); },
+        nullptr,
+        [this](
+            AsyncWebServerRequest *request,
+            uint8_t *data,
+            size_t len,
+            size_t index,
+            size_t total
+        ) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
     server.on(
         "/api/devices/command",
         HTTP_POST,
@@ -2359,6 +2382,43 @@ void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
     } else if (foundDevices != nullptr) {
         entry->zigbeeType = foundDevices->zigbeeTypeForIeee(ieee);
     }
+    const uint8_t storedManufacturer =
+        isEdit ? existing->manufacturer : DeviceManufacturerUnknown;
+    if (isEdit && storedManufacturer != DeviceManufacturerUnknown) {
+        entry->manufacturer = storedManufacturer;
+    } else {
+        String manufacturerText;
+        if (extractJsonString(body.c_str(), "manufacturer", manufacturerText)
+            && manufacturerText.length() > 0) {
+            entry->manufacturer = deviceManufacturerFromJsonId(manufacturerText.c_str());
+        } else if (foundDevices != nullptr) {
+            entry->manufacturer = deviceManufacturerFromJoinString(
+                foundDevices->manufacturerForIeee(ieee)
+            );
+        } else {
+            entry->manufacturer = DeviceManufacturerUnknown;
+        }
+    }
+    const char *storedModel = isEdit ? deviceTopicCStr(existing->model) : "";
+    if (isEdit && storedModel[0] != '\0') {
+        free(entry->model);
+        entry->model = DeviceTopicMap::duplicateBoundedString(storedModel, DEVICE_MODEL_MAX);
+    } else {
+        String modelText;
+        if (extractJsonString(body.c_str(), "model", modelText) && modelText.length() > 0) {
+            free(entry->model);
+            entry->model = DeviceTopicMap::duplicateBoundedString(modelText.c_str(), DEVICE_MODEL_MAX);
+        } else if (foundDevices != nullptr) {
+            free(entry->model);
+            entry->model = DeviceTopicMap::duplicateBoundedString(
+                foundDevices->modelForIeee(ieee),
+                DEVICE_MODEL_MAX
+            );
+        } else {
+            free(entry->model);
+            entry->model = DeviceTopicMap::duplicateBoundedString("", DEVICE_MODEL_MAX);
+        }
+    }
     userDataClearFieldDefs(&entry->userDataFields, &entry->userDataFieldCount);
     if (zigbeeDeviceTypeIsUserData(entry->zigbeeType)) {
         String fieldsSlice;
@@ -2439,6 +2499,264 @@ void WebConsole::handleDevicesDelete(AsyncWebServerRequest *request) {
     }
     broadcastDeviceRemoved(ieee);
     request->send(200, "text/plain", "Deleted");
+}
+
+void WebConsole::handleDevicesConfigureGet(AsyncWebServerRequest *request) {
+    const UserRecord *user = nullptr;
+    if (!requireUser(request, &user, false)) {
+        return;
+    }
+    if (!userCanControlDevices(user)) {
+        request->send(403, "text/plain", "Forbidden");
+        return;
+    }
+    String ieeeText;
+    if (request->hasParam("ieee")) {
+        ieeeText = request->getParam("ieee")->value();
+    }
+    if (ieeeText.length() == 0) {
+        request->send(400, "text/plain", "Need ieee");
+        return;
+    }
+    DeviceTopicMap *deviceMap = settingsManager->deviceMap();
+    uint8_t ieee[8];
+    if (!deviceMap->parseIeee(ieeeText.c_str(), ieee)) {
+        request->send(400, "text/plain", "Bad IEEE");
+        return;
+    }
+    DeviceTopicEntry *entry = deviceMap->findByIeee(ieee);
+    if (entry == nullptr || !entry->used) {
+        request->send(404, "text/plain", "Device not found");
+        return;
+    }
+    if (!deviceHasConfigurableAttrs(
+            entry->transport,
+            entry->manufacturer,
+            entry->zigbeeType,
+            deviceTopicCStr(entry->model)
+        )) {
+        request->send(400, "text/plain", "No configurable attributes");
+        return;
+    }
+    const DeviceConfigAttr *matched[kDeviceConfigMatchMax];
+    const size_t attrCount = deviceConfigCollectFor(
+        entry->manufacturer,
+        entry->zigbeeType,
+        deviceTopicCStr(entry->model),
+        matched,
+        kDeviceConfigMatchMax
+    );
+    if (attrCount == 0) {
+        request->send(400, "text/plain", "No configurable attributes");
+        return;
+    }
+    uint16_t clusterIds[8];
+    uint16_t attributeIds[8];
+    const uint8_t readCount = attrCount > 8 ? 8 : (uint8_t)attrCount;
+    for (uint8_t index = 0; index < readCount; index++) {
+        clusterIds[index] = matched[index]->clusterId;
+        attributeIds[index] = matched[index]->attributeId;
+    }
+    ZIGBEE_SPI_PROXY.beginConfigReads(ieee, clusterIds, attributeIds, readCount);
+    for (uint8_t index = 0; index < readCount; index++) {
+        ZIGBEE_SPI_PROXY.readAttribute(
+            ieee,
+            matched[index]->endpoint,
+            matched[index]->clusterId,
+            matched[index]->attributeId
+        );
+    }
+    const unsigned long startedMs = millis();
+    while (!ZIGBEE_SPI_PROXY.configReadsComplete(startedMs, 2500UL)) {
+        INTER_CHIP_HOST.pump();
+        delay(10);
+    }
+    String json = "{\"ieee\":\"";
+    json += ieeeText;
+    json += "\",\"attrs\":[";
+    for (size_t index = 0; index < attrCount; index++) {
+        const DeviceConfigAttr *attr = matched[index];
+        if (index > 0) {
+            json += ',';
+        }
+        json += "{\"id\":\"";
+        json += attr->id;
+        json += "\",\"label\":\"";
+        json += attr->label;
+        json += "\",\"type\":\"";
+        json += deviceConfigValueTypeJsonId(attr->valueType);
+        json += "\"";
+        if (attr->valueType == DeviceConfigValueEnum && attr->choices != nullptr) {
+            json += ",\"choices\":[";
+            for (uint8_t choiceIndex = 0; choiceIndex < attr->choiceCount; choiceIndex++) {
+                if (choiceIndex > 0) {
+                    json += ',';
+                }
+                json += "{\"label\":\"";
+                json += attr->choices[choiceIndex].label;
+                json += "\",\"value\":";
+                json += String((unsigned long)attr->choices[choiceIndex].value);
+                json += '}';
+            }
+            json += ']';
+        }
+        uint32_t value = 0;
+        bool haveValue = false;
+        ZIGBEE_SPI_PROXY.configReadValue(
+            ieee,
+            attr->clusterId,
+            attr->attributeId,
+            &value,
+            &haveValue
+        );
+        if (haveValue) {
+            json += ",\"value\":";
+            if (attr->valueType == DeviceConfigValueBool) {
+                json += value != 0 ? "true" : "false";
+            } else if (attr->valueType == DeviceConfigValueInt8) {
+                json += String((long)(int8_t)value);
+            } else if (attr->valueType == DeviceConfigValueInt16) {
+                json += String((long)(int16_t)value);
+            } else {
+                json += String((unsigned long)value);
+            }
+        } else {
+            json += ",\"value\":null,\"error\":\"unavailable\"";
+        }
+        json += '}';
+    }
+    json += "]}";
+    ZIGBEE_SPI_PROXY.clearConfigReads();
+    request->send(200, "application/json", json);
+}
+
+void WebConsole::handleDevicesConfigurePost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    const UserRecord *user = nullptr;
+    if (!requireUser(request, &user)) {
+        return;
+    }
+    if (!userCanControlDevices(user)) {
+        request->send(403, "text/plain", "Forbidden");
+        return;
+    }
+    String ieeeText;
+    if (!extractJsonString(body.c_str(), "ieee", ieeeText) || ieeeText.length() == 0) {
+        request->send(400, "text/plain", "Need ieee");
+        return;
+    }
+    DeviceTopicMap *deviceMap = settingsManager->deviceMap();
+    uint8_t ieee[8];
+    if (!deviceMap->parseIeee(ieeeText.c_str(), ieee)) {
+        request->send(400, "text/plain", "Bad IEEE");
+        return;
+    }
+    DeviceTopicEntry *entry = deviceMap->findByIeee(ieee);
+    if (entry == nullptr || !entry->used) {
+        request->send(404, "text/plain", "Device not found");
+        return;
+    }
+    if (!deviceHasConfigurableAttrs(
+            entry->transport,
+            entry->manufacturer,
+            entry->zigbeeType,
+            deviceTopicCStr(entry->model)
+        )) {
+        request->send(400, "text/plain", "No configurable attributes");
+        return;
+    }
+    String changesSlice;
+    if (!extractJsonKeyedSlice(body.c_str(), "changes", '[', changesSlice)) {
+        request->send(400, "text/plain", "Need changes");
+        return;
+    }
+    if (changesSlice.length() == 0 || changesSlice == "[]") {
+        request->send(200, "text/plain", "No changes");
+        return;
+    }
+    const char *cursor = changesSlice.c_str();
+    int writeCount = 0;
+    while (cursor != nullptr && *cursor != '\0') {
+        const char *objectStart = strchr(cursor, '{');
+        if (objectStart == nullptr) {
+            break;
+        }
+        const char *objectEnd = strchr(objectStart, '}');
+        if (objectEnd == nullptr) {
+            break;
+        }
+        String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
+        String configId;
+        if (!extractJsonString(object.c_str(), "id", configId) || configId.length() == 0) {
+            request->send(400, "text/plain", "Invalid change id");
+            return;
+        }
+        const DeviceConfigAttr *attr = deviceConfigFindAttr(
+            entry->manufacturer,
+            entry->zigbeeType,
+            deviceTopicCStr(entry->model),
+            configId.c_str()
+        );
+        if (attr == nullptr) {
+            request->send(400, "text/plain", "Unknown attribute");
+            return;
+        }
+        uint32_t attributeValue = 0;
+        if (attr->valueType == DeviceConfigValueBool) {
+            bool boolValue = false;
+            if (!extractJsonBool(object.c_str(), "value", boolValue)) {
+                request->send(400, "text/plain", "Invalid bool value");
+                return;
+            }
+            attributeValue = boolValue ? 1u : 0u;
+        } else if (attr->valueType == DeviceConfigValueEnum) {
+            int parsedValue = 0;
+            if (!extractJsonInt(object.c_str(), "value", parsedValue)) {
+                request->send(400, "text/plain", "Invalid enum value");
+                return;
+            }
+            bool allowed = false;
+            for (uint8_t choiceIndex = 0; choiceIndex < attr->choiceCount; choiceIndex++) {
+                if ((uint32_t)parsedValue == attr->choices[choiceIndex].value) {
+                    allowed = true;
+                    break;
+                }
+            }
+            if (!allowed) {
+                request->send(400, "text/plain", "Invalid enum value");
+                return;
+            }
+            attributeValue = (uint32_t)parsedValue;
+        } else {
+            int parsedValue = 0;
+            if (!extractJsonInt(object.c_str(), "value", parsedValue)) {
+                request->send(400, "text/plain", "Invalid value");
+                return;
+            }
+            attributeValue = (uint32_t)parsedValue;
+        }
+        if (!ZIGBEE_SPI_PROXY.writeAttribute(
+                ieee,
+                attr->endpoint,
+                attr->clusterId,
+                attr->attributeId,
+                attr->zclDataType,
+                attributeValue
+            )) {
+            request->send(503, "text/plain", "Write failed");
+            return;
+        }
+        writeCount++;
+        cursor = objectEnd + 1;
+    }
+    if (writeCount == 0) {
+        request->send(400, "text/plain", "Need changes");
+        return;
+    }
+    request->send(200, "text/plain", "Saved");
 }
 
 void WebConsole::handleDevicesCommandPost(AsyncWebServerRequest *request) {

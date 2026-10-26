@@ -7,6 +7,8 @@
 #include <Arduino.h>
 #include <stddef.h>
 
+constexpr size_t DEVICE_MODEL_MAX = 32;
+
 struct DeviceTopicEntry {
     uint8_t ieee[8];
     char *friendlyName;
@@ -22,6 +24,8 @@ struct DeviceTopicEntry {
     uint8_t debug;
     uint8_t publishToMqtt;
     uint8_t zigbeeType;
+    uint8_t manufacturer;
+    char *model;
     uint8_t transport;
     uint8_t used;
     DeviceTopicEntry *next;

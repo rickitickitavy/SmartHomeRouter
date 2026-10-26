@@ -2,6 +2,8 @@
 #include "JsonField.h"
 #include "SpiProtocol.h"
 #include "Defines.h"
+#include "DeviceConfigCatalog.h"
+#include "DeviceManufacturer.h"
 #include "UserDataPayload.h"
 #include "ZigbeeCluster.h"
 #include "ZigbeeDeviceType.h"
@@ -65,12 +67,14 @@ void DeviceTopicMap::clearEntryStrings(DeviceTopicEntry *entry) {
     free(entry->stateTopic);
     free(entry->commandTopic);
     free(entry->availabilityTopic);
+    free(entry->model);
     userDataClearFieldDefs(&entry->userDataFields, &entry->userDataFieldCount);
     deviceCustomCommandClear(&entry->customCommands, &entry->customCommandCount);
     entry->friendlyName = nullptr;
     entry->stateTopic = nullptr;
     entry->commandTopic = nullptr;
     entry->availabilityTopic = nullptr;
+    entry->model = nullptr;
 }
 
 void DeviceTopicMap::freeEntry(DeviceTopicEntry *entry) {
@@ -109,7 +113,13 @@ bool DeviceTopicMap::cloneEntry(DeviceTopicEntry *destination, const DeviceTopic
     destination->debug = source->debug;
     destination->publishToMqtt = source->publishToMqtt;
     destination->zigbeeType = source->zigbeeType;
+    destination->manufacturer = source->manufacturer;
+    destination->model = duplicateBoundedString(source->model, DEVICE_MODEL_MAX);
     destination->transport = source->transport;
+    if (source->model != nullptr && source->model[0] != '\0' && destination->model == nullptr) {
+        clearEntryStrings(destination);
+        return false;
+    }
     if (!userDataCopyFieldDefs(
             &destination->userDataFields,
             &destination->userDataFieldCount,
@@ -713,18 +723,24 @@ DeviceTopicEntry *DeviceTopicMap::upsert(
     uint8_t preservedDebug = 0;
     uint8_t preservedPublishToMqtt = 0;
     uint8_t preservedZigbeeType = ZigbeeDeviceTypeUnknown;
+    uint8_t preservedManufacturer = DeviceManufacturerUnknown;
+    char *preservedModel = nullptr;
     uint8_t preservedTransport = DeviceTransportZigbee;
     if (entry != nullptr && entry->used) {
         preservedFullControl = entry->fullControl;
         preservedDebug = entry->debug;
         preservedPublishToMqtt = entry->publishToMqtt;
         preservedZigbeeType = entry->zigbeeType;
+        preservedManufacturer = entry->manufacturer;
+        preservedModel = entry->model;
+        entry->model = nullptr;
         preservedTransport = clampDeviceTransport(entry->transport);
     }
     if (entry == nullptr) {
         entry = allocateEntry();
     }
     if (entry == nullptr) {
+        free(preservedModel);
         return nullptr;
     }
 
@@ -736,6 +752,9 @@ DeviceTopicEntry *DeviceTopicMap::upsert(
     entry->debug = preservedDebug;
     entry->publishToMqtt = preservedPublishToMqtt;
     entry->zigbeeType = preservedZigbeeType;
+    entry->manufacturer = preservedManufacturer;
+    free(entry->model);
+    entry->model = preservedModel;
     entry->transport = preservedTransport;
     return entry;
 }
@@ -762,6 +781,16 @@ DeviceTopicEntry *DeviceTopicMap::upsertFromEntry(const DeviceTopicEntry *source
     entry->publishToMqtt = source->publishToMqtt ? 1 : 0;
     if (source->zigbeeType != ZigbeeDeviceTypeUnknown) {
         entry->zigbeeType = source->zigbeeType;
+    }
+    if (source->manufacturer != DeviceManufacturerUnknown
+        || entry->manufacturer == DeviceManufacturerUnknown) {
+        entry->manufacturer = source->manufacturer;
+    }
+    if ((source->model != nullptr && source->model[0] != '\0')
+        || entry->model == nullptr
+        || entry->model[0] == '\0') {
+        free(entry->model);
+        entry->model = duplicateBoundedString(source->model, DEVICE_MODEL_MAX);
     }
     entry->transport = clampDeviceTransport(source->transport);
     // Schema lives on the host only. Do not wipe it when the source has no fields
@@ -983,6 +1012,19 @@ void DeviceTopicMap::replaceFromJson(const String &json) {
                 }
             }
             if (entry != nullptr) {
+                String manufacturerText;
+                if (extractJsonString(object.c_str(), "manufacturer", manufacturerText)) {
+                    entry->manufacturer = deviceManufacturerFromJsonId(manufacturerText.c_str());
+                } else {
+                    entry->manufacturer = DeviceManufacturerUnknown;
+                }
+                String modelText;
+                if (extractJsonString(object.c_str(), "model", modelText)) {
+                    free(entry->model);
+                    entry->model = duplicateBoundedString(modelText.c_str(), DEVICE_MODEL_MAX);
+                } else if (entry->model == nullptr) {
+                    entry->model = duplicateBoundedString("", DEVICE_MODEL_MAX);
+                }
                 String transportText;
                 if (extractJsonString(object.c_str(), "transport", transportText)) {
                     entry->transport = deviceTransportFromJsonId(transportText.c_str());
@@ -1236,7 +1278,20 @@ static void appendDeviceListEntryJson(
     json += deviceEntry->debug ? "true" : "false";
     json += ",\"type\":\"";
     json += zigbeeDeviceTypeJsonId(deviceEntry->zigbeeType);
-    json += "\",\"transport\":\"";
+    json += "\",\"manufacturer\":\"";
+    json += deviceManufacturerJsonId(deviceEntry->manufacturer);
+    json += "\",\"model\":\"";
+    appendJsonEscaped(json, deviceEntry->model, jsonEscapeCap(deviceEntry->model));
+    json += "\",\"configurable\":";
+    json += deviceHasConfigurableAttrs(
+                deviceEntry->transport,
+                deviceEntry->manufacturer,
+                deviceEntry->zigbeeType,
+                deviceTopicCStr(deviceEntry->model)
+            )
+        ? "true"
+        : "false";
+    json += ",\"transport\":\"";
     json += deviceTransportJsonId(deviceEntry->transport);
     json += "\"";
     if (clampDeviceTransport(deviceEntry->transport) != DeviceTransportMqtt) {

@@ -504,6 +504,111 @@ bool ZigbeeSpiProxy::readAttribute(
     return queued;
 }
 
+void ZigbeeSpiProxy::clearConfigReads() {
+    memset(configReads, 0, sizeof(configReads));
+}
+
+bool ZigbeeSpiProxy::beginConfigReads(
+    const uint8_t ieee[8],
+    const uint16_t *clusterIds,
+    const uint16_t *attributeIds,
+    uint8_t count
+) {
+    clearConfigReads();
+    if (ieee == nullptr || clusterIds == nullptr || attributeIds == nullptr || count == 0) {
+        return false;
+    }
+    if (count > kConfigReadSlots) {
+        count = kConfigReadSlots;
+    }
+    for (uint8_t index = 0; index < count; index++) {
+        configReads[index].used = true;
+        configReads[index].haveValue = false;
+        memcpy(configReads[index].ieee, ieee, 8);
+        configReads[index].clusterId = clusterIds[index];
+        configReads[index].attributeId = attributeIds[index];
+        configReads[index].value = 0;
+    }
+    return true;
+}
+
+bool ZigbeeSpiProxy::noteConfigAttrReply(
+    const uint8_t ieee[8],
+    uint16_t clusterId,
+    uint16_t attributeId,
+    uint32_t value
+) {
+    if (ieee == nullptr) {
+        return false;
+    }
+    for (uint8_t index = 0; index < kConfigReadSlots; index++) {
+        if (!configReads[index].used || configReads[index].haveValue) {
+            continue;
+        }
+        if (memcmp(configReads[index].ieee, ieee, 8) != 0) {
+            continue;
+        }
+        if (configReads[index].clusterId != clusterId || configReads[index].attributeId != attributeId) {
+            continue;
+        }
+        configReads[index].value = value;
+        configReads[index].haveValue = true;
+        return true;
+    }
+    return false;
+}
+
+bool ZigbeeSpiProxy::configReadsComplete(unsigned long startedMs, unsigned long timeoutMs) const {
+    bool anyPending = false;
+    for (uint8_t index = 0; index < kConfigReadSlots; index++) {
+        if (!configReads[index].used) {
+            continue;
+        }
+        if (!configReads[index].haveValue) {
+            anyPending = true;
+            break;
+        }
+    }
+    if (!anyPending) {
+        return true;
+    }
+    return (millis() - startedMs) >= timeoutMs;
+}
+
+bool ZigbeeSpiProxy::configReadValue(
+    const uint8_t ieee[8],
+    uint16_t clusterId,
+    uint16_t attributeId,
+    uint32_t *valueOut,
+    bool *haveValueOut
+) const {
+    if (haveValueOut != nullptr) {
+        *haveValueOut = false;
+    }
+    if (ieee == nullptr) {
+        return false;
+    }
+    for (uint8_t index = 0; index < kConfigReadSlots; index++) {
+        if (!configReads[index].used) {
+            continue;
+        }
+        if (memcmp(configReads[index].ieee, ieee, 8) != 0) {
+            continue;
+        }
+        if (configReads[index].clusterId != clusterId || configReads[index].attributeId != attributeId) {
+            continue;
+        }
+        if (haveValueOut != nullptr) {
+            *haveValueOut = configReads[index].haveValue;
+        }
+        if (valueOut != nullptr) {
+            *valueOut = configReads[index].value;
+        }
+        return true;
+    }
+    return false;
+}
+
 bool ZigbeeSpiProxy::sendClusterCommand(
     const uint8_t ieee[8],
     uint8_t endpoint,
@@ -1245,6 +1350,19 @@ void ZigbeeSpiProxy::onSpiEvent(const SpiFrame &frame) {
         const size_t bounded = copyLength >= sizeof(message) ? sizeof(message) - 1 : copyLength;
         memcpy(message, frame.payload + SPI_ATTR_REPORT_MESSAGE_OFFSET, bounded);
         message[sizeof(message) - 1] = '\0';
+        unsigned parsedCluster = 0;
+        unsigned parsedAttr = 0;
+        unsigned long parsedValue = 0;
+        if (sscanf(message, "cl=0x%X,attr=0x%X,val=0x%lX", &parsedCluster, &parsedAttr, &parsedValue) == 3
+            || sscanf(
+                   message,
+                   "%*[^ ] cl=0x%X,attr=0x%X,val=0x%lX",
+                   &parsedCluster,
+                   &parsedAttr,
+                   &parsedValue
+               ) == 3) {
+            noteConfigAttrReply(ieee, (uint16_t)parsedCluster, (uint16_t)parsedAttr, (uint32_t)parsedValue);
+        }
         CachedDevice *slot = allocSlot(ieee);
         if (slot != nullptr) {
             slot->endpoint = endpoint;
