@@ -2904,23 +2904,28 @@
             return normalizeIconAlign(binding && binding.iconAlign);
         }
 
-        function applyBindingTitleLayout(row, binding) {
+        function applyBindingTitleLayout(row, binding, layoutOptions) {
             if (!row) {
                 return;
             }
             var showTitle = bindingShowsTitle(binding);
             var alignH = bindingContentAlignH(binding);
             var alignV = normalizeAlignV(binding && binding.alignV);
+            // Grid cells keep Horizontal align even with a title; Vertical titled
+            // left/right rows keep classic name/control layout (no align-h class).
+            var applyAlignH = !showTitle || !!(layoutOptions && layoutOptions.alignHWithTitle);
             if (!showTitle) {
                 row.classList.add("console-device-row--no-title");
-                row.classList.add("console-device-row--align-h-" + alignH);
-                if (binding && binding.viewStyle === "icon") {
-                    row.classList.add("console-device-row--icon-align-" + alignH);
-                }
             } else {
                 row.classList.add(
                     "console-device-row--title-" + normalizeTitlePosition(binding && binding.titlePosition)
                 );
+            }
+            if (applyAlignH) {
+                row.classList.add("console-device-row--align-h-" + alignH);
+                if (binding && binding.viewStyle === "icon") {
+                    row.classList.add("console-device-row--icon-align-" + alignH);
+                }
             }
             row.classList.add("console-device-row--align-v-" + alignV);
         }
@@ -5747,7 +5752,7 @@
             }, 600);
         }
 
-        function placeBuildDeviceRow(binding) {
+        function placeBuildDeviceRow(binding, layoutOptions) {
             var row = document.createElement("div");
             if (binding && binding.spacer) {
                 row.className = "console-device-row console-device-row--empty";
@@ -5755,7 +5760,7 @@
                 return row;
             }
             row.className = "console-device-row";
-            applyBindingTitleLayout(row, binding);
+            applyBindingTitleLayout(row, binding, layoutOptions || null);
             appendBindingTitleElement(row, binding, "Device");
             var controls = document.createElement("div");
             controls.className = "console-device-row-controls";
@@ -6109,8 +6114,11 @@
                     applyWidgetViewportListClass(list, widget);
                     var devices = (widget && widget.devices) || [];
                     var bindingIndex;
+                    var placeLayoutOpts = widget && widget.viewport === "grid"
+                        ? { alignHWithTitle: true }
+                        : null;
                     for (bindingIndex = 0; bindingIndex < devices.length; bindingIndex++) {
-                        list.appendChild(placeBuildDeviceRow(devices[bindingIndex]));
+                        list.appendChild(placeBuildDeviceRow(devices[bindingIndex], placeLayoutOpts));
                     }
                     card.appendChild(list);
                 }
@@ -10881,9 +10889,21 @@
             colsInput.type = "number";
             colsInput.min = "1";
             colsInput.max = "6";
+            colsInput.step = "1";
+            colsInput.inputMode = "numeric";
             colsInput.className = "console-widget-grid-columns";
             colsInput.setAttribute("data-widget-index", String(widgetIndex));
-            colsInput.value = String(widget.gridColumns > 0 ? widget.gridColumns : 2);
+            colsInput.value = String(widget.gridColumns > 0 ? Math.floor(widget.gridColumns) : 2);
+            colsInput.addEventListener("change", function () {
+                var n = parseInt(colsInput.value, 10);
+                if (!(n > 0)) {
+                    n = 2;
+                }
+                if (n > 6) {
+                    n = 6;
+                }
+                colsInput.value = String(n);
+            });
             colsField.appendChild(colsLabel);
             colsField.appendChild(colsInput);
             var rowsField = document.createElement("label");
@@ -10896,9 +10916,21 @@
             rowsInput.type = "number";
             rowsInput.min = "1";
             rowsInput.max = "6";
+            rowsInput.step = "1";
+            rowsInput.inputMode = "numeric";
             rowsInput.className = "console-widget-grid-rows";
             rowsInput.setAttribute("data-widget-index", String(widgetIndex));
-            rowsInput.value = String(widget.gridRows > 0 ? widget.gridRows : 2);
+            rowsInput.value = String(widget.gridRows > 0 ? Math.floor(widget.gridRows) : 2);
+            rowsInput.addEventListener("change", function () {
+                var n = parseInt(rowsInput.value, 10);
+                if (!(n > 0)) {
+                    n = 2;
+                }
+                if (n > 6) {
+                    n = 6;
+                }
+                rowsInput.value = String(n);
+            });
             rowsField.appendChild(rowsLabel);
             rowsField.appendChild(rowsInput);
             gridSizeField.appendChild(colsField);
@@ -11042,7 +11074,11 @@
                 spacerTitle.textContent = spacerPreview || "Empty cell";
                 row.appendChild(spacerTitle);
             } else {
-                applyBindingTitleLayout(row, binding);
+                var editorWidget = consoleEditorDraft.widgets[widgetIndex];
+                var editorLayoutOpts = editorWidget && editorWidget.viewport === "grid"
+                    ? { alignHWithTitle: true }
+                    : null;
+                applyBindingTitleLayout(row, binding, editorLayoutOpts);
                 appendBindingTitleElement(row, binding, "Binding", { editPlaceholder: true });
             }
             if (isConsoleBindingSpacer(binding)) {
@@ -11177,7 +11213,14 @@
                 var colsWidgetIndex = parseInt(gridColumnInputs[gridColumnIndex].getAttribute("data-widget-index"), 10);
                 if (consoleEditorDraft.widgets[colsWidgetIndex]) {
                     var colsValue = parseInt(gridColumnInputs[gridColumnIndex].value, 10);
-                    consoleEditorDraft.widgets[colsWidgetIndex].gridColumns = colsValue > 0 ? colsValue : 2;
+                    if (!(colsValue > 0)) {
+                        colsValue = 2;
+                    }
+                    if (colsValue > 6) {
+                        colsValue = 6;
+                    }
+                    consoleEditorDraft.widgets[colsWidgetIndex].gridColumns = colsValue;
+                    gridColumnInputs[gridColumnIndex].value = String(colsValue);
                 }
             }
             var gridRowInputs = document.querySelectorAll(".console-widget-grid-rows");
@@ -11186,7 +11229,14 @@
                 var rowsWidgetIndex = parseInt(gridRowInputs[gridRowIndex].getAttribute("data-widget-index"), 10);
                 if (consoleEditorDraft.widgets[rowsWidgetIndex]) {
                     var rowsValue = parseInt(gridRowInputs[gridRowIndex].value, 10);
-                    consoleEditorDraft.widgets[rowsWidgetIndex].gridRows = rowsValue > 0 ? rowsValue : 2;
+                    if (!(rowsValue > 0)) {
+                        rowsValue = 2;
+                    }
+                    if (rowsValue > 6) {
+                        rowsValue = 6;
+                    }
+                    consoleEditorDraft.widgets[rowsWidgetIndex].gridRows = rowsValue;
+                    gridRowInputs[gridRowIndex].value = String(rowsValue);
                 }
             }
             var fullWidthChecks = document.querySelectorAll(".console-widget-fullwidth-cb");
@@ -12058,9 +12108,23 @@
             var showTitleCheck = document.getElementById("consoleDeviceShowTitle");
             var titlePositionField = document.getElementById("consoleDeviceTitlePositionField");
             var alignHField = document.getElementById("consoleDeviceAlignHField");
+            var alignVField = document.getElementById("consoleDeviceAlignVField");
             var showTitle = !showTitleCheck || showTitleCheck.checked;
+            var isCompositeCell = !!consoleCompositeEditTarget;
+            var dialogWidget = consoleEditorDraft && consoleEditorDraft.widgets
+                && consoleEditorDraft.widgets[consoleDeviceDialogWidgetIndex];
+            var isGridWidget = !!(dialogWidget && dialogWidget.viewport === "grid");
             setHidden(titlePositionField, !showTitle);
-            setHidden(alignHField, showTitle);
+            // Composite cells own Align H/V in cell chrome — hide binding dialog duplicates.
+            if (isCompositeCell) {
+                setHidden(alignHField, true);
+                setHidden(alignVField, true);
+            } else {
+                // Grid: Horizontal align stays available with title shown.
+                // Vertical: hide Horizontal align when title is shown (classic row layout).
+                setHidden(alignHField, showTitle && !isGridWidget);
+                setHidden(alignVField, false);
+            }
         }
 
         function refreshConsoleDeviceGaugeFields() {
@@ -14479,7 +14543,7 @@
                         <option value="right">Right</option>
                     </select>
                 </div>
-                <div class="console-binding-general-row">
+                <div id="consoleDeviceAlignVField" class="console-binding-general-row">
                     <label for="consoleDeviceAlignV">Vertical align</label>
                     <select id="consoleDeviceAlignV">
                         <option value="top">Top</option>
