@@ -792,7 +792,7 @@ void WebConsole::handleAuthLoginPost(AsyncWebServerRequest *request) {
         request->send(401, "text/plain", "Invalid user name or password");
         return;
     }
-    char tokenHex[AUTH_SESSION_TOKEN_LEN * 2 + 1];
+    char tokenHex[AUTH_SESSION_COOKIE_MAX];
     uint32_t maxAgeSec = 0;
     if (!userStore->startSession(user, rememberMe, millis(), tokenHex, sizeof(tokenHex), &maxAgeSec)) {
         request->send(401, "text/plain", "Invalid user name or password");
@@ -810,13 +810,13 @@ void WebConsole::handleAuthLogoutPost(AsyncWebServerRequest *request) {
         const char *found = strstr(cookie, AUTH_COOKIE_NAME "=");
         if (found != nullptr) {
             found += strlen(AUTH_COOKIE_NAME "=");
-            char tokenHex[AUTH_SESSION_TOKEN_LEN * 2 + 1];
-            size_t hexIndex = 0;
-            while (hexIndex < AUTH_SESSION_TOKEN_LEN * 2 && found[hexIndex] != '\0' && found[hexIndex] != ';') {
-                tokenHex[hexIndex] = found[hexIndex];
-                hexIndex++;
+            char tokenHex[AUTH_SESSION_COOKIE_MAX];
+            size_t valueIndex = 0;
+            while (valueIndex + 1 < sizeof(tokenHex) && found[valueIndex] != '\0' && found[valueIndex] != ';') {
+                tokenHex[valueIndex] = found[valueIndex];
+                valueIndex++;
             }
-            tokenHex[hexIndex] = '\0';
+            tokenHex[valueIndex] = '\0';
             userStore->endSession(tokenHex);
         }
     }

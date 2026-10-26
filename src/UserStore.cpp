@@ -3,11 +3,13 @@
 #include "Logger.h"
 
 #include <LittleFS.h>
+#include <mbedtls/md.h>
 #include <mbedtls/sha256.h>
 #include <esp_random.h>
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <ctype.h>
 
 static_assert(USER_NAME_MAX == SPI_USER_SYNC_NAME_LEN, "user name SPI width must match store");
 static_assert(USER_PASSWORD_SALT_LEN == SPI_USER_SYNC_SALT_LEN, "user salt SPI width must match store");
@@ -381,6 +383,7 @@ bool UserStore::setPassword(UserRecord *user, const char *password) {
     hashPassword(salt, password, hash);
     bytesToHex(salt, sizeof(salt), user->passwordSaltHex);
     bytesToHex(hash, sizeof(hash), user->passwordHashHex);
+    clearSessionsForUser(user->userName);
     return true;
 }
 
@@ -943,6 +946,9 @@ UserWriteResult UserStore::updateUser(
         }
     }
     freeConsoleIdList(previousConsoles);
+    if (user->isBlocked || (password != nullptr && password[0] != '\0')) {
+        clearSessionsForUser(user->userName);
+    }
     afterMutation(UserChangeUpsert, user);
     return UserWriteOk;
 }
@@ -965,6 +971,7 @@ UserWriteResult UserStore::deleteUser(const UserRecord *actor, const char *userN
     if (remainingUnlockedAdmins < 1) {
         return UserWriteLastAdmin;
     }
+    clearSessionsForUser(userName);
     if (!removeByName(userName, true)) {
         return UserWriteNotFound;
     }
@@ -1065,11 +1072,67 @@ String UserStore::listExportJson() const {
 
 UserStore::SessionSlot *UserStore::findSession(const uint8_t token[AUTH_SESSION_TOKEN_LEN]) {
     for (int index = 0; index < AUTH_SESSION_MAX; index++) {
-        if (sessions[index].used && memcmp(sessions[index].token, token, AUTH_SESSION_TOKEN_LEN) == 0) {
+        if (sessions[index].used && !sessions[index].durableRemember
+            && memcmp(sessions[index].token, token, AUTH_SESSION_TOKEN_LEN) == 0) {
             return &sessions[index];
         }
     }
     return nullptr;
+}
+
+UserStore::SessionSlot *UserStore::findDurableSession(const char *userName) {
+    if (userName == nullptr) {
+        return nullptr;
+    }
+    for (int index = 0; index < AUTH_SESSION_MAX; index++) {
+        if (sessions[index].used && sessions[index].durableRemember
+            && nameEquals(sessions[index].userName, userName)) {
+            return &sessions[index];
+        }
+    }
+    return nullptr;
+}
+
+UserStore::SessionSlot *UserStore::allocateSessionSlot() {
+    for (int index = 0; index < AUTH_SESSION_MAX; index++) {
+        if (!sessions[index].used) {
+            return &sessions[index];
+        }
+    }
+    return &sessions[0];
+}
+
+UserStore::SessionSlot *UserStore::rehydrateDurableSession(
+    const UserRecord *user,
+    uint32_t nowMs,
+    uint32_t expiresAtUnix
+) {
+    if (user == nullptr) {
+        return nullptr;
+    }
+    SessionSlot *slot = findDurableSession(user->userName);
+    if (slot == nullptr) {
+        slot = allocateSessionSlot();
+    }
+    memset(slot, 0, sizeof(*slot));
+    strncpy(slot->userName, user->userName, sizeof(slot->userName) - 1);
+    slot->lastActivityMs = nowMs;
+    slot->maxIdleMs = AUTH_REMEMBER_MS;
+    slot->expiresAtUnix = expiresAtUnix;
+    slot->durableRemember = true;
+    slot->used = true;
+    return slot;
+}
+
+void UserStore::clearSessionsForUser(const char *userName) {
+    if (userName == nullptr || userName[0] == '\0') {
+        return;
+    }
+    for (int index = 0; index < AUTH_SESSION_MAX; index++) {
+        if (sessions[index].used && nameEquals(sessions[index].userName, userName)) {
+            memset(&sessions[index], 0, sizeof(sessions[index]));
+        }
+    }
 }
 
 bool UserStore::userGetsLongIdleSession(const UserRecord *user) {
@@ -1085,6 +1148,189 @@ bool UserStore::userGetsLongIdleSession(const UserRecord *user) {
     return true;
 }
 
+bool UserStore::wallClockIsSane(time_t wallClock) {
+    return wallClock >= AUTH_WALL_CLOCK_MIN;
+}
+
+bool UserStore::computeRememberMac(
+    const UserRecord *user,
+    uint32_t expiresAtUnix,
+    uint8_t macOut[AUTH_REMEMBER_MAC_LEN]
+) {
+    if (user == nullptr || macOut == nullptr) {
+        return false;
+    }
+    uint8_t passwordHash[USER_PASSWORD_HASH_LEN];
+    if (!hexToBytes(user->passwordHashHex, passwordHash, sizeof(passwordHash))) {
+        return false;
+    }
+    char message[USER_NAME_MAX + 16 + USER_PASSWORD_SALT_LEN * 2 + 8];
+    const int messageLen = snprintf(
+        message,
+        sizeof(message),
+        "%s|%08lx|%s",
+        user->userName,
+        (unsigned long)expiresAtUnix,
+        user->passwordSaltHex
+    );
+    if (messageLen <= 0 || (size_t)messageLen >= sizeof(message)) {
+        return false;
+    }
+    uint8_t fullMac[32];
+    const mbedtls_md_info_t *mdInfo = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    if (mdInfo == nullptr) {
+        return false;
+    }
+    if (mbedtls_md_hmac(
+            mdInfo,
+            passwordHash,
+            sizeof(passwordHash),
+            (const unsigned char *)message,
+            (size_t)messageLen,
+            fullMac
+        ) != 0) {
+        return false;
+    }
+    memcpy(macOut, fullMac, AUTH_REMEMBER_MAC_LEN);
+    return true;
+}
+
+bool UserStore::issueRememberProof(
+    const UserRecord *user,
+    uint32_t expiresAtUnix,
+    char *cookieOut,
+    size_t cookieOutSize
+) {
+    if (user == nullptr || cookieOut == nullptr || cookieOutSize < 16) {
+        return false;
+    }
+    uint8_t mac[AUTH_REMEMBER_MAC_LEN];
+    if (!computeRememberMac(user, expiresAtUnix, mac)) {
+        return false;
+    }
+    char userNameHex[USER_NAME_MAX * 2 + 1];
+    bytesToHex((const uint8_t *)user->userName, strlen(user->userName), userNameHex);
+    char macHex[AUTH_REMEMBER_MAC_LEN * 2 + 1];
+    bytesToHex(mac, sizeof(mac), macHex);
+    const int written = snprintf(
+        cookieOut,
+        cookieOutSize,
+        "%s%s.%08lx.%s",
+        AUTH_REMEMBER_COOKIE_PREFIX,
+        userNameHex,
+        (unsigned long)expiresAtUnix,
+        macHex
+    );
+    return written > 0 && (size_t)written < cookieOutSize;
+}
+
+bool UserStore::parseRememberProof(
+    const char *cookieValue,
+    char *userNameOut,
+    size_t userNameOutSize,
+    uint32_t *expiresAtUnixOut,
+    uint8_t macOut[AUTH_REMEMBER_MAC_LEN]
+) {
+    if (cookieValue == nullptr || userNameOut == nullptr || userNameOutSize == 0
+        || expiresAtUnixOut == nullptr || macOut == nullptr) {
+        return false;
+    }
+    const size_t prefixLen = strlen(AUTH_REMEMBER_COOKIE_PREFIX);
+    if (strncmp(cookieValue, AUTH_REMEMBER_COOKIE_PREFIX, prefixLen) != 0) {
+        return false;
+    }
+    const char *cursor = cookieValue + prefixLen;
+    const char *firstDot = strchr(cursor, '.');
+    if (firstDot == nullptr) {
+        return false;
+    }
+    const char *secondDot = strchr(firstDot + 1, '.');
+    if (secondDot == nullptr) {
+        return false;
+    }
+    const size_t nameHexLen = (size_t)(firstDot - cursor);
+    if (nameHexLen == 0 || (nameHexLen % 2) != 0 || nameHexLen / 2 >= userNameOutSize) {
+        return false;
+    }
+    if ((size_t)(secondDot - (firstDot + 1)) != 8) {
+        return false;
+    }
+    if (strlen(secondDot + 1) != AUTH_REMEMBER_MAC_LEN * 2) {
+        return false;
+    }
+    uint8_t nameBytes[USER_NAME_MAX];
+    if (!hexToBytes(cursor, nameBytes, nameHexLen / 2)) {
+        return false;
+    }
+    memcpy(userNameOut, nameBytes, nameHexLen / 2);
+    userNameOut[nameHexLen / 2] = '\0';
+    unsigned long expiryValue = 0;
+    if (sscanf(firstDot + 1, "%8lx", &expiryValue) != 1) {
+        return false;
+    }
+    *expiresAtUnixOut = (uint32_t)expiryValue;
+    if (!hexToBytes(secondDot + 1, macOut, AUTH_REMEMBER_MAC_LEN)) {
+        return false;
+    }
+    return true;
+}
+
+bool UserStore::verifyRememberProof(
+    const UserRecord *user,
+    uint32_t expiresAtUnix,
+    const uint8_t mac[AUTH_REMEMBER_MAC_LEN]
+) {
+    if (user == nullptr || mac == nullptr || user->isBlocked) {
+        return false;
+    }
+    if (!userGetsLongIdleSession(user)) {
+        return false;
+    }
+    const time_t wallClock = time(nullptr);
+    if (!wallClockIsSane(wallClock) || (uint32_t)wallClock > expiresAtUnix) {
+        return false;
+    }
+    uint8_t expectedMac[AUTH_REMEMBER_MAC_LEN];
+    if (!computeRememberMac(user, expiresAtUnix, expectedMac)) {
+        return false;
+    }
+    return hashesEqual(expectedMac, mac, AUTH_REMEMBER_MAC_LEN);
+}
+
+bool UserStore::extractCookieValue(const char *cookieHeader, char *valueOut, size_t valueOutSize) {
+    if (cookieHeader == nullptr || valueOut == nullptr || valueOutSize == 0) {
+        return false;
+    }
+    const char *found = strstr(cookieHeader, AUTH_COOKIE_NAME "=");
+    if (found == nullptr) {
+        return false;
+    }
+    found += strlen(AUTH_COOKIE_NAME "=");
+    size_t valueIndex = 0;
+    while (valueIndex + 1 < valueOutSize && found[valueIndex] != '\0' && found[valueIndex] != ';') {
+        valueOut[valueIndex] = found[valueIndex];
+        valueIndex++;
+    }
+    valueOut[valueIndex] = '\0';
+    return valueIndex > 0;
+}
+
+bool UserStore::isOpaqueSessionToken(const char *cookieValue) {
+    if (cookieValue == nullptr) {
+        return false;
+    }
+    const size_t length = strlen(cookieValue);
+    if (length != AUTH_SESSION_TOKEN_LEN * 2) {
+        return false;
+    }
+    for (size_t index = 0; index < length; index++) {
+        if (!isxdigit((unsigned char)cookieValue[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool UserStore::startSession(
     const UserRecord *user,
     bool rememberMe,
@@ -1093,24 +1339,39 @@ bool UserStore::startSession(
     size_t tokenHexSize,
     uint32_t *maxAgeSec
 ) {
-    if (user == nullptr || user->isBlocked || tokenHex == nullptr || tokenHexSize < AUTH_SESSION_TOKEN_LEN * 2 + 1) {
+    if (user == nullptr || user->isBlocked || tokenHex == nullptr) {
         return false;
     }
-    int slotIndex = -1;
-    for (int index = 0; index < AUTH_SESSION_MAX; index++) {
-        if (!sessions[index].used) {
-            slotIndex = index;
-            break;
+    const bool durableRemember =
+        rememberMe && userGetsLongIdleSession(user) && wallClockIsSane(time(nullptr));
+    if (durableRemember) {
+        if (tokenHexSize < AUTH_SESSION_COOKIE_MAX) {
+            return false;
         }
+        const time_t wallClock = time(nullptr);
+        const uint32_t expiresAtUnix =
+            (uint32_t)wallClock + (uint32_t)(AUTH_REMEMBER_MS / 1000UL);
+        if (!issueRememberProof(user, expiresAtUnix, tokenHex, tokenHexSize)) {
+            return false;
+        }
+        if (rehydrateDurableSession(user, nowMs, expiresAtUnix) == nullptr) {
+            return false;
+        }
+        if (maxAgeSec != nullptr) {
+            *maxAgeSec = AUTH_REMEMBER_MS / 1000UL;
+        }
+        return true;
     }
-    if (slotIndex < 0) {
-        slotIndex = 0;
+    if (tokenHexSize < AUTH_SESSION_TOKEN_LEN * 2 + 1) {
+        return false;
     }
-    SessionSlot *slot = &sessions[slotIndex];
+    SessionSlot *slot = allocateSessionSlot();
     memset(slot, 0, sizeof(*slot));
     esp_fill_random(slot->token, sizeof(slot->token));
     strncpy(slot->userName, user->userName, sizeof(slot->userName) - 1);
     slot->lastActivityMs = nowMs;
+    slot->durableRemember = false;
+    slot->expiresAtUnix = 0;
     if (user->isAdmin) {
         slot->maxIdleMs = AUTH_ADMIN_IDLE_MS;
         if (maxAgeSec != nullptr) {
@@ -1133,8 +1394,20 @@ bool UserStore::startSession(
 }
 
 void UserStore::endSession(const char *tokenHex) {
+    if (tokenHex == nullptr || tokenHex[0] == '\0') {
+        return;
+    }
+    if (strncmp(tokenHex, AUTH_REMEMBER_COOKIE_PREFIX, strlen(AUTH_REMEMBER_COOKIE_PREFIX)) == 0) {
+        char userName[USER_NAME_MAX];
+        uint32_t expiresAtUnix = 0;
+        uint8_t mac[AUTH_REMEMBER_MAC_LEN];
+        if (parseRememberProof(tokenHex, userName, sizeof(userName), &expiresAtUnix, mac)) {
+            clearSessionsForUser(userName);
+        }
+        return;
+    }
     uint8_t token[AUTH_SESSION_TOKEN_LEN];
-    if (tokenHex == nullptr || !hexToBytes(tokenHex, token, sizeof(token))) {
+    if (!hexToBytes(tokenHex, token, sizeof(token))) {
         return;
     }
     SessionSlot *slot = findSession(token);
@@ -1144,8 +1417,24 @@ void UserStore::endSession(const char *tokenHex) {
 }
 
 void UserStore::touchSession(const char *tokenHex, uint32_t nowMs) {
+    if (tokenHex == nullptr || tokenHex[0] == '\0') {
+        return;
+    }
+    if (strncmp(tokenHex, AUTH_REMEMBER_COOKIE_PREFIX, strlen(AUTH_REMEMBER_COOKIE_PREFIX)) == 0) {
+        char userName[USER_NAME_MAX];
+        uint32_t expiresAtUnix = 0;
+        uint8_t mac[AUTH_REMEMBER_MAC_LEN];
+        if (!parseRememberProof(tokenHex, userName, sizeof(userName), &expiresAtUnix, mac)) {
+            return;
+        }
+        SessionSlot *slot = findDurableSession(userName);
+        if (slot != nullptr) {
+            slot->lastActivityMs = nowMs;
+        }
+        return;
+    }
     uint8_t token[AUTH_SESSION_TOKEN_LEN];
-    if (tokenHex == nullptr || !hexToBytes(tokenHex, token, sizeof(token))) {
+    if (!hexToBytes(tokenHex, token, sizeof(token))) {
         return;
     }
     SessionSlot *slot = findSession(token);
@@ -1161,23 +1450,46 @@ const UserRecord *UserStore::sessionUser(
     size_t tokenHexOutSize,
     bool touchActivity
 ) {
-    if (cookieHeader == nullptr) {
+    char cookieValue[AUTH_SESSION_COOKIE_MAX];
+    if (!extractCookieValue(cookieHeader, cookieValue, sizeof(cookieValue))) {
         return nullptr;
     }
-    const char *found = strstr(cookieHeader, AUTH_COOKIE_NAME "=");
-    if (found == nullptr) {
+    if (strncmp(cookieValue, AUTH_REMEMBER_COOKIE_PREFIX, strlen(AUTH_REMEMBER_COOKIE_PREFIX)) == 0) {
+        char userName[USER_NAME_MAX];
+        uint32_t expiresAtUnix = 0;
+        uint8_t mac[AUTH_REMEMBER_MAC_LEN];
+        if (!parseRememberProof(cookieValue, userName, sizeof(userName), &expiresAtUnix, mac)) {
+            return nullptr;
+        }
+        const UserRecord *user = findByName(userName);
+        if (user == nullptr || !verifyRememberProof(user, expiresAtUnix, mac)) {
+            return nullptr;
+        }
+        SessionSlot *slot = findDurableSession(userName);
+        if (slot == nullptr) {
+            slot = rehydrateDurableSession(user, nowMs, expiresAtUnix);
+        }
+        if (slot == nullptr) {
+            return nullptr;
+        }
+        if ((uint32_t)(nowMs - slot->lastActivityMs) > slot->maxIdleMs) {
+            memset(slot, 0, sizeof(*slot));
+            return nullptr;
+        }
+        if (touchActivity) {
+            slot->lastActivityMs = nowMs;
+        }
+        if (tokenHexOut != nullptr && tokenHexOutSize > 0) {
+            strncpy(tokenHexOut, cookieValue, tokenHexOutSize - 1);
+            tokenHexOut[tokenHexOutSize - 1] = '\0';
+        }
+        return user;
+    }
+    if (!isOpaqueSessionToken(cookieValue)) {
         return nullptr;
     }
-    found += strlen(AUTH_COOKIE_NAME "=");
-    char tokenHex[AUTH_SESSION_TOKEN_LEN * 2 + 1];
-    size_t hexIndex = 0;
-    while (hexIndex < AUTH_SESSION_TOKEN_LEN * 2 && found[hexIndex] != '\0' && found[hexIndex] != ';') {
-        tokenHex[hexIndex] = found[hexIndex];
-        hexIndex++;
-    }
-    tokenHex[hexIndex] = '\0';
     uint8_t token[AUTH_SESSION_TOKEN_LEN];
-    if (hexIndex != AUTH_SESSION_TOKEN_LEN * 2 || !hexToBytes(tokenHex, token, sizeof(token))) {
+    if (!hexToBytes(cookieValue, token, sizeof(token))) {
         return nullptr;
     }
     SessionSlot *slot = findSession(token);
@@ -1196,8 +1508,8 @@ const UserRecord *UserStore::sessionUser(
     if (touchActivity) {
         slot->lastActivityMs = nowMs;
     }
-    if (tokenHexOut != nullptr && tokenHexOutSize > hexIndex) {
-        strncpy(tokenHexOut, tokenHex, tokenHexOutSize - 1);
+    if (tokenHexOut != nullptr && tokenHexOutSize > 0) {
+        strncpy(tokenHexOut, cookieValue, tokenHexOutSize - 1);
         tokenHexOut[tokenHexOutSize - 1] = '\0';
     }
     return user;

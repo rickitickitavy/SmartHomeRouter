@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 
 struct UserConsoleIdNode {
     char id[CONSOLE_ID_BUF];
@@ -115,6 +116,7 @@ public:
     );
     void endSession(const char *tokenHex);
     void touchSession(const char *tokenHex, uint32_t nowMs);
+    void clearSessionsForUser(const char *userName);
 
 private:
     UserRecord *usersHead;
@@ -127,7 +129,9 @@ private:
         char userName[USER_NAME_MAX];
         uint32_t lastActivityMs;
         uint32_t maxIdleMs;
+        uint32_t expiresAtUnix;
         bool used;
+        bool durableRemember;
     };
     SessionSlot sessions[AUTH_SESSION_MAX];
 
@@ -149,5 +153,34 @@ private:
     static void copyRolesAndFlags(UserRecord *destination, const UserRecord *source, bool replaceConsoles);
     static void appendConsolesJson(String &json, const UserRecord *user);
     static bool userGetsLongIdleSession(const UserRecord *user);
+    static bool wallClockIsSane(time_t wallClock);
+    static bool computeRememberMac(
+        const UserRecord *user,
+        uint32_t expiresAtUnix,
+        uint8_t macOut[AUTH_REMEMBER_MAC_LEN]
+    );
+    static bool issueRememberProof(
+        const UserRecord *user,
+        uint32_t expiresAtUnix,
+        char *cookieOut,
+        size_t cookieOutSize
+    );
+    static bool parseRememberProof(
+        const char *cookieValue,
+        char *userNameOut,
+        size_t userNameOutSize,
+        uint32_t *expiresAtUnixOut,
+        uint8_t macOut[AUTH_REMEMBER_MAC_LEN]
+    );
+    static bool verifyRememberProof(
+        const UserRecord *user,
+        uint32_t expiresAtUnix,
+        const uint8_t mac[AUTH_REMEMBER_MAC_LEN]
+    );
+    static bool extractCookieValue(const char *cookieHeader, char *valueOut, size_t valueOutSize);
+    static bool isOpaqueSessionToken(const char *cookieValue);
     SessionSlot *findSession(const uint8_t token[AUTH_SESSION_TOKEN_LEN]);
+    SessionSlot *findDurableSession(const char *userName);
+    SessionSlot *allocateSessionSlot();
+    SessionSlot *rehydrateDurableSession(const UserRecord *user, uint32_t nowMs, uint32_t expiresAtUnix);
 };
