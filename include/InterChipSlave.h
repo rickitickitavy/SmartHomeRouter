@@ -87,7 +87,7 @@ public:
 private:
     static constexpr int kQueue = 32;
     static constexpr int kHwSlots = 2;
-    static constexpr int kMaxDeferredDeviceCommands = 32;
+    static constexpr int kMaxDeferredDeviceCommands = 128;
 
     enum class DeferredDeviceKind : uint8_t {
         OnOff = 0,
