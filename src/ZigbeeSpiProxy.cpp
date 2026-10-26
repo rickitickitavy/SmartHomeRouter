@@ -59,6 +59,87 @@ uint8_t ZigbeeSpiProxy::channelCapacityForIeee(const uint8_t ieee[8]) const {
     return 1;
 }
 
+bool ZigbeeSpiProxy::endpointStatusOccupied(const EndpointStatus *status) {
+    if (status == nullptr) {
+        return false;
+    }
+    if (status->state != nullptr && status->state[0] != '\0') {
+        return true;
+    }
+    if (status->covering == nullptr) {
+        return false;
+    }
+    return status->covering->move[0] != '\0'
+        || status->covering->position[0] != '\0'
+        || status->covering->discrete[0] != '\0';
+}
+
+void ZigbeeSpiProxy::clearEndpointStatus(EndpointStatus *status) {
+    if (status == nullptr) {
+        return;
+    }
+    free(status->state);
+    status->state = nullptr;
+    free(status->covering);
+    status->covering = nullptr;
+    status->endpoint = 0;
+}
+
+bool ZigbeeSpiProxy::setEndpointState(EndpointStatus *status, const char *text) {
+    if (status == nullptr) {
+        return false;
+    }
+    if (text == nullptr || text[0] == '\0') {
+        free(status->state);
+        status->state = nullptr;
+        return true;
+    }
+    size_t copyLen = strlen(text);
+    if (copyLen >= kStatusStateMax) {
+        copyLen = kStatusStateMax - 1;
+    }
+    if (status->state != nullptr
+        && strncmp(status->state, text, copyLen) == 0
+        && status->state[copyLen] == '\0') {
+        return true;
+    }
+    char *copy = (char *)malloc(copyLen + 1);
+    if (copy == nullptr) {
+        LOGGER.warning("Host status string alloc failed");
+        return false;
+    }
+    memcpy(copy, text, copyLen);
+    copy[copyLen] = '\0';
+    free(status->state);
+    status->state = copy;
+    return true;
+}
+
+ZigbeeSpiProxy::CoveringStatus *ZigbeeSpiProxy::ensureCoveringStatus(EndpointStatus *status) {
+    if (status == nullptr) {
+        return nullptr;
+    }
+    if (status->covering != nullptr) {
+        return status->covering;
+    }
+    CoveringStatus *covering = (CoveringStatus *)calloc(1, sizeof(CoveringStatus));
+    if (covering == nullptr) {
+        LOGGER.warning("Host covering status alloc failed");
+        return nullptr;
+    }
+    status->covering = covering;
+    return covering;
+}
+
+void ZigbeeSpiProxy::assignBoundedField(char *&destination, const char *source, size_t maxLen) {
+    free(destination);
+    destination = nullptr;
+    if (source == nullptr || source[0] == '\0' || maxLen == 0) {
+        return;
+    }
+    destination = DeviceTopicMap::duplicateBoundedString(source, maxLen);
+}
+
 bool ZigbeeSpiProxy::ensureChannelCapacity(CachedDevice *slot, uint8_t neededCapacity) {
     if (slot == nullptr || neededCapacity == 0) {
         return false;
@@ -79,6 +160,7 @@ bool ZigbeeSpiProxy::ensureChannelCapacity(CachedDevice *slot, uint8_t neededCap
         const uint8_t copyCount =
             slot->channelCapacity < neededCapacity ? slot->channelCapacity : neededCapacity;
         memcpy(grown, slot->channels, sizeof(EndpointStatus) * copyCount);
+        // Ownership of state/covering pointers moved into grown; do not clearEndpointStatus.
         delete[] slot->channels;
     }
     slot->channels = grown;
@@ -90,9 +172,18 @@ void ZigbeeSpiProxy::releaseSlot(CachedDevice *slot) {
     if (slot == nullptr) {
         return;
     }
-    delete[] slot->channels;
+    if (slot->channels != nullptr) {
+        for (uint8_t index = 0; index < slot->channelCapacity; index++) {
+            clearEndpointStatus(&slot->channels[index]);
+        }
+        delete[] slot->channels;
+    }
     slot->channels = nullptr;
     slot->channelCapacity = 0;
+    free(slot->manufacturer);
+    slot->manufacturer = nullptr;
+    free(slot->model);
+    slot->model = nullptr;
     delete slot;
 }
 
@@ -166,14 +257,14 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
     }
     EndpointStatus *statusSlot = nullptr;
     for (uint8_t i = 0; i < slot->channelCapacity; i++) {
-        if (slot->channels[i].endpoint == endpoint && slot->channels[i].state[0] != '\0') {
+        if (slot->channels[i].endpoint == endpoint && endpointStatusOccupied(&slot->channels[i])) {
             statusSlot = &slot->channels[i];
             break;
         }
     }
     if (statusSlot == nullptr) {
         for (uint8_t i = 0; i < slot->channelCapacity; i++) {
-            if (slot->channels[i].state[0] == '\0') {
+            if (!endpointStatusOccupied(&slot->channels[i])) {
                 statusSlot = &slot->channels[i];
                 statusSlot->endpoint = endpoint;
                 break;
@@ -184,9 +275,11 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
         LOGGER.warning("Host channel cache full for device");
         return;
     }
-    const bool valueChanged = strcmp(statusSlot->state, message) != 0;
-    strncpy(statusSlot->state, message, sizeof(statusSlot->state) - 1);
-    statusSlot->state[sizeof(statusSlot->state) - 1] = '\0';
+    const bool valueChanged =
+        statusSlot->state == nullptr || strcmp(statusSlot->state, message) != 0;
+    if (!setEndpointState(statusSlot, message)) {
+        return;
+    }
     const bool isMove = strcmp(message, "UP") == 0
         || strcmp(message, "DOWN") == 0
         || strcmp(message, "STOPPED") == 0;
@@ -213,20 +306,27 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
         && positionParsed <= 100UL;
     const bool isPosition = legacyPositionPercent || plainPosition;
     if (isMove) {
-        strncpy(statusSlot->coveringMove, message, sizeof(statusSlot->coveringMove) - 1);
-        statusSlot->coveringMove[sizeof(statusSlot->coveringMove) - 1] = '\0';
+        CoveringStatus *covering = ensureCoveringStatus(statusSlot);
+        if (covering != nullptr) {
+            strncpy(covering->move, message, sizeof(covering->move) - 1);
+            covering->move[sizeof(covering->move) - 1] = '\0';
+        }
     } else if (isOnOffOrZone) {
-        strncpy(statusSlot->discreteStatus, message, sizeof(statusSlot->discreteStatus) - 1);
-        statusSlot->discreteStatus[sizeof(statusSlot->discreteStatus) - 1] = '\0';
+        CoveringStatus *covering = ensureCoveringStatus(statusSlot);
+        if (covering != nullptr) {
+            strncpy(covering->discrete, message, sizeof(covering->discrete) - 1);
+            covering->discrete[sizeof(covering->discrete) - 1] = '\0';
+        }
     } else if (isPosition) {
         // Store plain integer only — strip legacy trailing '%' for GREATER/LESS compares.
-        snprintf(
-            statusSlot->coveringPosition,
-            sizeof(statusSlot->coveringPosition),
-            "%lu",
-            positionParsed
-        );
-        snprintf(statusSlot->state, sizeof(statusSlot->state), "%lu", positionParsed);
+        CoveringStatus *covering = ensureCoveringStatus(statusSlot);
+        char positionText[8];
+        snprintf(positionText, sizeof(positionText), "%lu", positionParsed);
+        if (covering != nullptr) {
+            strncpy(covering->position, positionText, sizeof(covering->position) - 1);
+            covering->position[sizeof(covering->position) - 1] = '\0';
+        }
+        setEndpointState(statusSlot, positionText);
     } else {
         const char *space = strchr(message, ' ');
         if (space != nullptr) {
@@ -245,14 +345,17 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
                     && ((*legacyPosEnd == '%' && legacyPosEnd[1] == '\0')
                         || *legacyPosEnd == '\0');
                 if (legacyMove && legacyPosOk) {
-                    strncpy(statusSlot->coveringMove, moveToken, sizeof(statusSlot->coveringMove) - 1);
-                    statusSlot->coveringMove[sizeof(statusSlot->coveringMove) - 1] = '\0';
-                    snprintf(
-                        statusSlot->coveringPosition,
-                        sizeof(statusSlot->coveringPosition),
-                        "%lu",
-                        legacyPos
-                    );
+                    CoveringStatus *covering = ensureCoveringStatus(statusSlot);
+                    if (covering != nullptr) {
+                        strncpy(covering->move, moveToken, sizeof(covering->move) - 1);
+                        covering->move[sizeof(covering->move) - 1] = '\0';
+                        snprintf(
+                            covering->position,
+                            sizeof(covering->position),
+                            "%lu",
+                            legacyPos
+                        );
+                    }
                 }
             }
         }
@@ -281,7 +384,8 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
                 clusterOr0 = kZigbeeClusterWindowCovering;
             }
         }
-        statusValueChanged(slot->ieee, endpoint, clusterOr0, statusSlot->state, valueChanged);
+        const char *notifyState = statusSlot->state != nullptr ? statusSlot->state : "";
+        statusValueChanged(slot->ieee, endpoint, clusterOr0, notifyState, valueChanged);
     }
 }
 
@@ -496,7 +600,7 @@ bool ZigbeeSpiProxy::copyEndpointState(
     const EndpointStatus *best = nullptr;
     for (uint8_t index = 0; index < slot->channelCapacity; index++) {
         const EndpointStatus *candidate = &slot->channels[index];
-        if (candidate->state[0] == '\0') {
+        if (candidate->state == nullptr || candidate->state[0] == '\0') {
             continue;
         }
         if (endpoint == 0) {
@@ -510,7 +614,7 @@ bool ZigbeeSpiProxy::copyEndpointState(
             break;
         }
     }
-    if (best == nullptr) {
+    if (best == nullptr || best->state == nullptr) {
         return false;
     }
     strncpy(out, best->state, outLen - 1);
@@ -546,10 +650,7 @@ bool ZigbeeSpiProxy::copyEndpointStateForParam(
     const EndpointStatus *best = nullptr;
     for (uint8_t index = 0; index < slot->channelCapacity; index++) {
         const EndpointStatus *candidate = &slot->channels[index];
-        if (candidate->state[0] == '\0'
-            && candidate->coveringMove[0] == '\0'
-            && candidate->coveringPosition[0] == '\0'
-            && candidate->discreteStatus[0] == '\0') {
+        if (!endpointStatusOccupied(candidate)) {
             continue;
         }
         if (endpoint == 0) {
@@ -566,14 +667,15 @@ bool ZigbeeSpiProxy::copyEndpointStateForParam(
     if (best == nullptr) {
         return false;
     }
-    const char *source = best->state;
-    if (param != nullptr && strcmp(param, "position") == 0 && best->coveringPosition[0] != '\0') {
-        source = best->coveringPosition;
-    } else if (param != nullptr && strcmp(param, "status") == 0) {
-        if (best->coveringMove[0] != '\0') {
-            source = best->coveringMove;
-        } else if (best->discreteStatus[0] != '\0') {
-            source = best->discreteStatus;
+    const char *source = best->state != nullptr ? best->state : "";
+    if (param != nullptr && strcmp(param, "position") == 0
+        && best->covering != nullptr && best->covering->position[0] != '\0') {
+        source = best->covering->position;
+    } else if (param != nullptr && strcmp(param, "status") == 0 && best->covering != nullptr) {
+        if (best->covering->move[0] != '\0') {
+            source = best->covering->move;
+        } else if (best->covering->discrete[0] != '\0') {
+            source = best->covering->discrete;
         }
     }
     if (source[0] == '\0') {
@@ -1186,8 +1288,8 @@ void ZigbeeSpiProxy::onSpiEvent(const SpiFrame &frame) {
         slot->shortAddr = (uint16_t)frame.payload[8] | ((uint16_t)frame.payload[9] << 8);
         slot->endpoint = frame.payload[10];
         slot->lastSeenMs = millis();
-        strncpy(slot->manufacturer, (const char *)frame.payload + 11, sizeof(slot->manufacturer) - 1);
-        strncpy(slot->model, (const char *)frame.payload + 43, sizeof(slot->model) - 1);
+        assignBoundedField(slot->manufacturer, (const char *)frame.payload + 11, 32);
+        assignBoundedField(slot->model, (const char *)frame.payload + 43, 32);
         slot->consoleOnlineSent = true;
         notifyDeviceLiveChanged(ieee);
     }
@@ -1270,10 +1372,7 @@ void ZigbeeSpiProxy::appendListTelemetry(const uint8_t ieee[8], String &json) co
     }
     bool anyStatus = false;
     for (uint8_t i = 0; i < slot->channelCapacity; i++) {
-        if (slot->channels[i].state[0] != '\0'
-            || slot->channels[i].coveringMove[0] != '\0'
-            || slot->channels[i].coveringPosition[0] != '\0'
-            || slot->channels[i].discreteStatus[0] != '\0') {
+        if (endpointStatusOccupied(&slot->channels[i])) {
             anyStatus = true;
             break;
         }
@@ -1288,10 +1387,7 @@ void ZigbeeSpiProxy::appendListTelemetry(const uint8_t ieee[8], String &json) co
     for (;;) {
         int bestIndex = -1;
         for (uint8_t i = 0; i < slot->channelCapacity; i++) {
-            if (slot->channels[i].state[0] == '\0'
-                && slot->channels[i].coveringMove[0] == '\0'
-                && slot->channels[i].coveringPosition[0] == '\0'
-                && slot->channels[i].discreteStatus[0] == '\0') {
+            if (!endpointStatusOccupied(&slot->channels[i])) {
                 continue;
             }
             if (haveLastEndpoint && slot->channels[i].endpoint <= lastEndpoint) {
@@ -1309,35 +1405,32 @@ void ZigbeeSpiProxy::appendListTelemetry(const uint8_t ieee[8], String &json) co
             json += ",";
         }
         first = false;
+        const EndpointStatus &status = slot->channels[bestIndex];
         json += "{\"ep\":";
-        json += String((unsigned)slot->channels[bestIndex].endpoint);
+        json += String((unsigned)status.endpoint);
         json += ",\"state\":\"";
         appendJsonEscaped(
             json,
-            slot->channels[bestIndex].state,
-            sizeof(slot->channels[bestIndex].state)
+            status.state != nullptr ? status.state : "",
+            kStatusStateMax
         );
         json += "\"";
-        if (slot->channels[bestIndex].coveringMove[0] != '\0') {
+        if (status.covering != nullptr && status.covering->move[0] != '\0') {
             json += ",\"move\":\"";
-            appendJsonEscaped(
-                json,
-                slot->channels[bestIndex].coveringMove,
-                sizeof(slot->channels[bestIndex].coveringMove)
-            );
+            appendJsonEscaped(json, status.covering->move, sizeof(status.covering->move));
             json += "\"";
         }
-        if (slot->channels[bestIndex].coveringPosition[0] != '\0') {
+        if (status.covering != nullptr && status.covering->position[0] != '\0') {
             json += ",\"position\":\"";
             appendJsonEscaped(
                 json,
-                slot->channels[bestIndex].coveringPosition,
-                sizeof(slot->channels[bestIndex].coveringPosition)
+                status.covering->position,
+                sizeof(status.covering->position)
             );
             json += "\"";
         }
         json += "}";
-        lastEndpoint = slot->channels[bestIndex].endpoint;
+        lastEndpoint = status.endpoint;
         haveLastEndpoint = true;
     }
     json += "]";

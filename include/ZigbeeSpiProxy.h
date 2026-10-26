@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include "SpiProtocol.h"
 #include "DeviceTopicMap.h"
+#include "UserDataPayload.h"
 #include "UserStore.h"
 
 class ZigbeeSpiProxy {
@@ -94,16 +95,21 @@ private:
     static constexpr unsigned long kOnlineWindowMs = 15UL * 60UL * 1000UL;
 
     // Host cache only (MQTT / UI / automations). SPI wire messages stay SPI_DEVICE_MESSAGE_MAX.
-    // Sized for userData brace values: 24 slots × 16 bytes (15 chars + NUL).
+    // Status text is heap-sized up to userData brace values: 24 slots × 16 bytes (15 chars + NUL).
     static constexpr size_t kStatusStateMax = kUserDataValuesMaxBytes;
+
+    struct CoveringStatus {
+        char move[16];
+        char position[8];
+        char discrete[16];
+    };
 
     struct EndpointStatus {
         uint8_t endpoint;
-        char state[kStatusStateMax];
-        char coveringMove[16];
-        char coveringPosition[8];
-        char discreteStatus[16];
+        char *state;
+        CoveringStatus *covering;
     };
+    static_assert(sizeof(EndpointStatus) < 64, "EndpointStatus must not embed status buffers");
 
     struct CachedDevice {
         CachedDevice *next;
@@ -112,8 +118,8 @@ private:
         uint8_t endpoint;
         uint8_t channelCapacity;
         EndpointStatus *channels;
-        char manufacturer[32];
-        char model[32];
+        char *manufacturer;
+        char *model;
         unsigned long lastSeenMs;
         bool consoleOnlineSent;
         int8_t lastRssiDbm;
@@ -121,6 +127,7 @@ private:
         bool hasBattery;
         unsigned batteryPercent;
     };
+    static_assert(sizeof(CachedDevice) < 96, "CachedDevice must not embed manufacturer/model arrays");
 
     struct PendingDeviceChange {
         bool used;
@@ -190,6 +197,11 @@ private:
     bool ensureChannelCapacity(CachedDevice *slot, uint8_t neededCapacity);
     CachedDevice *allocSlot(const uint8_t ieee[8]);
     void releaseSlot(CachedDevice *slot);
+    static bool endpointStatusOccupied(const EndpointStatus *status);
+    static void clearEndpointStatus(EndpointStatus *status);
+    static bool setEndpointState(EndpointStatus *status, const char *text);
+    static CoveringStatus *ensureCoveringStatus(EndpointStatus *status);
+    static void assignBoundedField(char *&destination, const char *source, size_t maxLen);
     void noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, const char *message);
     void notifyDeviceLiveChanged(const uint8_t ieee[8]);
     bool enqueueRegistryFrame(uint8_t flags, const DeviceTopicEntry *entry);
