@@ -123,6 +123,14 @@ bool MqttClient::isConnected() const {
     return client != nullptr && client->connected();
 }
 
+void MqttClient::notePacketReceived() {
+    packetsRx++;
+}
+
+void MqttClient::notePacketSent() {
+    packetsTx++;
+}
+
 void MqttClient::clearTopicSubscriptions() {
     while (subscriptionHead != nullptr) {
         TopicSubscription *next = subscriptionHead->next;
@@ -516,6 +524,7 @@ bool MqttClient::publishMessage(const char *topic, const char *payload, bool ret
         ? localBroker->publishFromHost(topic, data, retained)
         : client->publish(topic, data, retained);
     if (sent) {
+        notePacketSent();
         if (logInfo) {
             LOGGER.info(String("MQTT send topic=") + topic + " data=" + data);
         }

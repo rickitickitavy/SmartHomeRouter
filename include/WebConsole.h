@@ -36,6 +36,7 @@ public:
     void begin();
     void rebind();
     void loop();
+    int activeWebSocketCount() const;
     void notifyDeviceLiveChanged(const uint8_t ieee[8]);
     void broadcastDeviceRemoved(const uint8_t ieee[8]);
     void broadcastDevicesReload();

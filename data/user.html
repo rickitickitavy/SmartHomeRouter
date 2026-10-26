@@ -25,6 +25,7 @@
         var showingAccountTab = false;
         var registeredDeviceRows = [];
         var automationStatusByName = {};
+        var statusPollTimer = null;
         var LIVE_WS_PING_MS = 15000;
         var LIVE_WS_PONG_MS = 5000;
 
@@ -138,9 +139,11 @@
 
         function showLoginForm() {
             signedInUser = null;
+            showingAccountTab = false;
             stopSessionWatch();
             stopDevicesLive();
             stopConsolesLive();
+            stopStatusPolling();
             applyThemeToDocument("dark");
             document.getElementById("userShell").hidden = true;
             document.getElementById("loginOverlay").hidden = false;
@@ -290,6 +293,7 @@
 
         function selectConsoleTab(index) {
             showingAccountTab = false;
+            stopStatusPolling();
             activeConsoleIndex = index;
             renderConsoleTabs();
         }
@@ -297,6 +301,264 @@
         function selectAccountTab() {
             showingAccountTab = true;
             renderConsoleTabs();
+        }
+
+        function stopStatusPolling() {
+            if (statusPollTimer != null) {
+                window.clearInterval(statusPollTimer);
+                statusPollTimer = null;
+            }
+        }
+
+        function formatOnlineTime(onlineSec) {
+            var totalSeconds = Number(onlineSec);
+            if (!(totalSeconds >= 0)) {
+                return "—";
+            }
+            var days = Math.floor(totalSeconds / 86400);
+            var hours = Math.floor((totalSeconds % 86400) / 3600);
+            var minutes = Math.floor((totalSeconds % 3600) / 60);
+            var seconds = Math.floor(totalSeconds % 60);
+            return days + "d " + hours + "h " + minutes + "m " + seconds + "s";
+        }
+
+        function setStatusText(elementId, value) {
+            var label = document.getElementById(elementId);
+            if (label) {
+                label.textContent = value;
+            }
+        }
+
+        function formatMqttServerType(serverType) {
+            if (serverType === "remote" || serverType === "local" || serverType === "disable") {
+                return serverType;
+            }
+            return "—";
+        }
+
+        function formatMqttRuntimeStatus(payload) {
+            if (payload && payload.mqttStatus) {
+                return String(payload.mqttStatus);
+            }
+            var serverType = payload && payload.mqttServerType;
+            if (serverType === "disable") {
+                return "off";
+            }
+            if (serverType === "local") {
+                return payload && payload.mqttLocalStatus === "listening" ? "listening" : "off";
+            }
+            if (serverType === "remote") {
+                return payload && payload.mqttConnected ? "connected" : "not connected";
+            }
+            return "—";
+        }
+
+        function applyGatewayStatus(payload) {
+            setStatusText(
+                "statusZigbeeDevices",
+                payload && payload.zigbeeDevices != null ? String(payload.zigbeeDevices) : "—"
+            );
+            setStatusText(
+                "statusZigbeeOnline",
+                payload && payload.zigbeeOnline != null ? String(payload.zigbeeOnline) : "—"
+            );
+            setStatusText(
+                "statusMqttDevices",
+                payload && payload.mqttDevices != null ? String(payload.mqttDevices) : "—"
+            );
+            setStatusText(
+                "statusMqttOnline",
+                payload && payload.mqttOnline != null ? String(payload.mqttOnline) : "—"
+            );
+            setStatusText(
+                "statusZigbeePacketsTx",
+                payload && payload.packetsTx != null ? String(payload.packetsTx) : "—"
+            );
+            setStatusText(
+                "statusMqttPacketsTx",
+                payload && payload.mqttPacketsTx != null ? String(payload.mqttPacketsTx) : "—"
+            );
+            setStatusText(
+                "statusZigbeePacketsRx",
+                payload && payload.packetsRx != null ? String(payload.packetsRx) : "—"
+            );
+            setStatusText(
+                "statusMqttPacketsRx",
+                payload && payload.mqttPacketsRx != null ? String(payload.mqttPacketsRx) : "—"
+            );
+            setStatusText(
+                "statusWebActiveConnections",
+                payload && payload.webActiveConnections != null
+                    ? String(payload.webActiveConnections)
+                    : "—"
+            );
+            setStatusText(
+                "statusMqttInboundConnections",
+                payload && payload.mqttInboundConnections != null
+                    ? String(payload.mqttInboundConnections)
+                    : "—"
+            );
+            setStatusText(
+                "statusMqttOutboundConnections",
+                payload && payload.mqttOutboundConnections != null
+                    ? String(payload.mqttOutboundConnections)
+                    : "—"
+            );
+            setStatusText(
+                "statusTotalInboundConnections",
+                payload && payload.totalInboundConnections != null
+                    ? String(payload.totalInboundConnections)
+                    : "—"
+            );
+            setStatusText(
+                "statusTotalOutboundConnections",
+                payload && payload.totalOutboundConnections != null
+                    ? String(payload.totalOutboundConnections)
+                    : "—"
+            );
+            setStatusText("statusOnlineTime", formatOnlineTime(payload && payload.onlineSec));
+            var masterVersion = payload && payload.masterVersion
+                ? payload.masterVersion
+                : (payload && payload.version ? payload.version : "");
+            var slaveVersion = payload && payload.slaveVersion ? payload.slaveVersion : "";
+            setStatusText("statusMasterFirmwareVersion", masterVersion ? masterVersion : "—");
+            setStatusText("statusSlaveFirmwareVersion", slaveVersion ? slaveVersion : "—");
+            setStatusText("statusMqttMode", formatMqttServerType(payload && payload.mqttServerType));
+            setStatusText("statusMqttStatus", formatMqttRuntimeStatus(payload));
+            setStatusText(
+                "statusMqttTopics",
+                payload && payload.mqttTopicCount != null ? String(payload.mqttTopicCount) : "—"
+            );
+            setStatusText(
+                "statusMqttConnections",
+                payload && payload.mqttConnectionCount != null ? String(payload.mqttConnectionCount) : "—"
+            );
+            setStatusText("statusWifiMode", payload && payload.wifiMode ? payload.wifiMode : "—");
+            setStatusText("statusWifiBssid", payload && payload.wifiBssid ? payload.wifiBssid : "—");
+            setStatusText("statusWifiStaMac", payload && payload.wifiStaMac ? payload.wifiStaMac : "—");
+            if (payload && payload.heapFreeKb != null && payload.heapFreePercent != null) {
+                setStatusText(
+                    "statusHeapUsage",
+                    String(payload.heapFreeKb) + " kB (" + String(payload.heapFreePercent) + "%)"
+                );
+            } else {
+                setStatusText("statusHeapUsage", "—");
+            }
+            if (payload && payload.psramPresent) {
+                setStatusText(
+                    "statusPsramUsage",
+                    String(payload.psramFreeKb != null ? payload.psramFreeKb : 0)
+                        + " kB ("
+                        + String(payload.psramFreePercent != null ? payload.psramFreePercent : 0)
+                        + "%)"
+                );
+            } else {
+                setStatusText("statusPsramUsage", "—");
+            }
+            if (payload && payload.wifiRssiDbm != null) {
+                setStatusText("statusWifiSignal", String(payload.wifiRssiDbm) + " dBm");
+            } else {
+                setStatusText("statusWifiSignal", "—");
+            }
+        }
+
+        function refreshGatewayStatus() {
+            fetch("/api/status", { cache: "no-store" }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error("status unavailable");
+                }
+                return response.json();
+            }).then(function (payload) {
+                applyGatewayStatus(payload);
+            }).catch(function () {
+            });
+        }
+
+        function startStatusPolling() {
+            refreshGatewayStatus();
+            if (statusPollTimer != null) {
+                return;
+            }
+            statusPollTimer = window.setInterval(refreshGatewayStatus, 2000);
+        }
+
+        function appendStatusRow(group, labelText, valueId) {
+            var row = document.createElement("div");
+            row.className = "status-row";
+            var label = document.createElement("span");
+            label.className = "status-row-label";
+            label.textContent = labelText;
+            var value = document.createElement("p");
+            value.id = valueId;
+            value.className = "status-value";
+            value.textContent = "—";
+            row.appendChild(label);
+            row.appendChild(value);
+            group.appendChild(row);
+        }
+
+        function appendStatusGroup(stack, titleText, rows) {
+            var group = document.createElement("div");
+            group.className = "status-group";
+            var title = document.createElement("h3");
+            title.className = "group-title";
+            title.textContent = titleText;
+            group.appendChild(title);
+            var rowIndex;
+            for (rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+                appendStatusRow(group, rows[rowIndex][0], rows[rowIndex][1]);
+            }
+            stack.appendChild(group);
+        }
+
+        function buildUserStatusStack() {
+            var stack = document.createElement("div");
+            stack.className = "status-stack status-stack-single";
+            stack.style.marginTop = "1.25rem";
+            var online = document.createElement("div");
+            online.className = "status-online-time";
+            appendStatusRow(online, "Online time", "statusOnlineTime");
+            stack.appendChild(online);
+            appendStatusGroup(stack, "Free memory", [
+                ["Free RAM", "statusHeapUsage"],
+                ["Free PSRAM", "statusPsramUsage"]
+            ]);
+            appendStatusGroup(stack, "Version", [
+                ["Master", "statusMasterFirmwareVersion"],
+                ["Slave", "statusSlaveFirmwareVersion"]
+            ]);
+            appendStatusGroup(stack, "MQTT", [
+                ["Current mode", "statusMqttMode"],
+                ["Status", "statusMqttStatus"],
+                ["Active topics", "statusMqttTopics"],
+                ["Connections", "statusMqttConnections"]
+            ]);
+            appendStatusGroup(stack, "Network", [
+                ["Zigbee packets sent", "statusZigbeePacketsTx"],
+                ["MQTT packets sent", "statusMqttPacketsTx"],
+                ["Zigbee packets received", "statusZigbeePacketsRx"],
+                ["MQTT packets received", "statusMqttPacketsRx"]
+            ]);
+            appendStatusGroup(stack, "Devices", [
+                ["Zigbee devices", "statusZigbeeDevices"],
+                ["Zigbee online", "statusZigbeeOnline"],
+                ["MQTT devices", "statusMqttDevices"],
+                ["MQTT online", "statusMqttOnline"]
+            ]);
+            appendStatusGroup(stack, "Connections", [
+                ["Web active connections", "statusWebActiveConnections"],
+                ["MQTT inbound connections", "statusMqttInboundConnections"],
+                ["MQTT outbound connections", "statusMqttOutboundConnections"],
+                ["Total inbound connections", "statusTotalInboundConnections"],
+                ["Total outbound connections", "statusTotalOutboundConnections"]
+            ]);
+            appendStatusGroup(stack, "WiFi", [
+                ["WiFi mode", "statusWifiMode"],
+                ["BSSID", "statusWifiBssid"],
+                ["STA MAC", "statusWifiStaMac"],
+                ["Signal strength", "statusWifiSignal"]
+            ]);
+            return stack;
         }
 
         function fillUserAccountPanel(panelsHost) {
@@ -371,8 +633,10 @@
             signOutBtn.onclick = openSignOutConfirm;
             signOutWrap.appendChild(signOutBtn);
             panel.appendChild(signOutWrap);
+            panel.appendChild(buildUserStatusStack());
             panelsHost.appendChild(panel);
             panelsHost.hidden = false;
+            startStatusPolling();
         }
 
         function appendUserConsoleAccountTab(tabsHost) {
@@ -420,6 +684,7 @@
                 fillUserAccountPanel(panelsHost);
                 return;
             }
+            stopStatusPolling();
             if (!assignedConsoles.length) {
                 panelsHost.hidden = true;
                 if (emptyState) {
