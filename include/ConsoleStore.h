@@ -11,6 +11,23 @@ struct ConsoleGaugeRange {
     ConsoleGaugeRange *next;
 };
 
+struct ConsoleGaugeConfig {
+    uint8_t gaugeType;
+    float gaugeMin;
+    float gaugeMax;
+    ConsoleGaugeRange *ranges;
+};
+
+struct ConsoleIconConfig {
+    char *icon;
+    float iconScale;
+    uint8_t iconAlign;
+};
+
+struct ConsoleLogicalConfig {
+    float logicalThreshold;
+};
+
 struct ConsoleBinding {
     char *ieeeText;
     char *automationName;
@@ -23,24 +40,18 @@ struct ConsoleBinding {
     uint16_t cluster;
     int32_t attrId;
     uint8_t viewStyle;
-    char *icon;
-    float iconScale;
-    uint8_t iconAlign;
     float fontScale;
     uint8_t alignH;
     uint8_t alignV;
     bool showTitle;
     uint8_t titlePosition;
     bool asLogical;
-    float logicalThreshold;
-    uint8_t gaugeType;
-    float gaugeMin;
-    float gaugeMax;
-    bool hasGauge;
     bool isSpacer;
     char *clickActionFalseJson;
     char *clickActionTrueJson;
-    ConsoleGaugeRange *gaugeRanges;
+    ConsoleGaugeConfig *gauge;
+    ConsoleIconConfig *iconCfg;
+    ConsoleLogicalConfig *logical;
     ConsoleBinding *next;
 };
 
@@ -123,6 +134,9 @@ public:
     static bool assignJsonSlice(const char *start, const char *endInclusive, String &out);
     static char *duplicateBoundedString(const char *source, size_t maxLength);
     static void freeGaugeRanges(ConsoleGaugeRange *&head);
+    static void freeGaugeConfig(ConsoleGaugeConfig *&gauge);
+    static void freeIconConfig(ConsoleIconConfig *&iconCfg);
+    static void freeLogicalConfig(ConsoleLogicalConfig *&logical);
     static void freeBindingList(ConsoleBinding *&head);
     static void freeCompositeCellList(ConsoleCompositeCell *&head);
     static void freeCompositeRowList(ConsoleCompositeRow *&head);

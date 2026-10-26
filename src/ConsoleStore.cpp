@@ -79,6 +79,32 @@ void ConsoleStore::freeGaugeRanges(ConsoleGaugeRange *&listHead) {
     listHead = nullptr;
 }
 
+void ConsoleStore::freeGaugeConfig(ConsoleGaugeConfig *&gauge) {
+    if (gauge == nullptr) {
+        return;
+    }
+    freeGaugeRanges(gauge->ranges);
+    free(gauge);
+    gauge = nullptr;
+}
+
+void ConsoleStore::freeIconConfig(ConsoleIconConfig *&iconCfg) {
+    if (iconCfg == nullptr) {
+        return;
+    }
+    free(iconCfg->icon);
+    free(iconCfg);
+    iconCfg = nullptr;
+}
+
+void ConsoleStore::freeLogicalConfig(ConsoleLogicalConfig *&logical) {
+    if (logical == nullptr) {
+        return;
+    }
+    free(logical);
+    logical = nullptr;
+}
+
 void ConsoleStore::freeBindingList(ConsoleBinding *&listHead) {
     while (listHead != nullptr) {
         ConsoleBinding *next = listHead->next;
@@ -87,10 +113,11 @@ void ConsoleStore::freeBindingList(ConsoleBinding *&listHead) {
         free(listHead->title);
         free(listHead->unit);
         free(listHead->param);
-        free(listHead->icon);
         free(listHead->clickActionFalseJson);
         free(listHead->clickActionTrueJson);
-        freeGaugeRanges(listHead->gaugeRanges);
+        freeGaugeConfig(listHead->gauge);
+        freeIconConfig(listHead->iconCfg);
+        freeLogicalConfig(listHead->logical);
         free(listHead);
         listHead = next;
     }
@@ -301,10 +328,10 @@ void ConsoleStore::appendBindingLayoutJson(String &json, const ConsoleBinding *b
         json += alignVJsonId(binding->alignV);
         json += "\"";
     }
-    if (binding->viewStyle == CONSOLE_VIEW_STYLE_ICON) {
-        if (binding->iconScale > 0.0f && binding->iconScale != 1.0f) {
+    if (binding->viewStyle == CONSOLE_VIEW_STYLE_ICON && binding->iconCfg != nullptr) {
+        if (binding->iconCfg->iconScale > 0.0f && binding->iconCfg->iconScale != 1.0f) {
             json += ",\"iconScale\":";
-            json += String(binding->iconScale, 4);
+            json += String(binding->iconCfg->iconScale, 4);
         }
         if (binding->alignH != CONSOLE_ICON_ALIGN_CENTER) {
             json += ",\"iconAlign\":\"";
@@ -516,28 +543,36 @@ bool ConsoleStore::parseGaugeConfig(const char *bindingJson, ConsoleBinding *bin
     if (bindingJson == nullptr || binding == nullptr) {
         return false;
     }
-    binding->hasGauge = false;
-    binding->gaugeType = CONSOLE_GAUGE_TYPE_ARC;
-    binding->gaugeMin = 0.0f;
-    binding->gaugeMax = 100.0f;
-    binding->gaugeRanges = nullptr;
+    freeGaugeConfig(binding->gauge);
     String gaugeJson;
     if (!extractJsonKeyedSlice(bindingJson, "gauge", '{', gaugeJson)) {
         return true;
     }
+    if (!heapAllowsAllocation(sizeof(ConsoleGaugeConfig))) {
+        return false;
+    }
+    ConsoleGaugeConfig *gauge = (ConsoleGaugeConfig *)malloc(sizeof(ConsoleGaugeConfig));
+    if (gauge == nullptr) {
+        return false;
+    }
+    memset(gauge, 0, sizeof(*gauge));
+    gauge->gaugeType = CONSOLE_GAUGE_TYPE_ARC;
+    gauge->gaugeMin = 0.0f;
+    gauge->gaugeMax = 100.0f;
+    gauge->ranges = nullptr;
     String typeText;
     double minValue = 0.0;
     double maxValue = 100.0;
     extractJsonString(gaugeJson.c_str(), "type", typeText);
     extractJsonDouble(gaugeJson.c_str(), "min", minValue);
     extractJsonDouble(gaugeJson.c_str(), "max", maxValue);
-    binding->gaugeType = parseGaugeTypeId(typeText.c_str());
-    binding->gaugeMin = (float)minValue;
-    binding->gaugeMax = (float)maxValue;
-    if (binding->gaugeMax < binding->gaugeMin) {
-        const float swap = binding->gaugeMin;
-        binding->gaugeMin = binding->gaugeMax;
-        binding->gaugeMax = swap;
+    gauge->gaugeType = parseGaugeTypeId(typeText.c_str());
+    gauge->gaugeMin = (float)minValue;
+    gauge->gaugeMax = (float)maxValue;
+    if (gauge->gaugeMax < gauge->gaugeMin) {
+        const float swap = gauge->gaugeMin;
+        gauge->gaugeMin = gauge->gaugeMax;
+        gauge->gaugeMax = swap;
     }
     String rangesJson;
     if (extractJsonKeyedSlice(gaugeJson.c_str(), "ranges", '[', rangesJson)) {
@@ -551,14 +586,12 @@ bool ConsoleStore::parseGaugeConfig(const char *bindingJson, ConsoleBinding *bin
             }
             const char *objectEnd = findJsonObjectEnd(objectStart);
             if (objectEnd == nullptr) {
-                freeGaugeRanges(binding->gaugeRanges);
-                binding->gaugeRanges = nullptr;
+                freeGaugeConfig(gauge);
                 return false;
             }
             String object;
             if (!assignJsonSlice(objectStart, objectEnd, object)) {
-                freeGaugeRanges(binding->gaugeRanges);
-                binding->gaugeRanges = nullptr;
+                freeGaugeConfig(gauge);
                 return false;
             }
             double topValue = 0.0;
@@ -566,14 +599,12 @@ bool ConsoleStore::parseGaugeConfig(const char *bindingJson, ConsoleBinding *bin
             extractJsonDouble(object.c_str(), "top", topValue);
             extractJsonString(object.c_str(), "color", colorText);
             if (!heapAllowsAllocation(sizeof(ConsoleGaugeRange))) {
-                freeGaugeRanges(binding->gaugeRanges);
-                binding->gaugeRanges = nullptr;
+                freeGaugeConfig(gauge);
                 return false;
             }
             ConsoleGaugeRange *range = (ConsoleGaugeRange *)malloc(sizeof(ConsoleGaugeRange));
             if (range == nullptr) {
-                freeGaugeRanges(binding->gaugeRanges);
-                binding->gaugeRanges = nullptr;
+                freeGaugeConfig(gauge);
                 return false;
             }
             memset(range, 0, sizeof(*range));
@@ -581,13 +612,12 @@ bool ConsoleStore::parseGaugeConfig(const char *bindingJson, ConsoleBinding *bin
             range->color = duplicateBoundedString(colorText.c_str(), CONSOLE_GAUGE_COLOR_MAX - 1);
             if (range->color == nullptr) {
                 free(range);
-                freeGaugeRanges(binding->gaugeRanges);
-                binding->gaugeRanges = nullptr;
+                freeGaugeConfig(gauge);
                 return false;
             }
             range->next = nullptr;
             if (tail == nullptr) {
-                binding->gaugeRanges = range;
+                gauge->ranges = range;
             } else {
                 tail->next = range;
             }
@@ -596,7 +626,7 @@ bool ConsoleStore::parseGaugeConfig(const char *bindingJson, ConsoleBinding *bin
             cursor = objectEnd + 1;
         }
     }
-    binding->hasGauge = true;
+    binding->gauge = gauge;
     return true;
 }
 
@@ -639,8 +669,6 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         memset(binding, 0, sizeof(*binding));
         binding->attrId = -1;
         binding->viewStyle = CONSOLE_VIEW_STYLE_DEFAULT;
-        binding->iconScale = 1.0f;
-        binding->iconAlign = CONSOLE_ICON_ALIGN_CENTER;
         binding->fontScale = 1.0f;
         binding->alignH = CONSOLE_ICON_ALIGN_CENTER;
         binding->alignV = CONSOLE_ALIGN_V_CENTER;
@@ -668,8 +696,6 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
             binding->channel = 1;
             binding->decimals = -1;
             binding->attrId = -1;
-            binding->iconScale = 1.0f;
-            binding->iconAlign = CONSOLE_ICON_ALIGN_CENTER;
             binding->fontScale = (float)fontScaleValue;
             binding->alignH = parseIconAlignId(alignHText.c_str());
             binding->alignV = parseAlignVId(alignVText.c_str());
@@ -801,19 +827,14 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         binding->param = (!isAutomation && paramText.length() > 0)
             ? duplicateBoundedString(paramText.c_str(), CONSOLE_PARAM_MAX - 1)
             : nullptr;
-        binding->icon = (iconText.length() > 0)
-            ? duplicateBoundedString(iconText.c_str(), CONSOLE_ICON_MAX - 1)
-            : nullptr;
         if (binding->ieeeText == nullptr || binding->title == nullptr || binding->unit == nullptr
             || (isAutomation && binding->automationName == nullptr)
-            || (!isAutomation && paramText.length() > 0 && binding->param == nullptr)
-            || (iconText.length() > 0 && binding->icon == nullptr)) {
+            || (!isAutomation && paramText.length() > 0 && binding->param == nullptr)) {
             free(binding->ieeeText);
             free(binding->automationName);
             free(binding->title);
             free(binding->unit);
             free(binding->param);
-            free(binding->icon);
             free(binding);
             freeBindingList(*outBindings);
             return false;
@@ -829,15 +850,36 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         binding->showTitle = showTitleValue;
         binding->titlePosition = parseTitlePositionId(titlePositionText.c_str());
         binding->asLogical = !isAutomation && asLogicalValue;
-        binding->logicalThreshold = isAutomation ? 0.0f : (float)logicalThresholdValue;
-        binding->iconScale = (float)iconScaleValue;
         if (alignHText.length() > 0) {
             binding->alignH = parseIconAlignId(alignHText.c_str());
         } else {
             binding->alignH = parseIconAlignId(iconAlignText.c_str());
         }
         binding->alignV = parseAlignVId(alignVText.c_str());
-        binding->iconAlign = binding->alignH;
+        if (binding->asLogical) {
+            if (!heapAllowsAllocation(sizeof(ConsoleLogicalConfig))) {
+                free(binding->ieeeText);
+                free(binding->automationName);
+                free(binding->title);
+                free(binding->unit);
+                free(binding->param);
+                free(binding);
+                freeBindingList(*outBindings);
+                return false;
+            }
+            binding->logical = (ConsoleLogicalConfig *)malloc(sizeof(ConsoleLogicalConfig));
+            if (binding->logical == nullptr) {
+                free(binding->ieeeText);
+                free(binding->automationName);
+                free(binding->title);
+                free(binding->unit);
+                free(binding->param);
+                free(binding);
+                freeBindingList(*outBindings);
+                return false;
+            }
+            binding->logical->logicalThreshold = (float)logicalThresholdValue;
+        }
         if (!isAutomation) {
             if (!parseGaugeConfig(object.c_str(), binding)) {
                 free(binding->ieeeText);
@@ -845,27 +887,94 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
                 free(binding->title);
                 free(binding->unit);
                 free(binding->param);
-                free(binding->icon);
-                free(binding->clickActionFalseJson);
-                free(binding->clickActionTrueJson);
+                freeLogicalConfig(binding->logical);
+                freeGaugeConfig(binding->gauge);
                 free(binding);
                 freeBindingList(*outBindings);
                 return false;
             }
             if (binding->viewStyle == CONSOLE_VIEW_STYLE_GAUGE) {
-                binding->hasGauge = true;
+                if (binding->gauge == nullptr) {
+                    if (!heapAllowsAllocation(sizeof(ConsoleGaugeConfig))) {
+                        free(binding->ieeeText);
+                        free(binding->automationName);
+                        free(binding->title);
+                        free(binding->unit);
+                        free(binding->param);
+                        freeLogicalConfig(binding->logical);
+                        free(binding);
+                        freeBindingList(*outBindings);
+                        return false;
+                    }
+                    binding->gauge = (ConsoleGaugeConfig *)malloc(sizeof(ConsoleGaugeConfig));
+                    if (binding->gauge == nullptr) {
+                        free(binding->ieeeText);
+                        free(binding->automationName);
+                        free(binding->title);
+                        free(binding->unit);
+                        free(binding->param);
+                        freeLogicalConfig(binding->logical);
+                        free(binding);
+                        freeBindingList(*outBindings);
+                        return false;
+                    }
+                    memset(binding->gauge, 0, sizeof(*binding->gauge));
+                    binding->gauge->gaugeType = CONSOLE_GAUGE_TYPE_ARC;
+                    binding->gauge->gaugeMin = 0.0f;
+                    binding->gauge->gaugeMax = 100.0f;
+                }
             } else {
-                freeGaugeRanges(binding->gaugeRanges);
-                binding->hasGauge = false;
+                freeGaugeConfig(binding->gauge);
             }
         } else {
-            freeGaugeRanges(binding->gaugeRanges);
-            binding->hasGauge = false;
+            freeGaugeConfig(binding->gauge);
         }
-        if (binding->viewStyle != CONSOLE_VIEW_STYLE_ICON) {
-            free(binding->icon);
-            binding->icon = nullptr;
-            binding->iconScale = 1.0f;
+        if (binding->viewStyle == CONSOLE_VIEW_STYLE_ICON) {
+            if (!heapAllowsAllocation(sizeof(ConsoleIconConfig))) {
+                free(binding->ieeeText);
+                free(binding->automationName);
+                free(binding->title);
+                free(binding->unit);
+                free(binding->param);
+                freeLogicalConfig(binding->logical);
+                freeGaugeConfig(binding->gauge);
+                free(binding);
+                freeBindingList(*outBindings);
+                return false;
+            }
+            binding->iconCfg = (ConsoleIconConfig *)malloc(sizeof(ConsoleIconConfig));
+            if (binding->iconCfg == nullptr) {
+                free(binding->ieeeText);
+                free(binding->automationName);
+                free(binding->title);
+                free(binding->unit);
+                free(binding->param);
+                freeLogicalConfig(binding->logical);
+                freeGaugeConfig(binding->gauge);
+                free(binding);
+                freeBindingList(*outBindings);
+                return false;
+            }
+            memset(binding->iconCfg, 0, sizeof(*binding->iconCfg));
+            binding->iconCfg->iconScale = (float)iconScaleValue;
+            binding->iconCfg->iconAlign = binding->alignH;
+            if (iconText.length() > 0) {
+                binding->iconCfg->icon =
+                    duplicateBoundedString(iconText.c_str(), CONSOLE_ICON_MAX - 1);
+                if (binding->iconCfg->icon == nullptr) {
+                    freeIconConfig(binding->iconCfg);
+                    free(binding->ieeeText);
+                    free(binding->automationName);
+                    free(binding->title);
+                    free(binding->unit);
+                    free(binding->param);
+                    freeLogicalConfig(binding->logical);
+                    freeGaugeConfig(binding->gauge);
+                    free(binding);
+                    freeBindingList(*outBindings);
+                    return false;
+                }
+            }
         }
         binding->clickActionFalseJson = nullptr;
         binding->clickActionTrueJson = nullptr;
@@ -910,10 +1019,11 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
                 free(binding->title);
                 free(binding->unit);
                 free(binding->param);
-                free(binding->icon);
                 free(binding->clickActionFalseJson);
                 free(binding->clickActionTrueJson);
-                freeGaugeRanges(binding->gaugeRanges);
+                freeLogicalConfig(binding->logical);
+                freeGaugeConfig(binding->gauge);
+                freeIconConfig(binding->iconCfg);
                 free(binding);
                 freeBindingList(*outBindings);
                 return false;
@@ -1565,9 +1675,11 @@ void ConsoleStore::appendOneBindingJson(String &json, const ConsoleBinding *bind
         json += "\"";
         if (binding->viewStyle == CONSOLE_VIEW_STYLE_ICON) {
             json += ",\"viewStyle\":\"icon\"";
-            if (binding->icon != nullptr && binding->icon[0] != '\0') {
+            if (binding->iconCfg != nullptr
+                && binding->iconCfg->icon != nullptr
+                && binding->iconCfg->icon[0] != '\0') {
                 json += ",\"icon\":\"";
-                appendJsonEscaped(json, binding->icon, CONSOLE_ICON_MAX);
+                appendJsonEscaped(json, binding->iconCfg->icon, CONSOLE_ICON_MAX);
                 json += "\"";
             }
         }
@@ -1604,16 +1716,20 @@ void ConsoleStore::appendOneBindingJson(String &json, const ConsoleBinding *bind
         if (binding->asLogical) {
             json += ",\"asLogical\":true";
             json += ",\"logicalThreshold\":";
-            json += String(binding->logicalThreshold, 4);
+            const float threshold =
+                binding->logical != nullptr ? binding->logical->logicalThreshold : 0.0f;
+            json += String(threshold, 4);
         }
         if (binding->viewStyle == CONSOLE_VIEW_STYLE_GAUGE) {
             json += ",\"viewStyle\":\"gauge\"";
             appendGaugeJson(json, binding);
         } else if (binding->viewStyle == CONSOLE_VIEW_STYLE_ICON) {
             json += ",\"viewStyle\":\"icon\"";
-            if (binding->icon != nullptr && binding->icon[0] != '\0') {
+            if (binding->iconCfg != nullptr
+                && binding->iconCfg->icon != nullptr
+                && binding->iconCfg->icon[0] != '\0') {
                 json += ",\"icon\":\"";
-                appendJsonEscaped(json, binding->icon, CONSOLE_ICON_MAX);
+                appendJsonEscaped(json, binding->iconCfg->icon, CONSOLE_ICON_MAX);
                 json += "\"";
             }
         }
@@ -1735,18 +1851,18 @@ void ConsoleStore::appendConsoleFull(String &json, const ConsoleRecord *console)
 }
 
 void ConsoleStore::appendGaugeJson(String &json, const ConsoleBinding *binding) {
-    if (binding == nullptr || !binding->hasGauge) {
+    if (binding == nullptr || binding->gauge == nullptr) {
         return;
     }
     json += ",\"gauge\":{\"type\":\"";
-    json += gaugeTypeJsonId(binding->gaugeType);
+    json += gaugeTypeJsonId(binding->gauge->gaugeType);
     json += "\",\"min\":";
-    json += String(binding->gaugeMin, 4);
+    json += String(binding->gauge->gaugeMin, 4);
     json += ",\"max\":";
-    json += String(binding->gaugeMax, 4);
+    json += String(binding->gauge->gaugeMax, 4);
     json += ",\"ranges\":[";
     bool firstRange = true;
-    for (const ConsoleGaugeRange *range = binding->gaugeRanges; range != nullptr; range = range->next) {
+    for (const ConsoleGaugeRange *range = binding->gauge->ranges; range != nullptr; range = range->next) {
         if (!firstRange) {
             json += ",";
         }
