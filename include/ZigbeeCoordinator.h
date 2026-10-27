@@ -120,6 +120,8 @@ public:
     static constexpr unsigned long kCommandInFlightTimeoutMs = 1500UL;
     static constexpr unsigned long kStatusReadGiveUpMs = 8000UL;
     static constexpr unsigned long kBasicIdentityReadTimeoutMs = 10000UL;
+    static constexpr unsigned long kBasicIdentityGiveUpMs = 45000UL;
+    static constexpr uint8_t kMaxBasicIdentityRetries = 5;
     static constexpr unsigned long kTypeProbeTimeoutMs = 2000UL;
 
 private:
@@ -282,6 +284,10 @@ private:
     bool fillIeeeFromUniqueUnresolved(uint8_t ieee[8]);
     void adoptReportIdentity(const uint8_t ieee[8], uint16_t shortAddr, uint8_t endpoint);
     void offerPairingIfNeeded(const uint8_t ieee[8]);
+    void syncPairingNeighborShorts();
+    void updateLibraryBoundShort(const uint8_t ieee[8], uint16_t shortAddr);
+    void releaseStatusReadsForIeee(const uint8_t ieee[8]);
+    void refreshIdentityAfterShortChange(BoundZigbeeDevice *slot);
     void pulseInboundDevice(const uint8_t ieee[8]);
     int8_t rssiForShortAddr(uint16_t shortAddr) const;
     DestCommandSlot *destSlotFor(const uint8_t ieee[8], uint8_t endpoint, bool allocate);
