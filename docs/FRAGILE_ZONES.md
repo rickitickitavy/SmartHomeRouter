@@ -70,7 +70,7 @@ Web console HTTP/UI (`WebConsole`, `data/index.html`) is **not** part of this in
 
 **Title:** Host outbound SMTP send algorithm  
 
-**Why frozen:** One-shot SMTP/TLS placement (CPU1, priority below `loopTask`), mutex serialization, and `async_tcp` pinned to CPU0 were iterated through WDT panics and router freezes. Small core/priority/WDT changes hang MQTT/UI or reboot the host.
+**Why frozen:** SMTP/TLS placement (CPU1 worker, priority below `loopTask`), SMTP mutex serialization, PSRAM send queue (max 16), and `async_tcp` pinned to CPU0 were iterated through WDT panics and router freezes. Small core/priority/WDT/parallelism changes hang MQTT/UI or reboot the host.
 
 ### Hard-frozen paths (hook-enforced)
 

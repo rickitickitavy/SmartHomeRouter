@@ -324,6 +324,36 @@
             } else {
                 setStatusText("statusWifiSignal", "—");
             }
+            setStatusText(
+                "statusEmailStatus",
+                payload && payload.emailStatus ? String(payload.emailStatus) : "—"
+            );
+            setStatusText(
+                "statusEmailLastCheck",
+                formatElapsedHhMmSs(payload && payload.emailLastCheckAgeSec)
+            );
+            setStatusText(
+                "statusEmailSent",
+                payload && payload.emailSent != null ? String(payload.emailSent) : "—"
+            );
+            setStatusText(
+                "statusEmailQueue",
+                payload && payload.emailQueue != null ? String(payload.emailQueue) : "—"
+            );
+        }
+
+        function formatElapsedHhMmSs(ageSec) {
+            if (ageSec == null || ageSec === "" || isNaN(Number(ageSec))) {
+                return "—";
+            }
+            var totalSec = Math.max(0, Math.floor(Number(ageSec)));
+            var hours = Math.floor(totalSec / 3600);
+            var minutes = Math.floor((totalSec % 3600) / 60);
+            var seconds = totalSec % 60;
+            function two(value) {
+                return value < 10 ? "0" + value : String(value);
+            }
+            return two(hours) + ":" + two(minutes) + ":" + two(seconds);
         }
 
         function refreshGatewayStatus() {
@@ -1463,6 +1493,8 @@
                     loadHardware();
                     loadTheme();
                     loadDevices();
+                    loadConsoles();
+                    loadAutomations();
                 });
             }).catch(function (error) {
                 if (restoreError) {
@@ -1674,8 +1706,28 @@
             });
         }
 
+        var emailPasswordUiMask = "********";
+        var emailPasswordDirty = false;
+
+        function bindEmailPasswordProtection() {
+            var passwordInput = document.getElementById("emailPassword");
+            if (!passwordInput || passwordInput.dataset.emailPasswordBound === "1") {
+                return;
+            }
+            passwordInput.dataset.emailPasswordBound = "1";
+            passwordInput.addEventListener("focus", function () {
+                if (!emailPasswordDirty && passwordInput.value === emailPasswordUiMask) {
+                    passwordInput.value = "";
+                }
+            });
+            passwordInput.addEventListener("input", function () {
+                emailPasswordDirty = true;
+            });
+        }
+
         function loadEmail() {
             var saveError = document.getElementById("emailSaveError");
+            bindEmailPasswordProtection();
             fetch("/api/email", { cache: "no-store" }).then(function (response) {
                 return response.text().then(function (text) {
                     if (!response.ok) {
@@ -1692,7 +1744,9 @@
                 document.getElementById("emailEncryption").value = emailSettings.encryption || "starttls";
                 document.getElementById("emailAuthEnabled").checked = !!emailSettings.authEnabled;
                 document.getElementById("emailUsername").value = emailSettings.username || "";
-                document.getElementById("emailPassword").value = emailSettings.password || "";
+                emailPasswordDirty = false;
+                document.getElementById("emailPassword").value =
+                    emailSettings.passwordConfigured ? emailPasswordUiMask : "";
                 document.getElementById("emailFromAddress").value = emailSettings.fromAddress || "";
                 document.getElementById("emailFromName").value = emailSettings.fromName || "";
                 document.getElementById("emailReplyTo").value = emailSettings.replyTo || "";
@@ -1701,6 +1755,8 @@
                     emailSettings.connectTimeoutMs || 15000;
                 document.getElementById("emailSendTimeoutMs").value =
                     emailSettings.sendTimeoutMs || 30000;
+                document.getElementById("emailCheckAccountIntervalMin").value =
+                    emailSettings.checkAccountIntervalMin || 30;
             }).catch(function (error) {
                 if (saveError) {
                     saveError.hidden = false;
@@ -1715,20 +1771,27 @@
             var saveSuccess = document.getElementById("emailSaveSuccess");
             saveError.hidden = true;
             saveSuccess.hidden = true;
+            var passwordValue = document.getElementById("emailPassword").value;
             var body = {
                 host: document.getElementById("emailHost").value,
                 port: parseInt(document.getElementById("emailPort").value, 10),
                 encryption: document.getElementById("emailEncryption").value,
                 authEnabled: document.getElementById("emailAuthEnabled").checked,
                 username: document.getElementById("emailUsername").value,
-                password: document.getElementById("emailPassword").value,
                 fromAddress: document.getElementById("emailFromAddress").value,
                 fromName: document.getElementById("emailFromName").value,
                 replyTo: document.getElementById("emailReplyTo").value,
                 ehloHostname: document.getElementById("emailEhloHostname").value,
                 connectTimeoutMs: parseInt(document.getElementById("emailConnectTimeoutMs").value, 10),
-                sendTimeoutMs: parseInt(document.getElementById("emailSendTimeoutMs").value, 10)
+                sendTimeoutMs: parseInt(document.getElementById("emailSendTimeoutMs").value, 10),
+                checkAccountIntervalMin: parseInt(
+                    document.getElementById("emailCheckAccountIntervalMin").value,
+                    10
+                )
             };
+            if (emailPasswordDirty && passwordValue !== emailPasswordUiMask) {
+                body.password = passwordValue;
+            }
             fetch("/api/email", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -1738,6 +1801,7 @@
                     if (response.ok) {
                         saveSuccess.hidden = false;
                         saveSuccess.textContent = text || "Saved. E-mail settings applied.";
+                        loadEmail();
                     } else {
                         saveError.hidden = false;
                         saveError.textContent = text || ("Save failed (HTTP " + response.status + ")");
@@ -14210,6 +14274,25 @@
                         </div>
                     </div>
                     <div class="status-group status-col-1">
+                        <h3 class="group-title">E-mail</h3>
+                        <div class="status-row">
+                            <span class="status-row-label">Status</span>
+                            <p id="statusEmailStatus" class="status-value">—</p>
+                        </div>
+                        <div class="status-row">
+                            <span class="status-row-label">Time from last check</span>
+                            <p id="statusEmailLastCheck" class="status-value">—</p>
+                        </div>
+                        <div class="status-row">
+                            <span class="status-row-label">E-mails sent</span>
+                            <p id="statusEmailSent" class="status-value">—</p>
+                        </div>
+                        <div class="status-row">
+                            <span class="status-row-label">E-mails in queue</span>
+                            <p id="statusEmailQueue" class="status-value">—</p>
+                        </div>
+                    </div>
+                    <div class="status-group status-col-2">
                         <h3 class="group-title">Network</h3>
                         <div class="status-row">
                             <span class="status-row-label">Zigbee packets sent</span>
@@ -14228,7 +14311,7 @@
                             <p id="statusMqttPacketsRx" class="status-value">—</p>
                         </div>
                     </div>
-                    <div class="status-group status-col-2">
+                    <div class="status-group status-col-1">
                         <h3 class="group-title">Devices</h3>
                         <div class="status-row">
                             <span class="status-row-label">Zigbee devices</span>
@@ -14247,7 +14330,7 @@
                             <p id="statusMqttOnline" class="status-value">—</p>
                         </div>
                     </div>
-                    <div class="status-group status-col-1">
+                    <div class="status-group status-col-2">
                         <h3 class="group-title">Connections</h3>
                         <div class="status-row">
                             <span class="status-row-label">Web active connections</span>
@@ -14270,7 +14353,7 @@
                             <p id="statusTotalOutboundConnections" class="status-value">—</p>
                         </div>
                     </div>
-                    <div class="status-group status-col-2">
+                    <div class="status-group status-col-1">
                         <h3 class="group-title">WiFi</h3>
                         <div class="status-row">
                             <span class="status-row-label">WiFi mode</span>
@@ -14469,6 +14552,11 @@
                         <div class="field">
                             <label for="emailSendTimeoutMs">SEND TIMEOUT MS</label>
                             <input id="emailSendTimeoutMs" type="number" min="1000" max="120000" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label for="emailCheckAccountIntervalMin">CHECK ACCOUNT INTERVAL MIN</label>
+                            <input id="emailCheckAccountIntervalMin" type="number" min="10" max="1440" autocomplete="off">
+                            <p class="field-hint">Minutes between SMTP connect checks when the account is configured (10–1440). Default 30.</p>
                         </div>
                     </div>
                     <div class="page-footer">

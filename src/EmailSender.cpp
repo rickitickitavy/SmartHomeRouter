@@ -10,12 +10,13 @@
 #endif
 
 namespace {
-constexpr uint32_t kEmailOneShotStackWords = 8192;
+constexpr uint32_t kEmailWorkerStackWords = 8192;
 // Below loopTask (1) and async_tcp (10) so TLS crypto cannot starve UI/MQTT.
-constexpr UBaseType_t kEmailOneShotPriority = 0;
+constexpr UBaseType_t kEmailWorkerPriority = 0;
 // CPU1: IDLE1 is not TWDT-watched. async_tcp is pinned to CPU0 via build flag
 // so long TLS here cannot starve its WDT feed (that was the CPU1 failure mode).
-constexpr BaseType_t kEmailOneShotCore = 1;
+constexpr BaseType_t kEmailWorkerCore = 1;
+constexpr UBaseType_t kEmailQueueLength = EMAIL_SEND_QUEUE_MAX;
 
 #if BOARD_ROLE_HOST
 SemaphoreHandle_t gEmailSmtpMutex = nullptr;
@@ -32,6 +33,37 @@ EmailSender::EmailSender(SettingsManager *settingsManager)
     : settingsManager(settingsManager) {
 #if BOARD_ROLE_HOST
     ensureEmailSmtpMutex();
+    sendQueueStorage = static_cast<uint8_t *>(
+        heap_caps_malloc(kEmailQueueLength * sizeof(EmailJob *), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+    );
+    if (sendQueueStorage == nullptr) {
+        sendQueueStorage = static_cast<uint8_t *>(ps_malloc(kEmailQueueLength * sizeof(EmailJob *)));
+    }
+    if (sendQueueStorage != nullptr) {
+        sendQueue = xQueueCreateStatic(
+            kEmailQueueLength,
+            sizeof(EmailJob *),
+            sendQueueStorage,
+            &sendQueueControl
+        );
+    }
+    if (sendQueue == nullptr) {
+        LOGGER.warning("Email queue create failed");
+    } else {
+        const BaseType_t created = xTaskCreatePinnedToCore(
+            workerEntry,
+            "emailSmtp",
+            kEmailWorkerStackWords,
+            this,
+            kEmailWorkerPriority,
+            &workerTask,
+            kEmailWorkerCore
+        );
+        if (created != pdPASS) {
+            workerTask = nullptr;
+            LOGGER.warning("Email worker create failed");
+        }
+    }
 #endif
 }
 
@@ -40,6 +72,38 @@ bool EmailSender::isConfigured(SettingsManager *settingsManager) {
         return false;
     }
     return SettingsManager::isEmailConfigured(settingsManager->getSettings()->email);
+}
+
+const char *EmailSender::accountStatusText() const {
+    if (!isConfigured(settingsManager)) {
+        return "not configured";
+    }
+    if (accountCheckState == AccountCheckState::Ok) {
+        return "configured";
+    }
+    return "configured/fails";
+}
+
+bool EmailSender::hasAccountCheckResult() const {
+    return lastCheckMs != 0;
+}
+
+uint32_t EmailSender::secondsSinceLastCheck() const {
+    if (lastCheckMs == 0) {
+        return 0;
+    }
+    return (millis() - lastCheckMs) / 1000UL;
+}
+
+uint32_t EmailSender::emailsSent() const {
+    return emailsSentCount;
+}
+
+uint32_t EmailSender::emailsInQueue() const {
+    if (sendQueue == nullptr) {
+        return 0;
+    }
+    return (uint32_t)uxQueueMessagesWaiting(sendQueue);
 }
 
 char *EmailSender::duplicatePsramString(const char *source, size_t maxLength) {
@@ -87,6 +151,10 @@ bool EmailSender::enqueue(const char *receivers, const char *theme, const char *
         LOGGER.warning("Email action ignored: account not configured");
         return false;
     }
+    if (sendQueue == nullptr) {
+        LOGGER.warning("Email action ignored: send queue unavailable");
+        return false;
+    }
 
     EmailJob *job = static_cast<EmailJob *>(
         heap_caps_malloc(sizeof(EmailJob), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
@@ -112,47 +180,175 @@ bool EmailSender::enqueue(const char *receivers, const char *theme, const char *
         return false;
     }
 
-    ensureEmailSmtpMutex();
-    TaskHandle_t taskHandle = nullptr;
-    const BaseType_t created = xTaskCreatePinnedToCore(
-        oneShotEntry,
-        "emailSmtp",
-        kEmailOneShotStackWords,
-        job,
-        kEmailOneShotPriority,
-        &taskHandle,
-        kEmailOneShotCore
-    );
-    if (created != pdPASS) {
+    if (xQueueSend(sendQueue, &job, 0) != pdTRUE) {
         freeJob(job);
-        LOGGER.warning("Email action ignored: one-shot SMTP task create failed");
+        LOGGER.warning("Email action ignored: send queue full");
         return false;
     }
     return true;
 #endif
 }
 
-void EmailSender::oneShotEntry(void *argument) {
-    EmailJob *job = static_cast<EmailJob *>(argument);
+void EmailSender::requestAccountCheck() {
 #if BOARD_ROLE_HOST
+    if (!isConfigured(settingsManager)) {
+        accountCheckState = AccountCheckState::NeverChecked;
+        lastCheckMs = 0;
+        return;
+    }
+    accountCheckRequested = true;
+#else
+    (void)0;
+#endif
+}
+
+void EmailSender::tick() {
+#if BOARD_ROLE_HOST
+    if (!isConfigured(settingsManager)) {
+        return;
+    }
+    const EmailSettings &emailSettings = settingsManager->getSettings()->email;
+    const uint32_t intervalMs =
+        (uint32_t)emailSettings.checkAccountIntervalMin * 60UL * 1000UL;
+    if (intervalMs == 0) {
+        return;
+    }
+    const uint32_t nowMs = millis();
+    if (lastIntervalCheckMs == 0) {
+        lastIntervalCheckMs = nowMs;
+        return;
+    }
+    if ((nowMs - lastIntervalCheckMs) >= intervalMs) {
+        lastIntervalCheckMs = nowMs;
+        accountCheckRequested = true;
+    }
+#else
+    (void)0;
+#endif
+}
+
+void EmailSender::workerEntry(void *argument) {
+    EmailSender *sender = static_cast<EmailSender *>(argument);
+    if (sender != nullptr) {
+        sender->workerLoop();
+    }
+    vTaskDelete(nullptr);
+}
+
+void EmailSender::workerLoop() {
+#if BOARD_ROLE_HOST
+    for (;;) {
+        EmailJob *job = nullptr;
+        if (sendQueue != nullptr) {
+            xQueueReceive(sendQueue, &job, pdMS_TO_TICKS(250));
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(250));
+        }
+
+        runAccountCheckIfNeeded();
+
+        if (job == nullptr) {
+            continue;
+        }
+        ensureEmailSmtpMutex();
+        if (gEmailSmtpMutex != nullptr) {
+            xSemaphoreTake(gEmailSmtpMutex, portMAX_DELAY);
+        }
+        sendJob(*job);
+        if (gEmailSmtpMutex != nullptr) {
+            xSemaphoreGive(gEmailSmtpMutex);
+        }
+        freeJob(job);
+    }
+#else
+    vTaskDelay(portMAX_DELAY);
+#endif
+}
+
+void EmailSender::runAccountCheckIfNeeded() {
+#if BOARD_ROLE_HOST
+    if (!accountCheckRequested) {
+        return;
+    }
+    accountCheckRequested = false;
+    if (!isConfigured(settingsManager)) {
+        accountCheckState = AccountCheckState::NeverChecked;
+        lastCheckMs = 0;
+        return;
+    }
     ensureEmailSmtpMutex();
     if (gEmailSmtpMutex != nullptr) {
         xSemaphoreTake(gEmailSmtpMutex, portMAX_DELAY);
     }
-    if (job != nullptr && job->sender != nullptr) {
-        job->sender->sendJob(*job);
-    }
+    const bool ok = connectAccountCheck();
     if (gEmailSmtpMutex != nullptr) {
         xSemaphoreGive(gEmailSmtpMutex);
     }
-#else
-    if (job != nullptr && job->sender != nullptr) {
-        job->sender->sendJob(*job);
+    lastCheckMs = millis();
+    lastIntervalCheckMs = lastCheckMs;
+    accountCheckState = ok ? AccountCheckState::Ok : AccountCheckState::Failed;
+    if (ok) {
+        LOGGER.info("Email SMTP account check ok");
     }
+#else
+    (void)0;
 #endif
-    freeJob(job);
-    vTaskDelay(1);
-    vTaskDelete(nullptr);
+}
+
+bool EmailSender::connectAccountCheck() {
+#if !BOARD_ROLE_HOST
+    return false;
+#else
+    if (settingsManager == nullptr || !isConfigured(settingsManager)) {
+        return false;
+    }
+    const EmailSettings &emailSettings = settingsManager->getSettings()->email;
+    SMTPSession smtp;
+    Session_Config config;
+
+    config.server.host_name = emailSettings.host;
+    config.server.port = emailSettings.port;
+    if (emailSettings.authEnabled) {
+        config.login.email = emailSettings.username;
+        config.login.password = emailSettings.password;
+    }
+    if (emailSettings.ehloHostname[0] != '\0') {
+        config.login.user_domain = emailSettings.ehloHostname;
+    } else {
+        config.login.user_domain = F("z2m-gateway");
+    }
+    config.time.ntp_server = F("pool.ntp.org,time.nist.gov");
+    config.time.gmt_offset = 0;
+    config.time.day_light_offset = 0;
+    if (emailSettings.encryption == EmailEncryptionNone) {
+        config.secure.mode = esp_mail_secure_mode_nonsecure;
+    } else {
+        config.secure.mode = esp_mail_secure_mode_ssl_tls;
+    }
+
+    uint16_t tcpTimeoutSec = (uint16_t)(emailSettings.connectTimeoutMs / 1000);
+    if (tcpTimeoutSec < 15) {
+        tcpTimeoutSec = 15;
+    }
+    smtp.setTCPTimeout(tcpTimeoutSec);
+    if (!smtp.connect(&config)) {
+        String detail;
+        detail.reserve(280);
+        detail += "Email SMTP account check failed: host=";
+        detail += emailSettings.host;
+        detail += " port=";
+        detail += String(emailSettings.port);
+        detail += " err=";
+        detail += String(smtp.errorCode());
+        detail += " reason=";
+        detail += smtp.errorReason();
+        LOGGER.warning(detail);
+        smtp.closeSession();
+        return false;
+    }
+    smtp.closeSession();
+    return true;
+#endif
 }
 
 void EmailSender::sendJob(const EmailJob &job) {
@@ -272,6 +468,7 @@ void EmailSender::sendJob(const EmailJob &job) {
             return;
         }
         LOGGER.info("Email SMTP send ok");
+        emailsSentCount++;
         smtp.closeSession();
     }
 #endif

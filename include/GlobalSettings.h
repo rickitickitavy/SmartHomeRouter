@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#define GLOBAL_CURRENT_SETTINGS_VERSION 7
+#define GLOBAL_CURRENT_SETTINGS_VERSION 8
 #define GLOBAL_SETTINGS_MARKER_0 0x5A
 #define GLOBAL_SETTINGS_MARKER_1 0x32
 #define GLOBAL_SETTINGS_MARKER_2 0x4D
@@ -181,6 +181,7 @@ struct EmailSettings {
     char ehloHostname[64];
     int connectTimeoutMs;
     int sendTimeoutMs;
+    int checkAccountIntervalMin;
 };
 
 struct SettingsMainCore {

@@ -41,6 +41,9 @@ SettingsManager::SettingsManager() {
     } else if (storedVersion == 6) {
         upgradeMainFromVersion6();
         saveMain(false);
+    } else if (storedVersion == 7) {
+        upgradeMainFromVersion7();
+        saveMain(false);
     } else if (storedVersion == GLOBAL_CURRENT_SETTINGS_VERSION) {
         readSettings();
     } else {
@@ -84,6 +87,7 @@ SettingsManager::SettingsManager() {
     clampEmailPort(settings.email.port);
     clampEmailTimeoutMs(settings.email.connectTimeoutMs, DEFAULT_EMAIL_CONNECT_TIMEOUT_MS);
     clampEmailTimeoutMs(settings.email.sendTimeoutMs, DEFAULT_EMAIL_SEND_TIMEOUT_MS);
+    clampEmailCheckAccountIntervalMin(settings.email.checkAccountIntervalMin);
     memcpy(&committedMain, &settings, sizeof(settings));
     logSettings();
 }
@@ -123,6 +127,7 @@ void SettingsManager::applyEmailDefaults() {
     settings.email.authEnabled = true;
     settings.email.connectTimeoutMs = DEFAULT_EMAIL_CONNECT_TIMEOUT_MS;
     settings.email.sendTimeoutMs = DEFAULT_EMAIL_SEND_TIMEOUT_MS;
+    settings.email.checkAccountIntervalMin = DEFAULT_EMAIL_CHECK_ACCOUNT_INTERVAL_MIN;
 }
 
 void SettingsManager::clampEmailPort(int &port) {
@@ -134,6 +139,13 @@ void SettingsManager::clampEmailPort(int &port) {
 void SettingsManager::clampEmailTimeoutMs(int &timeoutMs, int defaultMs) {
     if (timeoutMs < EMAIL_TIMEOUT_MS_MIN || timeoutMs > EMAIL_TIMEOUT_MS_MAX) {
         timeoutMs = defaultMs;
+    }
+}
+
+void SettingsManager::clampEmailCheckAccountIntervalMin(int &intervalMin) {
+    if (intervalMin < EMAIL_CHECK_ACCOUNT_INTERVAL_MIN
+        || intervalMin > EMAIL_CHECK_ACCOUNT_INTERVAL_MAX) {
+        intervalMin = DEFAULT_EMAIL_CHECK_ACCOUNT_INTERVAL_MIN;
     }
 }
 
@@ -266,6 +278,83 @@ void SettingsManager::upgradeMainFromVersion6() {
     memset(settings.alignPad, 0, sizeof(settings.alignPad));
     memcpy(settings.reserved, legacySettings.reserved, sizeof(settings.reserved));
     LOGGER.info("Settings upgraded from version 6; email defaults applied");
+}
+
+void SettingsManager::upgradeMainFromVersion7() {
+    struct EmailSettingsV7 {
+        char host[64];
+        int port;
+        EmailEncryptionMode encryption;
+        bool authEnabled;
+        char username[64];
+        char password[64];
+        char fromAddress[64];
+        char fromName[64];
+        char replyTo[64];
+        char ehloHostname[64];
+        int connectTimeoutMs;
+        int sendTimeoutMs;
+    };
+    struct SettingsMainCoreV7 {
+        char initMarker[4];
+        unsigned char version;
+        WifiSettings wifi;
+        MqttSettings mqtt;
+        ZigbeeSettings zigbee;
+        EmailSettingsV7 email;
+    };
+    constexpr size_t kSettingsMainUsedV7 =
+        offsetof(SettingsMainCoreV7, email) + sizeof(EmailSettingsV7);
+    constexpr size_t kSettingsAlignPadV7 = (128u - (kSettingsMainUsedV7 % 128u)) % 128u;
+    struct GlobalSettingsV7 {
+        char initMarker[4];
+        unsigned char version;
+        WifiSettings wifi;
+        MqttSettings mqtt;
+        ZigbeeSettings zigbee;
+        EmailSettingsV7 email;
+        uint8_t alignPad[kSettingsAlignPadV7];
+        uint8_t reserved[256];
+    };
+
+    GlobalSettingsV7 legacySettings;
+    memset(&legacySettings, 0, sizeof(legacySettings));
+    uint8_t *legacyBytes = (uint8_t *)&legacySettings;
+    for (size_t i = 0; i < sizeof(GlobalSettingsV7); i++) {
+        legacyBytes[i] = EEPROM.read(i);
+    }
+
+    memset(&settings, 0, sizeof(settings));
+    memcpy(settings.initMarker, legacySettings.initMarker, sizeof(settings.initMarker));
+    settings.version = GLOBAL_CURRENT_SETTINGS_VERSION;
+    settings.wifi = legacySettings.wifi;
+    settings.mqtt = legacySettings.mqtt;
+    settings.zigbee = legacySettings.zigbee;
+    memset(&settings.email, 0, sizeof(settings.email));
+    strncpy(settings.email.host, legacySettings.email.host, sizeof(settings.email.host) - 1);
+    settings.email.port = legacySettings.email.port;
+    settings.email.encryption = legacySettings.email.encryption;
+    settings.email.authEnabled = legacySettings.email.authEnabled;
+    strncpy(settings.email.username, legacySettings.email.username, sizeof(settings.email.username) - 1);
+    strncpy(settings.email.password, legacySettings.email.password, sizeof(settings.email.password) - 1);
+    strncpy(
+        settings.email.fromAddress,
+        legacySettings.email.fromAddress,
+        sizeof(settings.email.fromAddress) - 1
+    );
+    strncpy(settings.email.fromName, legacySettings.email.fromName, sizeof(settings.email.fromName) - 1);
+    strncpy(settings.email.replyTo, legacySettings.email.replyTo, sizeof(settings.email.replyTo) - 1);
+    strncpy(
+        settings.email.ehloHostname,
+        legacySettings.email.ehloHostname,
+        sizeof(settings.email.ehloHostname) - 1
+    );
+    settings.email.connectTimeoutMs = legacySettings.email.connectTimeoutMs;
+    settings.email.sendTimeoutMs = legacySettings.email.sendTimeoutMs;
+    settings.email.checkAccountIntervalMin = DEFAULT_EMAIL_CHECK_ACCOUNT_INTERVAL_MIN;
+    memset(settings.alignPad, 0, sizeof(settings.alignPad));
+    memcpy(settings.reserved, legacySettings.reserved, sizeof(settings.reserved));
+    LOGGER.info("Settings upgraded from version 7; email check interval default applied");
 }
 
 bool SettingsManager::mainEqualsCommitted() const {

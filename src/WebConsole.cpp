@@ -1580,6 +1580,9 @@ void WebConsole::handleEmailPost(AsyncWebServerRequest *request) {
         return;
     }
     settingsManager->saveMain(false);
+    if (onEmailSaved != nullptr) {
+        onEmailSaved();
+    }
     request->send(200, "text/plain", "Saved. E-mail settings applied.");
 }
 
@@ -1737,6 +1740,10 @@ void WebConsole::setZigbeeApplyHandler(WebConsole::VoidApplyFn handler) {
     applyZigbeeRuntime = handler;
 }
 
+void WebConsole::setEmailSavedHandler(WebConsole::VoidApplyFn handler) {
+    onEmailSaved = handler;
+}
+
 void WebConsole::setActionRunner(WebConsole::ActionRunnerFn handler) {
     runConsoleAction = handler;
 }
@@ -1832,7 +1839,7 @@ void WebConsole::appendMqttSettingsJson(String &json) {
     json += String(settings->mqtt.bornIntervalMin);
 }
 
-void WebConsole::appendEmailSettingsJson(String &json) {
+void WebConsole::appendEmailSettingsJson(String &json, bool exportWithEmptyPassword) {
     GlobalSettings *settings = settingsManager->getSettings();
     json += "\"host\":\"";
     appendJsonEscaped(json, settings->email.host, sizeof(settings->email.host));
@@ -1844,9 +1851,13 @@ void WebConsole::appendEmailSettingsJson(String &json) {
     json += settings->email.authEnabled ? "true" : "false";
     json += ",\"username\":\"";
     appendJsonEscaped(json, settings->email.username, sizeof(settings->email.username));
-    json += "\",\"password\":\"";
-    appendJsonEscaped(json, settings->email.password, sizeof(settings->email.password));
-    json += "\",\"fromAddress\":\"";
+    if (exportWithEmptyPassword) {
+        json += "\",\"password\":\"\"";
+    } else {
+        json += "\",\"passwordConfigured\":";
+        json += settings->email.password[0] != '\0' ? "true" : "false";
+    }
+    json += ",\"fromAddress\":\"";
     appendJsonEscaped(json, settings->email.fromAddress, sizeof(settings->email.fromAddress));
     json += "\",\"fromName\":\"";
     appendJsonEscaped(json, settings->email.fromName, sizeof(settings->email.fromName));
@@ -1858,11 +1869,13 @@ void WebConsole::appendEmailSettingsJson(String &json) {
     json += String(settings->email.connectTimeoutMs);
     json += ",\"sendTimeoutMs\":";
     json += String(settings->email.sendTimeoutMs);
+    json += ",\"checkAccountIntervalMin\":";
+    json += String(settings->email.checkAccountIntervalMin);
     json += ",\"configured\":";
     json += SettingsManager::isEmailConfigured(settings->email) ? "true" : "false";
 }
 
-bool WebConsole::applyEmailJson(const char *json, String *errorText) {
+bool WebConsole::applyEmailJson(const char *json, String *errorText, bool emptyPasswordMeansKeep) {
     String host;
     String username;
     String password;
@@ -1874,6 +1887,7 @@ bool WebConsole::applyEmailJson(const char *json, String *errorText) {
     int port = DEFAULT_EMAIL_SMTP_PORT;
     int connectTimeoutMs = DEFAULT_EMAIL_CONNECT_TIMEOUT_MS;
     int sendTimeoutMs = DEFAULT_EMAIL_SEND_TIMEOUT_MS;
+    int checkAccountIntervalMin = DEFAULT_EMAIL_CHECK_ACCOUNT_INTERVAL_MIN;
     bool authEnabled = true;
     EmailEncryptionMode encryption = EmailEncryptionStartTls;
 
@@ -1884,13 +1898,14 @@ bool WebConsole::applyEmailJson(const char *json, String *errorText) {
         fromAddress = "";
     }
     extractJsonString(json, "username", username);
-    extractJsonString(json, "password", password);
+    const bool havePassword = extractJsonString(json, "password", password);
     extractJsonString(json, "fromName", fromName);
     extractJsonString(json, "replyTo", replyTo);
     extractJsonString(json, "ehloHostname", ehloHostname);
     extractJsonInt(json, "port", port);
     extractJsonInt(json, "connectTimeoutMs", connectTimeoutMs);
     extractJsonInt(json, "sendTimeoutMs", sendTimeoutMs);
+    extractJsonInt(json, "checkAccountIntervalMin", checkAccountIntervalMin);
     extractJsonBool(json, "authEnabled", authEnabled);
     if (extractJsonString(json, "encryption", encryptionText)) {
         if (!parseEmailEncryptionMode(encryptionText.c_str(), encryption)) {
@@ -1903,6 +1918,7 @@ bool WebConsole::applyEmailJson(const char *json, String *errorText) {
     SettingsManager::clampEmailPort(port);
     SettingsManager::clampEmailTimeoutMs(connectTimeoutMs, DEFAULT_EMAIL_CONNECT_TIMEOUT_MS);
     SettingsManager::clampEmailTimeoutMs(sendTimeoutMs, DEFAULT_EMAIL_SEND_TIMEOUT_MS);
+    SettingsManager::clampEmailCheckAccountIntervalMin(checkAccountIntervalMin);
 
     GlobalSettings *settings = settingsManager->getSettings();
     strncpy(settings->email.host, host.c_str(), sizeof(settings->email.host) - 1);
@@ -1912,8 +1928,12 @@ bool WebConsole::applyEmailJson(const char *json, String *errorText) {
     settings->email.authEnabled = authEnabled;
     strncpy(settings->email.username, username.c_str(), sizeof(settings->email.username) - 1);
     settings->email.username[sizeof(settings->email.username) - 1] = '\0';
-    strncpy(settings->email.password, password.c_str(), sizeof(settings->email.password) - 1);
-    settings->email.password[sizeof(settings->email.password) - 1] = '\0';
+    if (havePassword
+        && password != EMAIL_PASSWORD_UI_MASK
+        && !(emptyPasswordMeansKeep && password.length() == 0)) {
+        strncpy(settings->email.password, password.c_str(), sizeof(settings->email.password) - 1);
+        settings->email.password[sizeof(settings->email.password) - 1] = '\0';
+    }
     strncpy(settings->email.fromAddress, fromAddress.c_str(), sizeof(settings->email.fromAddress) - 1);
     settings->email.fromAddress[sizeof(settings->email.fromAddress) - 1] = '\0';
     strncpy(settings->email.fromName, fromName.c_str(), sizeof(settings->email.fromName) - 1);
@@ -1924,6 +1944,7 @@ bool WebConsole::applyEmailJson(const char *json, String *errorText) {
     settings->email.ehloHostname[sizeof(settings->email.ehloHostname) - 1] = '\0';
     settings->email.connectTimeoutMs = connectTimeoutMs;
     settings->email.sendTimeoutMs = sendTimeoutMs;
+    settings->email.checkAccountIntervalMin = checkAccountIntervalMin;
     return true;
 }
 
@@ -2111,7 +2132,10 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
     String mqttSection;
     appendMqttSettingsJson(mqttSection);
     response->print(mqttSection);
-    // Email account credentials stay off settings export/restore (configure via Network → E-mail).
+    response->print("},\"email\":{");
+    String emailSection;
+    appendEmailSettingsJson(emailSection, true);
+    response->print(emailSection);
     response->print("},\"zigbee\":{\"channel\":");
     response->print((unsigned)settings->zigbee.channel);
     response->print(",\"permitJoinOnBootSec\":");
@@ -2147,11 +2171,13 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
     }
     String errorText;
     String mqttJson;
+    String emailJson;
     String zigbeeJson;
     String hardwareJson;
     String devicesJson;
     String uiJson;
     const bool haveMqtt = extractJsonKeyedSlice(body.c_str(), "mqtt", '{', mqttJson);
+    const bool haveEmail = extractJsonKeyedSlice(body.c_str(), "email", '{', emailJson);
     const bool haveZigbee = extractJsonKeyedSlice(body.c_str(), "zigbee", '{', zigbeeJson);
     const bool haveHardware = extractJsonKeyedSlice(body.c_str(), "hardware", '{', hardwareJson);
     const bool haveDevices = extractJsonKeyedSlice(body.c_str(), "devices", '[', devicesJson);
@@ -2163,6 +2189,10 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
     const bool haveConsoles = extractJsonKeyedSlice(body.c_str(), "consoles", '[', consolesJson);
     const bool haveAutomations = extractJsonKeyedSlice(body.c_str(), "automations", '[', automationsJson);
     if (haveMqtt && !applyMqttJson(mqttJson.c_str(), &errorText)) {
+        request->send(400, "text/plain", errorText);
+        return;
+    }
+    if (haveEmail && !applyEmailJson(emailJson.c_str(), &errorText, true)) {
         request->send(400, "text/plain", errorText);
         return;
     }
@@ -2269,8 +2299,11 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
         request->send(200, "text/plain", "Restored. Device will restart to apply settings.");
         return;
     }
-    if (haveHardware || haveUi) {
+    if (haveEmail || haveHardware || haveUi) {
         settingsManager->saveMain(false);
+        if (haveEmail && onEmailSaved != nullptr) {
+            onEmailSaved();
+        }
     }
     request->send(200, "text/plain", "Restored");
 }

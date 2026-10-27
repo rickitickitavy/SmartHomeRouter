@@ -989,6 +989,18 @@ static String hostGatewayStatusJson() {
     json += String((unsigned long)((psramFree + 512) / 1024));
     json += ",\"psramFreePercent\":";
     json += psramTotal > 0 ? String((unsigned long)((psramFree * 100UL) / psramTotal)) : String("0");
+    json += ",\"emailStatus\":\"";
+    json += emailSender != nullptr ? emailSender->accountStatusText() : "not configured";
+    json += "\",\"emailLastCheckAgeSec\":";
+    if (emailSender != nullptr && emailSender->hasAccountCheckResult()) {
+        json += String((unsigned long)emailSender->secondsSinceLastCheck());
+    } else {
+        json += "null";
+    }
+    json += ",\"emailSent\":";
+    json += String((unsigned long)(emailSender != nullptr ? emailSender->emailsSent() : 0));
+    json += ",\"emailQueue\":";
+    json += String((unsigned long)(emailSender != nullptr ? emailSender->emailsInQueue() : 0));
     json += "}";
     return json;
 }
@@ -1877,6 +1889,11 @@ static void setupHost() {
     webConsole->setZigbeeApplyHandler([]() {
         hostZigbeeApplyPending = true;
     });
+    webConsole->setEmailSavedHandler([]() {
+        if (emailSender != nullptr) {
+            emailSender->requestAccountCheck();
+        }
+    });
     webConsole->setDeviceOnlineHandler([](const uint8_t ieee[8]) {
         return ZIGBEE_SPI_PROXY.isOnline(ieee);
     });
@@ -2049,6 +2066,9 @@ void loop() {
     if (automationEngine != nullptr) {
         automationEngine->tick();
     }
+    if (emailSender != nullptr) {
+        emailSender->tick();
+    }
     if (webConsole != nullptr) {
         webConsole->loop();
     }
@@ -2056,6 +2076,9 @@ void loop() {
     if (!hostPreparationLatched && wifiController->hasUsableInterface() && INTER_CHIP_HOST.isNormal()) {
         hostPreparationLatched = true;
         STATUS_RGB.setBootHeld(false);
+        if (emailSender != nullptr) {
+            emailSender->requestAccountCheck();
+        }
     }
     if (hostPreparationLatched) {
         STATUS_RGB.setCritical(!INTER_CHIP_HOST.isLinkHealthy());
