@@ -14226,150 +14226,152 @@
             <h2 class="section-title">Status</h2>
             <div class="settings-scroll">
                 <div class="status-stack">
-                    <div class="status-online-time status-col-1">
-                        <div class="status-row">
-                            <span class="status-row-label">Online time</span>
-                            <p id="statusOnlineTime" class="status-value">—</p>
+                    <div class="status-column">
+                        <div class="status-group">
+                            <h3 class="group-title">General</h3>
+                            <div class="status-row">
+                                <span class="status-row-label">Online time</span>
+                                <p id="statusOnlineTime" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Master</span>
+                                <p id="statusMasterFirmwareVersion" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Slave</span>
+                                <p id="statusSlaveFirmwareVersion" class="status-value">—</p>
+                            </div>
+                        </div>
+                        <div class="status-group">
+                            <h3 class="group-title">Free memory</h3>
+                            <div class="status-row">
+                                <span class="status-row-label">Free RAM</span>
+                                <p id="statusHeapUsage" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Free PSRAM</span>
+                                <p id="statusPsramUsage" class="status-value">—</p>
+                            </div>
+                        </div>
+                        <div class="status-group">
+                            <h3 class="group-title">Devices</h3>
+                            <div class="status-row">
+                                <span class="status-row-label">Zigbee devices</span>
+                                <p id="statusZigbeeDevices" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Zigbee online</span>
+                                <p id="statusZigbeeOnline" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">MQTT devices</span>
+                                <p id="statusMqttDevices" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">MQTT online</span>
+                                <p id="statusMqttOnline" class="status-value">—</p>
+                            </div>
+                        </div>
+                        <div class="status-group">
+                            <h3 class="group-title">MQTT</h3>
+                            <div class="status-row">
+                                <span class="status-row-label">Current mode</span>
+                                <p id="statusMqttMode" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Status</span>
+                                <p id="statusMqttStatus" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Active topics</span>
+                                <p id="statusMqttTopics" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Connections</span>
+                                <p id="statusMqttConnections" class="status-value">—</p>
+                            </div>
                         </div>
                     </div>
-                    <div class="status-group status-col-2">
-                        <h3 class="group-title">Free memory</h3>
-                        <div class="status-row">
-                            <span class="status-row-label">Free RAM</span>
-                            <p id="statusHeapUsage" class="status-value">—</p>
+                    <div class="status-column">
+                        <div class="status-group">
+                            <h3 class="group-title">Network</h3>
+                            <div class="status-row">
+                                <span class="status-row-label">Zigbee packets sent</span>
+                                <p id="statusZigbeePacketsTx" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">MQTT packets sent</span>
+                                <p id="statusMqttPacketsTx" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Zigbee packets received</span>
+                                <p id="statusZigbeePacketsRx" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">MQTT packets received</span>
+                                <p id="statusMqttPacketsRx" class="status-value">—</p>
+                            </div>
                         </div>
-                        <div class="status-row">
-                            <span class="status-row-label">Free PSRAM</span>
-                            <p id="statusPsramUsage" class="status-value">—</p>
+                        <div class="status-group">
+                            <h3 class="group-title">Connections</h3>
+                            <div class="status-row">
+                                <span class="status-row-label">Web active connections</span>
+                                <p id="statusWebActiveConnections" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">MQTT inbound connections</span>
+                                <p id="statusMqttInboundConnections" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">MQTT outbound connections</span>
+                                <p id="statusMqttOutboundConnections" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Total inbound connections</span>
+                                <p id="statusTotalInboundConnections" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Total outbound connections</span>
+                                <p id="statusTotalOutboundConnections" class="status-value">—</p>
+                            </div>
                         </div>
-                    </div>
-                    <div class="status-group status-col-1">
-                        <h3 class="group-title">Version</h3>
-                        <div class="status-row">
-                            <span class="status-row-label">Master</span>
-                            <p id="statusMasterFirmwareVersion" class="status-value">—</p>
+                        <div class="status-group">
+                            <h3 class="group-title">E-mail</h3>
+                            <div class="status-row">
+                                <span class="status-row-label">Status</span>
+                                <p id="statusEmailStatus" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Time from last check</span>
+                                <p id="statusEmailLastCheck" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">E-mails sent</span>
+                                <p id="statusEmailSent" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">E-mails in queue</span>
+                                <p id="statusEmailQueue" class="status-value">—</p>
+                            </div>
                         </div>
-                        <div class="status-row">
-                            <span class="status-row-label">Slave</span>
-                            <p id="statusSlaveFirmwareVersion" class="status-value">—</p>
-                        </div>
-                    </div>
-                    <div class="status-group status-col-2">
-                        <h3 class="group-title">MQTT</h3>
-                        <div class="status-row">
-                            <span class="status-row-label">Current mode</span>
-                            <p id="statusMqttMode" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">Status</span>
-                            <p id="statusMqttStatus" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">Active topics</span>
-                            <p id="statusMqttTopics" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">Connections</span>
-                            <p id="statusMqttConnections" class="status-value">—</p>
-                        </div>
-                    </div>
-                    <div class="status-group status-col-1">
-                        <h3 class="group-title">E-mail</h3>
-                        <div class="status-row">
-                            <span class="status-row-label">Status</span>
-                            <p id="statusEmailStatus" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">Time from last check</span>
-                            <p id="statusEmailLastCheck" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">E-mails sent</span>
-                            <p id="statusEmailSent" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">E-mails in queue</span>
-                            <p id="statusEmailQueue" class="status-value">—</p>
-                        </div>
-                    </div>
-                    <div class="status-group status-col-2">
-                        <h3 class="group-title">Network</h3>
-                        <div class="status-row">
-                            <span class="status-row-label">Zigbee packets sent</span>
-                            <p id="statusZigbeePacketsTx" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">MQTT packets sent</span>
-                            <p id="statusMqttPacketsTx" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">Zigbee packets received</span>
-                            <p id="statusZigbeePacketsRx" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">MQTT packets received</span>
-                            <p id="statusMqttPacketsRx" class="status-value">—</p>
-                        </div>
-                    </div>
-                    <div class="status-group status-col-1">
-                        <h3 class="group-title">Devices</h3>
-                        <div class="status-row">
-                            <span class="status-row-label">Zigbee devices</span>
-                            <p id="statusZigbeeDevices" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">Zigbee online</span>
-                            <p id="statusZigbeeOnline" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">MQTT devices</span>
-                            <p id="statusMqttDevices" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">MQTT online</span>
-                            <p id="statusMqttOnline" class="status-value">—</p>
-                        </div>
-                    </div>
-                    <div class="status-group status-col-2">
-                        <h3 class="group-title">Connections</h3>
-                        <div class="status-row">
-                            <span class="status-row-label">Web active connections</span>
-                            <p id="statusWebActiveConnections" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">MQTT inbound connections</span>
-                            <p id="statusMqttInboundConnections" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">MQTT outbound connections</span>
-                            <p id="statusMqttOutboundConnections" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">Total inbound connections</span>
-                            <p id="statusTotalInboundConnections" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">Total outbound connections</span>
-                            <p id="statusTotalOutboundConnections" class="status-value">—</p>
-                        </div>
-                    </div>
-                    <div class="status-group status-col-1">
-                        <h3 class="group-title">WiFi</h3>
-                        <div class="status-row">
-                            <span class="status-row-label">WiFi mode</span>
-                            <p id="statusWifiMode" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">BSSID</span>
-                            <p id="statusWifiBssid" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">STA MAC</span>
-                            <p id="statusWifiStaMac" class="status-value">—</p>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-row-label">Signal strength</span>
-                            <p id="statusWifiSignal" class="status-value">—</p>
+                        <div class="status-group">
+                            <h3 class="group-title">WiFi</h3>
+                            <div class="status-row">
+                                <span class="status-row-label">WiFi mode</span>
+                                <p id="statusWifiMode" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">BSSID</span>
+                                <p id="statusWifiBssid" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">STA MAC</span>
+                                <p id="statusWifiStaMac" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Signal strength</span>
+                                <p id="statusWifiSignal" class="status-value">—</p>
+                            </div>
                         </div>
                     </div>
                 </div>

@@ -20,6 +20,7 @@ constexpr UBaseType_t kEmailQueueLength = EMAIL_SEND_QUEUE_MAX;
 
 #if BOARD_ROLE_HOST
 SemaphoreHandle_t gEmailSmtpMutex = nullptr;
+portMUX_TYPE gEmailWorkerMux = portMUX_INITIALIZER_UNLOCKED;
 
 void ensureEmailSmtpMutex() {
     if (gEmailSmtpMutex == nullptr) {
@@ -49,21 +50,8 @@ EmailSender::EmailSender(SettingsManager *settingsManager)
     }
     if (sendQueue == nullptr) {
         LOGGER.warning("Email queue create failed");
-    } else {
-        const BaseType_t created = xTaskCreatePinnedToCore(
-            workerEntry,
-            "emailSmtp",
-            kEmailWorkerStackWords,
-            this,
-            kEmailWorkerPriority,
-            &workerTask,
-            kEmailWorkerCore
-        );
-        if (created != pdPASS) {
-            workerTask = nullptr;
-            LOGGER.warning("Email worker create failed");
-        }
     }
+    // Worker task (and its ~32 KB stack) is created only when work arrives.
 #endif
 }
 
@@ -77,6 +65,9 @@ bool EmailSender::isConfigured(SettingsManager *settingsManager) {
 const char *EmailSender::accountStatusText() const {
     if (!isConfigured(settingsManager)) {
         return "not configured";
+    }
+    if (sendInFlight && accountCheckState == AccountCheckState::Ok) {
+        return "configured/sending";
     }
     if (accountCheckState == AccountCheckState::Ok) {
         return "configured";
@@ -100,10 +91,62 @@ uint32_t EmailSender::emailsSent() const {
 }
 
 uint32_t EmailSender::emailsInQueue() const {
-    if (sendQueue == nullptr) {
-        return 0;
+    uint32_t waiting = 0;
+    if (sendQueue != nullptr) {
+        waiting = (uint32_t)uxQueueMessagesWaiting(sendQueue);
     }
-    return (uint32_t)uxQueueMessagesWaiting(sendQueue);
+    if (sendInFlight) {
+        waiting += 1;
+    }
+    return waiting;
+}
+
+bool EmailSender::hasPendingWork() const {
+    if (accountCheckRequested) {
+        return true;
+    }
+    if (sendQueue == nullptr) {
+        return false;
+    }
+    return uxQueueMessagesWaiting(sendQueue) > 0;
+}
+
+bool EmailSender::ensureWorkerRunning() {
+#if !BOARD_ROLE_HOST
+    return false;
+#else
+    portENTER_CRITICAL(&gEmailWorkerMux);
+    if (workerTask != nullptr) {
+        portEXIT_CRITICAL(&gEmailWorkerMux);
+        return true;
+    }
+    portEXIT_CRITICAL(&gEmailWorkerMux);
+
+    TaskHandle_t createdHandle = nullptr;
+    const BaseType_t created = xTaskCreatePinnedToCore(
+        workerEntry,
+        "emailSmtp",
+        kEmailWorkerStackWords,
+        this,
+        kEmailWorkerPriority,
+        &createdHandle,
+        kEmailWorkerCore
+    );
+    if (created != pdPASS || createdHandle == nullptr) {
+        LOGGER.warning("Email worker create failed");
+        return false;
+    }
+
+    portENTER_CRITICAL(&gEmailWorkerMux);
+    if (workerTask != nullptr) {
+        portEXIT_CRITICAL(&gEmailWorkerMux);
+        vTaskDelete(createdHandle);
+        return true;
+    }
+    workerTask = createdHandle;
+    portEXIT_CRITICAL(&gEmailWorkerMux);
+    return true;
+#endif
 }
 
 char *EmailSender::duplicatePsramString(const char *source, size_t maxLength) {
@@ -185,6 +228,10 @@ bool EmailSender::enqueue(const char *receivers, const char *theme, const char *
         LOGGER.warning("Email action ignored: send queue full");
         return false;
     }
+    if (!ensureWorkerRunning()) {
+        LOGGER.warning("Email action queued but worker start failed");
+        return false;
+    }
     return true;
 #endif
 }
@@ -197,6 +244,9 @@ void EmailSender::requestAccountCheck() {
         return;
     }
     accountCheckRequested = true;
+    if (!ensureWorkerRunning()) {
+        LOGGER.warning("Email account check requested but worker start failed");
+    }
 #else
     (void)0;
 #endif
@@ -221,6 +271,9 @@ void EmailSender::tick() {
     if ((nowMs - lastIntervalCheckMs) >= intervalMs) {
         lastIntervalCheckMs = nowMs;
         accountCheckRequested = true;
+        if (!ensureWorkerRunning()) {
+            LOGGER.warning("Email interval check requested but worker start failed");
+        }
     }
 #else
     (void)0;
@@ -238,27 +291,53 @@ void EmailSender::workerEntry(void *argument) {
 void EmailSender::workerLoop() {
 #if BOARD_ROLE_HOST
     for (;;) {
-        EmailJob *job = nullptr;
-        if (sendQueue != nullptr) {
-            xQueueReceive(sendQueue, &job, pdMS_TO_TICKS(250));
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(250));
-        }
-
         runAccountCheckIfNeeded();
 
-        if (job == nullptr) {
+        EmailJob *job = nullptr;
+        if (sendQueue != nullptr) {
+            const BaseType_t gotJob =
+                xQueueReceive(sendQueue, &job, pdMS_TO_TICKS(50));
+            if (gotJob == pdTRUE && job != nullptr) {
+                sendInFlight = true;
+                ensureEmailSmtpMutex();
+                if (gEmailSmtpMutex != nullptr) {
+                    xSemaphoreTake(gEmailSmtpMutex, portMAX_DELAY);
+                }
+                sendJob(*job);
+                if (gEmailSmtpMutex != nullptr) {
+                    xSemaphoreGive(gEmailSmtpMutex);
+                }
+                sendInFlight = false;
+                freeJob(job);
+                continue;
+            }
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+
+        if (hasPendingWork()) {
             continue;
         }
-        ensureEmailSmtpMutex();
-        if (gEmailSmtpMutex != nullptr) {
-            xSemaphoreTake(gEmailSmtpMutex, portMAX_DELAY);
+
+        portENTER_CRITICAL(&gEmailWorkerMux);
+        if (hasPendingWork()) {
+            portEXIT_CRITICAL(&gEmailWorkerMux);
+            continue;
         }
-        sendJob(*job);
-        if (gEmailSmtpMutex != nullptr) {
-            xSemaphoreGive(gEmailSmtpMutex);
+        workerTask = nullptr;
+        portEXIT_CRITICAL(&gEmailWorkerMux);
+
+        if (hasPendingWork()) {
+            if (!ensureWorkerRunning()) {
+                portENTER_CRITICAL(&gEmailWorkerMux);
+                workerTask = xTaskGetCurrentTaskHandle();
+                portEXIT_CRITICAL(&gEmailWorkerMux);
+                continue;
+            }
+            break;
         }
-        freeJob(job);
+        LOGGER.info("Email SMTP worker idle, exiting");
+        break;
     }
 #else
     vTaskDelay(portMAX_DELAY);

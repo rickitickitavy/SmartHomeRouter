@@ -322,6 +322,20 @@
             return days + "d " + hours + "h " + minutes + "m " + seconds + "s";
         }
 
+        function formatElapsedHhMmSs(ageSec) {
+            if (ageSec == null || ageSec === "" || isNaN(Number(ageSec))) {
+                return "—";
+            }
+            var totalSec = Math.max(0, Math.floor(Number(ageSec)));
+            var hours = Math.floor(totalSec / 3600);
+            var minutes = Math.floor((totalSec % 3600) / 60);
+            var seconds = totalSec % 60;
+            function two(value) {
+                return value < 10 ? "0" + value : String(value);
+            }
+            return two(hours) + ":" + two(minutes) + ":" + two(seconds);
+        }
+
         function setStatusText(elementId, value) {
             var label = document.getElementById(elementId);
             if (label) {
@@ -460,6 +474,22 @@
             } else {
                 setStatusText("statusWifiSignal", "—");
             }
+            setStatusText(
+                "statusEmailStatus",
+                payload && payload.emailStatus ? String(payload.emailStatus) : "—"
+            );
+            setStatusText(
+                "statusEmailLastCheck",
+                formatElapsedHhMmSs(payload && payload.emailLastCheckAgeSec)
+            );
+            setStatusText(
+                "statusEmailSent",
+                payload && payload.emailSent != null ? String(payload.emailSent) : "—"
+            );
+            setStatusText(
+                "statusEmailQueue",
+                payload && payload.emailQueue != null ? String(payload.emailQueue) : "—"
+            );
         }
 
         function refreshGatewayStatus() {
@@ -515,17 +545,20 @@
             var stack = document.createElement("div");
             stack.className = "status-stack status-stack-single";
             stack.style.marginTop = "1.25rem";
-            var online = document.createElement("div");
-            online.className = "status-online-time";
-            appendStatusRow(online, "Online time", "statusOnlineTime");
-            stack.appendChild(online);
+            appendStatusGroup(stack, "General", [
+                ["Online time", "statusOnlineTime"],
+                ["Master", "statusMasterFirmwareVersion"],
+                ["Slave", "statusSlaveFirmwareVersion"]
+            ]);
             appendStatusGroup(stack, "Free memory", [
                 ["Free RAM", "statusHeapUsage"],
                 ["Free PSRAM", "statusPsramUsage"]
             ]);
-            appendStatusGroup(stack, "Version", [
-                ["Master", "statusMasterFirmwareVersion"],
-                ["Slave", "statusSlaveFirmwareVersion"]
+            appendStatusGroup(stack, "Devices", [
+                ["Zigbee devices", "statusZigbeeDevices"],
+                ["Zigbee online", "statusZigbeeOnline"],
+                ["MQTT devices", "statusMqttDevices"],
+                ["MQTT online", "statusMqttOnline"]
             ]);
             appendStatusGroup(stack, "MQTT", [
                 ["Current mode", "statusMqttMode"],
@@ -539,18 +572,18 @@
                 ["Zigbee packets received", "statusZigbeePacketsRx"],
                 ["MQTT packets received", "statusMqttPacketsRx"]
             ]);
-            appendStatusGroup(stack, "Devices", [
-                ["Zigbee devices", "statusZigbeeDevices"],
-                ["Zigbee online", "statusZigbeeOnline"],
-                ["MQTT devices", "statusMqttDevices"],
-                ["MQTT online", "statusMqttOnline"]
-            ]);
             appendStatusGroup(stack, "Connections", [
                 ["Web active connections", "statusWebActiveConnections"],
                 ["MQTT inbound connections", "statusMqttInboundConnections"],
                 ["MQTT outbound connections", "statusMqttOutboundConnections"],
                 ["Total inbound connections", "statusTotalInboundConnections"],
                 ["Total outbound connections", "statusTotalOutboundConnections"]
+            ]);
+            appendStatusGroup(stack, "E-mail", [
+                ["Status", "statusEmailStatus"],
+                ["Time from last check", "statusEmailLastCheck"],
+                ["E-mails sent", "statusEmailSent"],
+                ["E-mails in queue", "statusEmailQueue"]
             ]);
             appendStatusGroup(stack, "WiFi", [
                 ["WiFi mode", "statusWifiMode"],

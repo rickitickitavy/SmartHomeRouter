@@ -45,6 +45,9 @@
 #include <string.h>
 #if defined(BOARD_ROLE_HOST)
 #include <esp32-hal-psram.h>
+#include "lwip/tcp.h"
+#include "lwip/priv/tcp_priv.h"
+#include "lwip/tcpip.h"
 #endif
 
 #if defined(BOARD_ROLE_SLAVE) && !defined(ZIGBEE_MODE_ZCZR)
@@ -818,6 +821,43 @@ static bool hostLastDeviceRssi(const uint8_t ieee[8], int8_t *rssiDbm) {
 }
 
 #if defined(BOARD_ROLE_HOST)
+// Count live TCP sessions from lwIP (HTTP, WS, MQTT, SMTP, and other stack users).
+// Inbound = local port matches a listen PCB; outbound = everything else active.
+static void countLwipTcpConnections(int *inboundOut, int *outboundOut) {
+    int inbound = 0;
+    int outbound = 0;
+    LOCK_TCPIP_CORE();
+    for (struct tcp_pcb *pcb = tcp_active_pcbs; pcb != nullptr; pcb = pcb->next) {
+        const tcp_state state = pcb->state;
+        if (state != ESTABLISHED && state != CLOSE_WAIT && state != SYN_RCVD && state != SYN_SENT) {
+            continue;
+        }
+        bool isInbound = false;
+        if (state != SYN_SENT) {
+            for (struct tcp_pcb_listen *listenPcb = tcp_listen_pcbs.listen_pcbs;
+                 listenPcb != nullptr;
+                 listenPcb = listenPcb->next) {
+                if (listenPcb->local_port == pcb->local_port) {
+                    isInbound = true;
+                    break;
+                }
+            }
+        }
+        if (isInbound) {
+            inbound++;
+        } else {
+            outbound++;
+        }
+    }
+    UNLOCK_TCPIP_CORE();
+    if (inboundOut != nullptr) {
+        *inboundOut = inbound;
+    }
+    if (outboundOut != nullptr) {
+        *outboundOut = outbound;
+    }
+}
+
 static String hostGatewayStatusJson() {
     int zigbeeDevices = 0;
     int zigbeeOnline = 0;
@@ -878,8 +918,9 @@ static String hostGatewayStatusJson() {
         mqttStatus = "off";
     }
     const int webActiveConnections = webConsole != nullptr ? webConsole->activeWebSocketCount() : 0;
-    const int totalInboundConnections = webActiveConnections + mqttInboundConnections;
-    const int totalOutboundConnections = mqttOutboundConnections;
+    int totalInboundConnections = 0;
+    int totalOutboundConnections = 0;
+    countLwipTcpConnections(&totalInboundConnections, &totalOutboundConnections);
     const uint32_t mqttPacketsRx = mqttClient != nullptr ? mqttClient->packetsReceived() : 0;
     const uint32_t mqttPacketsTx = mqttClient != nullptr ? mqttClient->packetsSent() : 0;
 
@@ -975,6 +1016,9 @@ static String hostGatewayStatusJson() {
         json += "null";
     }
     const size_t heapTotal = ESP.getHeapSize();
+    // Live free heap at poll time. With email configured, the first account
+    // check usually already ran after hostPreparationLatched, so this is
+    // typically post-check (TLS may have left some lasting heap cost).
     const size_t heapFree = ESP.getFreeHeap();
     json += ",\"heapFreeKb\":";
     json += String((unsigned long)((heapFree + 512) / 1024));

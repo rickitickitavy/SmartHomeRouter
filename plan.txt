@@ -3,9 +3,7 @@
 --- 8) historical chart
 5) new action: HTTP request
 7) Add for MQTT device flag "zigbee like" what means that this MQTT device will send and receive it's data like zigbee devices in style cl=xx,attr=YY,val=ZZ,ep=W. Such device will use topics like the specified in config without postfix independently of channels number
-12) email action
-
-
-web server connections
-long sessions for simple user. between router reboots.
 standard WiFi devices support
+decrease requirement of minimal width of widget
+
+

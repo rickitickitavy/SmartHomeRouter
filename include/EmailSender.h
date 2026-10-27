@@ -42,11 +42,14 @@ private:
     uint8_t *sendQueueStorage = nullptr;
     TaskHandle_t workerTask = nullptr;
     volatile bool accountCheckRequested = false;
+    volatile bool sendInFlight = false;
     AccountCheckState accountCheckState = AccountCheckState::NeverChecked;
     uint32_t lastCheckMs = 0;
     uint32_t emailsSentCount = 0;
     uint32_t lastIntervalCheckMs = 0;
 
+    bool ensureWorkerRunning();
+    bool hasPendingWork() const;
     static void workerEntry(void *argument);
     void workerLoop();
     void sendJob(const EmailJob &job);

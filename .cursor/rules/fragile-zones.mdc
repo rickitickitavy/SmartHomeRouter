@@ -21,6 +21,6 @@ If the task would change a **hard-frozen** path or clearly alter an **influence*
 
 - `slave-spi-ota` — SPI begin/chunk/end, ACK/retry/timeouts, slave apply drain.
 - `firmware-update-process` — whole joined update (HTTP stage → slave SPI → host apply → reboot), includes `slave-spi-ota`.
-- `smtp-send` — host one-shot SMTP task core/priority/mutex; `async_tcp` on CPU0; no core-WDT disable around TLS.
+- `smtp-send` — host lazy SMTP worker (CPU1/priority/mutex); PSRAM queue; `async_tcp` on CPU0; no core-WDT disable around TLS.
 
 ADRs 0008 / 0003 / 0011 explain design; they do **not** lift this freeze.
