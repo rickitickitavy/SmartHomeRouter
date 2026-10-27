@@ -29,7 +29,20 @@ enum AutomationCompareOp : uint8_t {
 
 enum AutomationActionTarget : uint8_t {
     AutomationTargetDevice = 0,
-    AutomationTargetAutomation = 1
+    AutomationTargetAutomation = 1,
+    AutomationTargetEmail = 2
+};
+
+struct AutomationEmailParam {
+    char *ieeeText;
+    uint8_t channel;
+    char *param;
+    bool hasCluster;
+    uint16_t cluster;
+    bool hasAttrId;
+    uint16_t attrId;
+    char *title;
+    AutomationEmailParam *next;
 };
 
 enum AutomationListenEventType : uint8_t {
@@ -100,6 +113,10 @@ struct AutomationAction {
     AutomationAutomationOp automationOp;
     bool hasStartTime;
     uint32_t startTime;
+    char *emailReceivers;
+    char *emailTheme;
+    char *emailMessage;
+    AutomationEmailParam *emailParams;
     AutomationAction *next;
 };
 
@@ -158,7 +175,11 @@ public:
     bool startTimer(AutomationRecord *automation, uint32_t secondsOrZero);
     void restartTimer(AutomationRecord *automation, uint32_t secondsOrZero);
     static bool heapAllowsAllocation(size_t bytes);
+    static bool psramAllowsAllocation(size_t bytes);
     static char *duplicateBoundedString(const char *source, size_t maxLength);
+    static char *duplicateEmailString(const char *source, size_t maxLength);
+    static void *allocateEmailMemory(size_t bytes);
+    static void freeEmailParamList(AutomationEmailParam *&head);
     static void freeListenerList(AutomationListener *&head);
     static void freeConditionTree(AutomationCondition *&root);
     static void freeActionList(AutomationAction *&head);

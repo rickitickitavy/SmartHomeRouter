@@ -6,6 +6,7 @@
 
 class ZigbeeSpiProxy;
 class DeviceTopicMap;
+class EmailSender;
 
 class AutomationEngine {
 public:
@@ -13,7 +14,13 @@ public:
 
     AutomationEngine();
 
-    void begin(AutomationStore *store, ZigbeeSpiProxy *spiProxy, DeviceTopicMap *topicMap, DeviceCommandFn deviceCommand);
+    void begin(
+        AutomationStore *store,
+        ZigbeeSpiProxy *spiProxy,
+        DeviceTopicMap *topicMap,
+        DeviceCommandFn deviceCommand,
+        EmailSender *emailSender = nullptr
+    );
     void tick();
     void onStatusChanged(
         const uint8_t ieee[8],
@@ -29,6 +36,7 @@ private:
     ZigbeeSpiProxy *spiProxy;
     DeviceTopicMap *topicMap;
     DeviceCommandFn deviceCommand;
+    EmailSender *emailSender;
     unsigned long lastTickMs;
     uint8_t actionDepth;
     bool bootStartApplied;

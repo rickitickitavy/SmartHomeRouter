@@ -2,7 +2,7 @@
 
 ## Context
 
-Some firmware paths (especially slave SPI OTA and the full joined update pipeline) were expensive to stabilize. Agents and opportunistic refactors can regress them without noticing. ADR 0008 records OTA *order*, but does not stop edits to the implementation.
+Some firmware paths (especially slave SPI OTA, the full joined update pipeline, and host outbound SMTP send) were expensive to stabilize. Agents and opportunistic refactors can regress them without noticing. ADR 0008 records OTA *order*, but does not stop edits to the implementation.
 
 ## Decision
 

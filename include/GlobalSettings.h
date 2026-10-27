@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#define GLOBAL_CURRENT_SETTINGS_VERSION 6
+#define GLOBAL_CURRENT_SETTINGS_VERSION 7
 #define GLOBAL_SETTINGS_MARKER_0 0x5A
 #define GLOBAL_SETTINGS_MARKER_1 0x32
 #define GLOBAL_SETTINGS_MARKER_2 0x4D
@@ -124,16 +124,76 @@ struct ZigbeeSettings {
     uint8_t permitJoinOnBootSec;
 };
 
+enum EmailEncryptionMode : uint8_t {
+    EmailEncryptionNone = 0,
+    EmailEncryptionStartTls = 1,
+    EmailEncryptionSsl = 2
+};
+
+inline EmailEncryptionMode clampEmailEncryptionMode(uint8_t rawMode) {
+    if (rawMode == EmailEncryptionNone
+        || rawMode == EmailEncryptionStartTls
+        || rawMode == EmailEncryptionSsl) {
+        return (EmailEncryptionMode)rawMode;
+    }
+    return EmailEncryptionStartTls;
+}
+
+inline const char *emailEncryptionModeName(EmailEncryptionMode mode) {
+    if (mode == EmailEncryptionNone) {
+        return "none";
+    }
+    if (mode == EmailEncryptionSsl) {
+        return "ssl";
+    }
+    return "starttls";
+}
+
+inline bool parseEmailEncryptionMode(const char *text, EmailEncryptionMode &mode) {
+    if (text == nullptr) {
+        return false;
+    }
+    if (strcmp(text, "none") == 0) {
+        mode = EmailEncryptionNone;
+        return true;
+    }
+    if (strcmp(text, "starttls") == 0) {
+        mode = EmailEncryptionStartTls;
+        return true;
+    }
+    if (strcmp(text, "ssl") == 0) {
+        mode = EmailEncryptionSsl;
+        return true;
+    }
+    return false;
+}
+
+struct EmailSettings {
+    char host[64];
+    int port;
+    EmailEncryptionMode encryption;
+    bool authEnabled;
+    char username[64];
+    char password[64];
+    char fromAddress[64];
+    char fromName[64];
+    char replyTo[64];
+    char ehloHostname[64];
+    int connectTimeoutMs;
+    int sendTimeoutMs;
+};
+
 struct SettingsMainCore {
     char initMarker[4];
     unsigned char version;
     WifiSettings wifi;
     MqttSettings mqtt;
     ZigbeeSettings zigbee;
+    EmailSettings email;
 };
 
 constexpr size_t kSettingsMainUsed =
-    offsetof(SettingsMainCore, zigbee) + sizeof(ZigbeeSettings);
+    offsetof(SettingsMainCore, email) + sizeof(EmailSettings);
 constexpr size_t kSettingsAlignPad = (128u - (kSettingsMainUsed % 128u)) % 128u;
 
 struct GlobalSettings {
@@ -142,6 +202,7 @@ struct GlobalSettings {
     WifiSettings wifi;
     MqttSettings mqtt;
     ZigbeeSettings zigbee;
+    EmailSettings email;
     uint8_t alignPad[kSettingsAlignPad];
     uint8_t reserved[256];
 };

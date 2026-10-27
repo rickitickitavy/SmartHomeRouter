@@ -147,6 +147,17 @@ void WebConsole::begin() {
         }
     );
 
+    server.on("/api/email", HTTP_GET, [this](AsyncWebServerRequest *request) { handleEmailGet(request); });
+    server.on(
+        "/api/email",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleEmailPost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
+
     server.on("/api/zigbee", HTTP_GET, [this](AsyncWebServerRequest *request) { handleZigbeeGet(request); });
     server.on(
         "/api/zigbee",
@@ -1543,6 +1554,35 @@ void WebConsole::handleMqttPost(AsyncWebServerRequest *request) {
     request->send(200, "text/plain", "Saved. MQTT settings applied.");
 }
 
+void WebConsole::handleEmailGet(AsyncWebServerRequest *request) {
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    String json = "{";
+    appendEmailSettingsJson(json);
+    json += "}";
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleEmailPost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    String errorText;
+    if (!applyEmailJson(body.c_str(), &errorText)) {
+        request->send(400, "text/plain", errorText.length() > 0 ? errorText : "Need email settings");
+        return;
+    }
+    settingsManager->saveMain(false);
+    request->send(200, "text/plain", "Saved. E-mail settings applied.");
+}
+
 void WebConsole::appendRequestBody(
     AsyncWebServerRequest *request,
     uint8_t *data,
@@ -1792,6 +1832,101 @@ void WebConsole::appendMqttSettingsJson(String &json) {
     json += String(settings->mqtt.bornIntervalMin);
 }
 
+void WebConsole::appendEmailSettingsJson(String &json) {
+    GlobalSettings *settings = settingsManager->getSettings();
+    json += "\"host\":\"";
+    appendJsonEscaped(json, settings->email.host, sizeof(settings->email.host));
+    json += "\",\"port\":";
+    json += String(settings->email.port);
+    json += ",\"encryption\":\"";
+    json += emailEncryptionModeName(settings->email.encryption);
+    json += "\",\"authEnabled\":";
+    json += settings->email.authEnabled ? "true" : "false";
+    json += ",\"username\":\"";
+    appendJsonEscaped(json, settings->email.username, sizeof(settings->email.username));
+    json += "\",\"password\":\"";
+    appendJsonEscaped(json, settings->email.password, sizeof(settings->email.password));
+    json += "\",\"fromAddress\":\"";
+    appendJsonEscaped(json, settings->email.fromAddress, sizeof(settings->email.fromAddress));
+    json += "\",\"fromName\":\"";
+    appendJsonEscaped(json, settings->email.fromName, sizeof(settings->email.fromName));
+    json += "\",\"replyTo\":\"";
+    appendJsonEscaped(json, settings->email.replyTo, sizeof(settings->email.replyTo));
+    json += "\",\"ehloHostname\":\"";
+    appendJsonEscaped(json, settings->email.ehloHostname, sizeof(settings->email.ehloHostname));
+    json += "\",\"connectTimeoutMs\":";
+    json += String(settings->email.connectTimeoutMs);
+    json += ",\"sendTimeoutMs\":";
+    json += String(settings->email.sendTimeoutMs);
+    json += ",\"configured\":";
+    json += SettingsManager::isEmailConfigured(settings->email) ? "true" : "false";
+}
+
+bool WebConsole::applyEmailJson(const char *json, String *errorText) {
+    String host;
+    String username;
+    String password;
+    String fromAddress;
+    String fromName;
+    String replyTo;
+    String ehloHostname;
+    String encryptionText;
+    int port = DEFAULT_EMAIL_SMTP_PORT;
+    int connectTimeoutMs = DEFAULT_EMAIL_CONNECT_TIMEOUT_MS;
+    int sendTimeoutMs = DEFAULT_EMAIL_SEND_TIMEOUT_MS;
+    bool authEnabled = true;
+    EmailEncryptionMode encryption = EmailEncryptionStartTls;
+
+    if (!extractJsonString(json, "host", host)) {
+        host = "";
+    }
+    if (!extractJsonString(json, "fromAddress", fromAddress)) {
+        fromAddress = "";
+    }
+    extractJsonString(json, "username", username);
+    extractJsonString(json, "password", password);
+    extractJsonString(json, "fromName", fromName);
+    extractJsonString(json, "replyTo", replyTo);
+    extractJsonString(json, "ehloHostname", ehloHostname);
+    extractJsonInt(json, "port", port);
+    extractJsonInt(json, "connectTimeoutMs", connectTimeoutMs);
+    extractJsonInt(json, "sendTimeoutMs", sendTimeoutMs);
+    extractJsonBool(json, "authEnabled", authEnabled);
+    if (extractJsonString(json, "encryption", encryptionText)) {
+        if (!parseEmailEncryptionMode(encryptionText.c_str(), encryption)) {
+            if (errorText != nullptr) {
+                *errorText = "encryption must be none, starttls, or ssl";
+            }
+            return false;
+        }
+    }
+    SettingsManager::clampEmailPort(port);
+    SettingsManager::clampEmailTimeoutMs(connectTimeoutMs, DEFAULT_EMAIL_CONNECT_TIMEOUT_MS);
+    SettingsManager::clampEmailTimeoutMs(sendTimeoutMs, DEFAULT_EMAIL_SEND_TIMEOUT_MS);
+
+    GlobalSettings *settings = settingsManager->getSettings();
+    strncpy(settings->email.host, host.c_str(), sizeof(settings->email.host) - 1);
+    settings->email.host[sizeof(settings->email.host) - 1] = '\0';
+    settings->email.port = port;
+    settings->email.encryption = encryption;
+    settings->email.authEnabled = authEnabled;
+    strncpy(settings->email.username, username.c_str(), sizeof(settings->email.username) - 1);
+    settings->email.username[sizeof(settings->email.username) - 1] = '\0';
+    strncpy(settings->email.password, password.c_str(), sizeof(settings->email.password) - 1);
+    settings->email.password[sizeof(settings->email.password) - 1] = '\0';
+    strncpy(settings->email.fromAddress, fromAddress.c_str(), sizeof(settings->email.fromAddress) - 1);
+    settings->email.fromAddress[sizeof(settings->email.fromAddress) - 1] = '\0';
+    strncpy(settings->email.fromName, fromName.c_str(), sizeof(settings->email.fromName) - 1);
+    settings->email.fromName[sizeof(settings->email.fromName) - 1] = '\0';
+    strncpy(settings->email.replyTo, replyTo.c_str(), sizeof(settings->email.replyTo) - 1);
+    settings->email.replyTo[sizeof(settings->email.replyTo) - 1] = '\0';
+    strncpy(settings->email.ehloHostname, ehloHostname.c_str(), sizeof(settings->email.ehloHostname) - 1);
+    settings->email.ehloHostname[sizeof(settings->email.ehloHostname) - 1] = '\0';
+    settings->email.connectTimeoutMs = connectTimeoutMs;
+    settings->email.sendTimeoutMs = sendTimeoutMs;
+    return true;
+}
+
 bool WebConsole::applyMqttJson(const char *json, String *errorText) {
     String server;
     String username;
@@ -1976,6 +2111,7 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
     String mqttSection;
     appendMqttSettingsJson(mqttSection);
     response->print(mqttSection);
+    // Email account credentials stay off settings export/restore (configure via Network → E-mail).
     response->print("},\"zigbee\":{\"channel\":");
     response->print((unsigned)settings->zigbee.channel);
     response->print(",\"permitJoinOnBootSec\":");

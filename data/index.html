@@ -127,6 +127,9 @@
             if (name == "mqtt") {
                 loadMqtt();
             }
+            if (name == "email") {
+                loadEmail();
+            }
             if (name == "zigbee") {
                 loadZigbee();
             }
@@ -817,29 +820,29 @@
         }
 
         function buildUserConsoleAssignRow(consoleRow, checked) {
-            var label = document.createElement("label");
-            label.className = "field-check user-console-assign-row";
-            label.draggable = true;
-            label.ondragstart = function (event) {
-                userConsoleDragRow = label;
-                label.classList.add("is-dragging");
+            var row = document.createElement("div");
+            row.className = "field-check user-console-assign-row";
+            row.draggable = true;
+            row.ondragstart = function (event) {
+                userConsoleDragRow = row;
+                row.classList.add("is-dragging");
                 event.dataTransfer.effectAllowed = "move";
             };
-            label.ondragend = function () {
-                label.classList.remove("is-dragging");
+            row.ondragend = function () {
+                row.classList.remove("is-dragging");
                 userConsoleDragRow = null;
             };
-            label.ondragover = function (event) {
+            row.ondragover = function (event) {
                 event.preventDefault();
-                label.classList.add("is-drag-over");
+                row.classList.add("is-drag-over");
             };
-            label.ondragleave = function () {
-                label.classList.remove("is-drag-over");
+            row.ondragleave = function () {
+                row.classList.remove("is-drag-over");
             };
-            label.ondrop = function (event) {
+            row.ondrop = function (event) {
                 event.preventDefault();
-                label.classList.remove("is-drag-over");
-                if (!userConsoleDragRow || userConsoleDragRow === label) {
+                row.classList.remove("is-drag-over");
+                if (!userConsoleDragRow || userConsoleDragRow === row) {
                     return;
                 }
                 var host = document.getElementById("userConsolesCheckboxes");
@@ -848,14 +851,14 @@
                 }
                 var rows = Array.prototype.slice.call(host.querySelectorAll(".user-console-assign-row"));
                 var fromIndex = rows.indexOf(userConsoleDragRow);
-                var toIndex = rows.indexOf(label);
+                var toIndex = rows.indexOf(row);
                 if (fromIndex < 0 || toIndex < 0) {
                     return;
                 }
                 if (fromIndex < toIndex) {
-                    host.insertBefore(userConsoleDragRow, label.nextSibling);
+                    host.insertBefore(userConsoleDragRow, row.nextSibling);
                 } else {
-                    host.insertBefore(userConsoleDragRow, label);
+                    host.insertBefore(userConsoleDragRow, row);
                 }
             };
             var dragHandle = document.createElement("span");
@@ -866,10 +869,12 @@
             input.className = "user-console-assign-cb";
             input.setAttribute("data-console-id", consoleRow.id || "");
             input.checked = !!checked;
-            label.appendChild(dragHandle);
-            label.appendChild(input);
-            label.appendChild(document.createTextNode(consoleRow.name || consoleRow.id || "Console"));
-            return label;
+            var caption = document.createElement("span");
+            caption.textContent = consoleRow.name || consoleRow.id || "Console";
+            row.appendChild(dragHandle);
+            row.appendChild(input);
+            row.appendChild(caption);
+            return row;
         }
 
         function populateUserConsoleCheckboxes(user) {
@@ -1453,6 +1458,7 @@
                         throw new Error(text || ("HTTP " + response.status));
                     }
                     loadMqtt();
+                    loadEmail();
                     loadZigbee();
                     loadHardware();
                     loadTheme();
@@ -1657,6 +1663,81 @@
                     if (response.ok) {
                         saveSuccess.hidden = false;
                         saveSuccess.textContent = text || "Saved. ZigBee settings applied.";
+                    } else {
+                        saveError.hidden = false;
+                        saveError.textContent = text || ("Save failed (HTTP " + response.status + ")");
+                    }
+                });
+            }).catch(function () {
+                saveError.hidden = false;
+                saveError.textContent = "Save failed (network error)";
+            });
+        }
+
+        function loadEmail() {
+            var saveError = document.getElementById("emailSaveError");
+            fetch("/api/email", { cache: "no-store" }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error("HTTP " + response.status + (text ? ": " + text.slice(0, 80) : ""));
+                    }
+                    return JSON.parse(text);
+                });
+            }).then(function (emailSettings) {
+                if (saveError) {
+                    saveError.hidden = true;
+                }
+                document.getElementById("emailHost").value = emailSettings.host || "";
+                document.getElementById("emailPort").value = emailSettings.port || 587;
+                document.getElementById("emailEncryption").value = emailSettings.encryption || "starttls";
+                document.getElementById("emailAuthEnabled").checked = !!emailSettings.authEnabled;
+                document.getElementById("emailUsername").value = emailSettings.username || "";
+                document.getElementById("emailPassword").value = emailSettings.password || "";
+                document.getElementById("emailFromAddress").value = emailSettings.fromAddress || "";
+                document.getElementById("emailFromName").value = emailSettings.fromName || "";
+                document.getElementById("emailReplyTo").value = emailSettings.replyTo || "";
+                document.getElementById("emailEhloHostname").value = emailSettings.ehloHostname || "";
+                document.getElementById("emailConnectTimeoutMs").value =
+                    emailSettings.connectTimeoutMs || 15000;
+                document.getElementById("emailSendTimeoutMs").value =
+                    emailSettings.sendTimeoutMs || 30000;
+            }).catch(function (error) {
+                if (saveError) {
+                    saveError.hidden = false;
+                    saveError.textContent = "Failed to load E-mail settings"
+                        + (error && error.message ? " (" + error.message + ")" : "");
+                }
+            });
+        }
+
+        function saveEmail() {
+            var saveError = document.getElementById("emailSaveError");
+            var saveSuccess = document.getElementById("emailSaveSuccess");
+            saveError.hidden = true;
+            saveSuccess.hidden = true;
+            var body = {
+                host: document.getElementById("emailHost").value,
+                port: parseInt(document.getElementById("emailPort").value, 10),
+                encryption: document.getElementById("emailEncryption").value,
+                authEnabled: document.getElementById("emailAuthEnabled").checked,
+                username: document.getElementById("emailUsername").value,
+                password: document.getElementById("emailPassword").value,
+                fromAddress: document.getElementById("emailFromAddress").value,
+                fromName: document.getElementById("emailFromName").value,
+                replyTo: document.getElementById("emailReplyTo").value,
+                ehloHostname: document.getElementById("emailEhloHostname").value,
+                connectTimeoutMs: parseInt(document.getElementById("emailConnectTimeoutMs").value, 10),
+                sendTimeoutMs: parseInt(document.getElementById("emailSendTimeoutMs").value, 10)
+            };
+            fetch("/api/email", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body)
+            }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (response.ok) {
+                        saveSuccess.hidden = false;
+                        saveSuccess.textContent = text || "Saved. E-mail settings applied.";
                     } else {
                         saveError.hidden = false;
                         saveError.textContent = text || ("Save failed (HTTP " + response.status + ")");
@@ -8310,8 +8391,10 @@
                     };
                     var removeBtn = document.createElement("button");
                     removeBtn.type = "button";
-                    removeBtn.className = "btn btn-secondary btn-inline";
-                    removeBtn.textContent = "Remove";
+                    removeBtn.className = "console-widget-delete-btn";
+                    removeBtn.textContent = "🗑";
+                    removeBtn.title = "Remove trigger";
+                    removeBtn.setAttribute("aria-label", "Remove trigger");
                     removeBtn.onclick = function () {
                         automationEditorDraft.listen.splice(listenIndex, 1);
                         renderAutomationListenEditor();
@@ -8362,13 +8445,18 @@
             if (typeof node.not !== "boolean") {
                 node.not = false;
             }
-            var notCheck = document.createElement("label");
+            var notCheck = document.createElement("div");
             notCheck.className = "field-check";
-            notCheck.innerHTML = "<input type=\"checkbox\"> NOT";
-            notCheck.firstChild.checked = node.not === true;
-            notCheck.firstChild.onchange = function () {
-                node.not = !!notCheck.firstChild.checked;
+            var notInput = document.createElement("input");
+            notInput.type = "checkbox";
+            notInput.checked = node.not === true;
+            notInput.onchange = function () {
+                node.not = !!notInput.checked;
             };
+            var notCaption = document.createElement("span");
+            notCaption.textContent = "NOT";
+            notCheck.appendChild(notInput);
+            notCheck.appendChild(notCaption);
             kindSelect.onchange = function () {
                 if (kindSelect.value === "container") {
                     node.kind = "container";
@@ -8425,8 +8513,10 @@
                         renderConditionNode(child, childPath, childHost);
                         var removeChild = document.createElement("button");
                         removeChild.type = "button";
-                        removeChild.className = "btn btn-secondary btn-inline";
-                        removeChild.textContent = "Remove child";
+                        removeChild.className = "console-widget-delete-btn";
+                        removeChild.textContent = "🗑";
+                        removeChild.title = "Remove child";
+                        removeChild.setAttribute("aria-label", "Remove child");
                         removeChild.onclick = function () {
                             var parent = automationEditorDraft.condition;
                             var walk;
@@ -8659,17 +8749,93 @@
             for (index = 0; index < actions.length; index++) {
                 (function (actionIndex) {
                     var action = actions[actionIndex];
+                    var block = document.createElement("div");
+                    block.className = "automation-action-block";
+                    var sideTools = document.createElement("div");
+                    sideTools.className = "automation-action-side-tools";
+                    var upBtn = document.createElement("button");
+                    upBtn.type = "button";
+                    upBtn.className = "automation-action-move-btn";
+                    upBtn.textContent = "▲";
+                    upBtn.title = "Move up";
+                    upBtn.setAttribute("aria-label", "Move up");
+                    upBtn.disabled = actionIndex <= 0;
+                    upBtn.onclick = function () {
+                        if (actionIndex <= 0) {
+                            return;
+                        }
+                        var swapUp = automationEditorDraft.actions[actionIndex - 1];
+                        automationEditorDraft.actions[actionIndex - 1] =
+                            automationEditorDraft.actions[actionIndex];
+                        automationEditorDraft.actions[actionIndex] = swapUp;
+                        renderAutomationActionsEditor();
+                    };
+                    var downBtn = document.createElement("button");
+                    downBtn.type = "button";
+                    downBtn.className = "automation-action-move-btn";
+                    downBtn.textContent = "▼";
+                    downBtn.title = "Move down";
+                    downBtn.setAttribute("aria-label", "Move down");
+                    downBtn.disabled = actionIndex >= automationEditorDraft.actions.length - 1;
+                    downBtn.onclick = function () {
+                        if (actionIndex >= automationEditorDraft.actions.length - 1) {
+                            return;
+                        }
+                        var swapDown = automationEditorDraft.actions[actionIndex + 1];
+                        automationEditorDraft.actions[actionIndex + 1] =
+                            automationEditorDraft.actions[actionIndex];
+                        automationEditorDraft.actions[actionIndex] = swapDown;
+                        renderAutomationActionsEditor();
+                    };
+                    var removeBtn = document.createElement("button");
+                    removeBtn.type = "button";
+                    removeBtn.className = "console-widget-delete-btn";
+                    removeBtn.textContent = "🗑";
+                    removeBtn.title = "Remove action";
+                    removeBtn.setAttribute("aria-label", "Remove action");
+                    removeBtn.onclick = function () {
+                        openAppConfirmDialog({
+                            title: "Remove action",
+                            message: "Remove this action?",
+                            confirmLabel: "Remove",
+                            onConfirm: function () {
+                                automationEditorDraft.actions.splice(actionIndex, 1);
+                                renderAutomationActionsEditor();
+                                updateAutomationImportEnabled();
+                            }
+                        });
+                    };
+                    sideTools.appendChild(upBtn);
+                    sideTools.appendChild(downBtn);
+                    sideTools.appendChild(removeBtn);
                     var row = document.createElement("div");
-                    row.className = "field";
+                    row.className = "automation-action-body";
                     var targetSelect = document.createElement("select");
-                    targetSelect.innerHTML = "<option value=\"device\">Device</option><option value=\"automation\">Automation</option>";
-                    targetSelect.value = action.target === "automation" ? "automation" : "device";
+                    targetSelect.innerHTML =
+                        "<option value=\"device\">Device</option>"
+                        + "<option value=\"automation\">Automation</option>"
+                        + "<option value=\"e-mail\">E-mail</option>";
+                    if (action.target === "automation") {
+                        targetSelect.value = "automation";
+                    } else if (action.target === "e-mail") {
+                        targetSelect.value = "e-mail";
+                    } else {
+                        targetSelect.value = "device";
+                    }
                     targetSelect.onchange = function () {
                         if (targetSelect.value === "automation") {
                             automationEditorDraft.actions[actionIndex] = {
                                 target: "automation",
                                 name: automationNameListCache[0] || "",
                                 op: "ENABLE"
+                            };
+                        } else if (targetSelect.value === "e-mail") {
+                            automationEditorDraft.actions[actionIndex] = {
+                                target: "e-mail",
+                                receivers: "",
+                                theme: "",
+                                message: "",
+                                parameters: []
                             };
                         } else {
                             var firstDevice = registeredDeviceRows[0] || null;
@@ -8944,6 +9110,165 @@
                         row.appendChild(clusterInput);
                         row.appendChild(commandInput);
                         row.appendChild(valueInput);
+                    } else if (targetSelect.value === "e-mail") {
+                        if (!Array.isArray(action.parameters)) {
+                            action.parameters = [];
+                        }
+                        var emailFieldsTable = document.createElement("table");
+                        emailFieldsTable.className = "automation-email-fields-table";
+                        function appendEmailFieldRow(labelText, control) {
+                            var tr = document.createElement("tr");
+                            var th = document.createElement("th");
+                            th.scope = "row";
+                            th.textContent = labelText;
+                            var td = document.createElement("td");
+                            td.appendChild(control);
+                            tr.appendChild(th);
+                            tr.appendChild(td);
+                            emailFieldsTable.appendChild(tr);
+                        }
+                        var receiversInput = document.createElement("input");
+                        receiversInput.type = "text";
+                        receiversInput.placeholder = "a@b.com;c@d.com";
+                        receiversInput.value = action.receivers || "";
+                        receiversInput.onchange = function () {
+                            automationEditorDraft.actions[actionIndex].receivers = receiversInput.value;
+                        };
+                        appendEmailFieldRow("Receivers", receiversInput);
+                        var themeInput = document.createElement("input");
+                        themeInput.type = "text";
+                        themeInput.placeholder = "Subject";
+                        themeInput.value = action.theme || "";
+                        themeInput.onchange = function () {
+                            automationEditorDraft.actions[actionIndex].theme = themeInput.value;
+                        };
+                        appendEmailFieldRow("Theme", themeInput);
+                        var messageInput = document.createElement("textarea");
+                        messageInput.rows = 3;
+                        messageInput.placeholder = "Message body";
+                        messageInput.value = action.message || "";
+                        messageInput.onchange = function () {
+                            automationEditorDraft.actions[actionIndex].message = messageInput.value;
+                        };
+                        appendEmailFieldRow("Message", messageInput);
+                        var paramsHost = document.createElement("div");
+                        paramsHost.className = "automation-email-params";
+                        function renderEmailParams() {
+                            paramsHost.innerHTML = "";
+                            var parameters = automationEditorDraft.actions[actionIndex].parameters || [];
+                            var table = document.createElement("table");
+                            table.className = "automation-email-params-table data-table";
+                            var thead = document.createElement("thead");
+                            thead.innerHTML =
+                                "<tr><th>Device</th><th>Channel</th><th>Attribute</th><th>Title</th><th></th></tr>";
+                            table.appendChild(thead);
+                            var tbody = document.createElement("tbody");
+                            var paramIndex;
+                            for (paramIndex = 0; paramIndex < parameters.length; paramIndex++) {
+                                (function (emailParamIndex) {
+                                    var emailParam = parameters[emailParamIndex];
+                                    var tr = document.createElement("tr");
+                                    var deviceSelect = document.createElement("select");
+                                    fillDeviceSelect(deviceSelect, emailParam.ieee || "");
+                                    var channelSelect = document.createElement("select");
+                                    fillAutomationChannelSelect(
+                                        channelSelect,
+                                        findRegisteredDeviceByIeee(deviceSelect.value),
+                                        emailParam.channel || 1
+                                    );
+                                    var fieldSelect = document.createElement("select");
+                                    var titleInput = document.createElement("input");
+                                    titleInput.type = "text";
+                                    titleInput.placeholder = "Title";
+                                    titleInput.value = emailParam.title || "";
+                                    function refreshEmailParamFields() {
+                                        var device = findRegisteredDeviceByIeee(deviceSelect.value);
+                                        fillAutomationParamSelect(
+                                            fieldSelect,
+                                            device,
+                                            emailParam.param || "",
+                                            false
+                                        );
+                                        fillAutomationChannelSelect(
+                                            channelSelect,
+                                            device,
+                                            emailParam.channel || 1
+                                        );
+                                    }
+                                    deviceSelect.onchange = function () {
+                                        automationEditorDraft.actions[actionIndex]
+                                            .parameters[emailParamIndex].ieee = deviceSelect.value;
+                                        refreshEmailParamFields();
+                                        automationEditorDraft.actions[actionIndex]
+                                            .parameters[emailParamIndex].param = fieldSelect.value;
+                                        automationEditorDraft.actions[actionIndex]
+                                            .parameters[emailParamIndex].channel =
+                                            parseInt(channelSelect.value, 10) || 1;
+                                    };
+                                    channelSelect.onchange = function () {
+                                        automationEditorDraft.actions[actionIndex]
+                                            .parameters[emailParamIndex].channel =
+                                            parseInt(channelSelect.value, 10) || 1;
+                                    };
+                                    fieldSelect.onchange = function () {
+                                        automationEditorDraft.actions[actionIndex]
+                                            .parameters[emailParamIndex].param = fieldSelect.value;
+                                    };
+                                    titleInput.onchange = function () {
+                                        automationEditorDraft.actions[actionIndex]
+                                            .parameters[emailParamIndex].title = titleInput.value;
+                                    };
+                                    refreshEmailParamFields();
+                                    var removeParamBtn = document.createElement("button");
+                                    removeParamBtn.type = "button";
+                                    removeParamBtn.className = "console-widget-delete-btn";
+                                    removeParamBtn.textContent = "🗑";
+                                    removeParamBtn.title = "Remove parameter";
+                                    removeParamBtn.setAttribute("aria-label", "Remove parameter");
+                                    removeParamBtn.onclick = function () {
+                                        automationEditorDraft.actions[actionIndex].parameters.splice(
+                                            emailParamIndex,
+                                            1
+                                        );
+                                        renderEmailParams();
+                                    };
+                                    function appendCell(control) {
+                                        var td = document.createElement("td");
+                                        td.appendChild(control);
+                                        tr.appendChild(td);
+                                    }
+                                    appendCell(deviceSelect);
+                                    appendCell(channelSelect);
+                                    appendCell(fieldSelect);
+                                    appendCell(titleInput);
+                                    appendCell(removeParamBtn);
+                                    tbody.appendChild(tr);
+                                })(paramIndex);
+                            }
+                            table.appendChild(tbody);
+                            if (parameters.length > 0) {
+                                paramsHost.appendChild(table);
+                            }
+                            var addParamBtn = document.createElement("button");
+                            addParamBtn.type = "button";
+                            addParamBtn.className = "btn btn-secondary btn-inline";
+                            addParamBtn.textContent = "Add parameter";
+                            addParamBtn.disabled = parameters.length >= 8;
+                            addParamBtn.onclick = function () {
+                                var firstDevice = registeredDeviceRows[0] || null;
+                                automationEditorDraft.actions[actionIndex].parameters.push({
+                                    ieee: firstDevice ? (firstDevice.ieee || "") : "",
+                                    channel: 1,
+                                    param: "",
+                                    title: ""
+                                });
+                                renderEmailParams();
+                            };
+                            paramsHost.appendChild(addParamBtn);
+                        }
+                        renderEmailParams();
+                        row.appendChild(emailFieldsTable);
+                        row.appendChild(paramsHost);
                     } else {
                         var nameSelect = document.createElement("select");
                         fillAutomationNameSelect(nameSelect, action.name || "");
@@ -8993,55 +9318,9 @@
                         row.appendChild(opSelect);
                         row.appendChild(timeInput);
                     }
-                    var toolbar = document.createElement("div");
-                    toolbar.className = "automation-action-toolbar";
-                    var upBtn = document.createElement("button");
-                    upBtn.type = "button";
-                    upBtn.className = "btn btn-secondary btn-inline";
-                    upBtn.textContent = "Up";
-                    upBtn.onclick = function () {
-                        if (actionIndex <= 0) {
-                            return;
-                        }
-                        var swap = automationEditorDraft.actions[actionIndex - 1];
-                        automationEditorDraft.actions[actionIndex - 1] = automationEditorDraft.actions[actionIndex];
-                        automationEditorDraft.actions[actionIndex] = swap;
-                        renderAutomationActionsEditor();
-                    };
-                    var downBtn = document.createElement("button");
-                    downBtn.type = "button";
-                    downBtn.className = "btn btn-secondary btn-inline";
-                    downBtn.textContent = "Down";
-                    downBtn.onclick = function () {
-                        if (actionIndex >= automationEditorDraft.actions.length - 1) {
-                            return;
-                        }
-                        var swap = automationEditorDraft.actions[actionIndex + 1];
-                        automationEditorDraft.actions[actionIndex + 1] = automationEditorDraft.actions[actionIndex];
-                        automationEditorDraft.actions[actionIndex] = swap;
-                        renderAutomationActionsEditor();
-                    };
-                    var removeBtn = document.createElement("button");
-                    removeBtn.type = "button";
-                    removeBtn.className = "btn btn-secondary btn-inline";
-                    removeBtn.textContent = "Remove";
-                    removeBtn.onclick = function () {
-                        openAppConfirmDialog({
-                            title: "Remove action",
-                            message: "Remove this action?",
-                            confirmLabel: "Remove",
-                            onConfirm: function () {
-                                automationEditorDraft.actions.splice(actionIndex, 1);
-                                renderAutomationActionsEditor();
-                                updateAutomationImportEnabled();
-                            }
-                        });
-                    };
-                    toolbar.appendChild(upBtn);
-                    toolbar.appendChild(downBtn);
-                    toolbar.appendChild(removeBtn);
-                    row.appendChild(toolbar);
-                    host.appendChild(row);
+                    block.appendChild(sideTools);
+                    block.appendChild(row);
+                    host.appendChild(block);
                 })(index);
             }
             var addBtn = document.createElement("button");
@@ -10576,7 +10855,7 @@
                         };
                         widthCfg.appendChild(widthInput);
                         widthCfg.appendChild(widthUnit);
-                        var contourLabel = document.createElement("label");
+                        var contourLabel = document.createElement("div");
                         contourLabel.className = "field-check console-composite-contour";
                         var contourCheck = document.createElement("input");
                         contourCheck.type = "checkbox";
@@ -10585,8 +10864,10 @@
                         contourCheck.setAttribute("data-row-index", String(rowIndex));
                         contourCheck.setAttribute("data-cell-index", String(cellIndex));
                         contourCheck.checked = !!cell.contour;
+                        var contourCaption = document.createElement("span");
+                        contourCaption.textContent = "Contour";
                         contourLabel.appendChild(contourCheck);
-                        contourLabel.appendChild(document.createTextNode("Contour"));
+                        contourLabel.appendChild(contourCaption);
                         var chromeTop = document.createElement("div");
                         chromeTop.className = "console-composite-chrome-top";
                         var cellDragHandle = document.createElement("span");
@@ -11195,7 +11476,7 @@
             toolbarRow1.className = "console-widget-toolbar-row";
             var titleField = document.createElement("div");
             titleField.className = "field console-widget-title-field";
-            var showWidgetTitleLabel = document.createElement("label");
+            var showWidgetTitleLabel = document.createElement("div");
             showWidgetTitleLabel.className = "field-check console-widget-show-title";
             showWidgetTitleLabel.title = "Show widget name in Place";
             var showWidgetTitleCheck = document.createElement("input");
@@ -11212,28 +11493,32 @@
             titleField.appendChild(showWidgetTitleLabel);
             titleField.appendChild(titleInput);
             toolbarRow1.appendChild(titleField);
-            var groupLabel = document.createElement("label");
+            var groupLabel = document.createElement("div");
             groupLabel.className = "field-check";
             var groupCheck = document.createElement("input");
             groupCheck.type = "checkbox";
             groupCheck.className = "console-widget-group-cb";
             groupCheck.setAttribute("data-widget-index", String(widgetIndex));
             groupCheck.checked = !!widget.showGroupOnOff;
+            var groupCaption = document.createElement("span");
+            groupCaption.textContent = "Group On/Off";
             groupLabel.appendChild(groupCheck);
-            groupLabel.appendChild(document.createTextNode("Group On/Off"));
+            groupLabel.appendChild(groupCaption);
             toolbarRow1.appendChild(groupLabel);
             toolbar.appendChild(toolbarRow1);
             var toolbarRow2 = document.createElement("div");
             toolbarRow2.className = "console-widget-toolbar-row";
-            var fullWidthLabel = document.createElement("label");
+            var fullWidthLabel = document.createElement("div");
             fullWidthLabel.className = "field-check";
             var fullWidthCheck = document.createElement("input");
             fullWidthCheck.type = "checkbox";
             fullWidthCheck.className = "console-widget-fullwidth-cb";
             fullWidthCheck.setAttribute("data-widget-index", String(widgetIndex));
             fullWidthCheck.checked = !!widget.fullWidth;
+            var fullWidthCaption = document.createElement("span");
+            fullWidthCaption.textContent = "Full width";
             fullWidthLabel.appendChild(fullWidthCheck);
-            fullWidthLabel.appendChild(document.createTextNode("Full width"));
+            fullWidthLabel.appendChild(fullWidthCaption);
             toolbarRow2.appendChild(fullWidthLabel);
             var gridSizeField = document.createElement("div");
             gridSizeField.className = "console-widget-grid-size";
@@ -11475,8 +11760,10 @@
             if (isConsoleBindingSpacer(binding)) {
                 var removeEmpty = document.createElement("button");
                 removeEmpty.type = "button";
-                removeEmpty.className = "btn btn-secondary btn-inline";
-                removeEmpty.textContent = "Remove";
+                removeEmpty.className = "console-widget-delete-btn";
+                removeEmpty.textContent = "🗑";
+                removeEmpty.title = "Remove empty cell";
+                removeEmpty.setAttribute("aria-label", "Remove empty cell");
                 removeEmpty.onclick = (function (wIndex, bIndex) {
                     return function (event) {
                         event.preventDefault();
@@ -13791,6 +14078,7 @@
         window.onload = function () {
             setupPasswordToggle("wifiPassword", "wifiPasswordToggle");
             setupPasswordToggle("mqttPassword", "mqttPasswordToggle");
+            setupPasswordToggle("emailPassword", "emailPasswordToggle");
             setupAutomationGroupCombo();
             document.getElementById("wifiMode").onchange = updateApIpVisibility;
             document.getElementById("mqttServerType").onchange = updateMqttServerVisibility;
@@ -13849,10 +14137,10 @@
             <label for="loginPassword">Password</label>
             <input id="loginPassword" type="password" autocomplete="current-password">
         </div>
-        <label class="field-check">
+        <div class="field-check">
             <input id="loginRememberMe" type="checkbox">
-            Remember me
-        </label>
+            <span>Remember me</span>
+        </div>
         <button type="submit" class="btn btn-primary">Sign in</button>
     </form>
 </div>
@@ -14010,6 +14298,7 @@
             <nav class="tabs network-tabs" role="tablist" aria-label="Network groups">
                 <button type="button" class="network-tab-btn tab-btn active" data-tab="wifi" role="tab" onclick="showNetworkTab('wifi')">WiFi</button>
                 <button type="button" class="network-tab-btn tab-btn" data-tab="mqtt" role="tab" onclick="showNetworkTab('mqtt')">MQTT</button>
+                <button type="button" class="network-tab-btn tab-btn" data-tab="email" role="tab" onclick="showNetworkTab('email')">E-mail</button>
                 <button type="button" class="network-tab-btn tab-btn" data-tab="zigbee" role="tab" onclick="showNetworkTab('zigbee')">ZigBee</button>
             </nav>
             <div class="tab-content">
@@ -14048,7 +14337,7 @@
                         </div>
                         <div class="field field-check">
                             <input id="wifiOtgEnabled" type="checkbox">
-                            <label for="wifiOtgEnabled">OTG_ENABLED</label>
+                            <span>OTG_ENABLED</span>
                         </div>
                     </div>
                     <div class="page-footer">
@@ -14119,6 +14408,73 @@
                         <div class="page-footer-inner">
                             <button type="button" class="btn btn-primary" onclick="saveMqtt()">Save</button>
                             <button type="button" class="btn btn-secondary" onclick="loadMqtt()">Reset</button>
+                        </div>
+                    </div>
+                </div>
+                <div id="network-tab-email" class="network-tab-panel tab-panel" role="tabpanel">
+                    <p id="emailSaveError" class="save-error" hidden></p>
+                    <p id="emailSaveSuccess" class="save-success" hidden></p>
+                    <div class="settings-scroll">
+                        <div class="field">
+                            <label for="emailHost">SMTP HOST</label>
+                            <input id="emailHost" type="text" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label for="emailPort">SMTP PORT</label>
+                            <input id="emailPort" type="number" min="1" max="65535" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label for="emailEncryption">ENCRYPTION</label>
+                            <select id="emailEncryption">
+                                <option value="none">none</option>
+                                <option value="starttls">STARTTLS</option>
+                                <option value="ssl">SSL/TLS</option>
+                            </select>
+                        </div>
+                        <div class="field field-check">
+                            <input id="emailAuthEnabled" type="checkbox">
+                            <span>AUTHENTICATION</span>
+                        </div>
+                        <div class="field">
+                            <label for="emailUsername">USERNAME</label>
+                            <input id="emailUsername" type="text" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label for="emailPassword">PASSWORD</label>
+                            <div class="password-row">
+                                <input id="emailPassword" type="password" autocomplete="off">
+                                <button type="button" id="emailPasswordToggle" class="password-toggle">Show</button>
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="emailFromAddress">FROM ADDRESS</label>
+                            <input id="emailFromAddress" type="email" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label for="emailFromName">FROM DISPLAY NAME</label>
+                            <input id="emailFromName" type="text" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label for="emailReplyTo">REPLY-TO</label>
+                            <input id="emailReplyTo" type="email" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label for="emailEhloHostname">EHLO / HELO HOSTNAME</label>
+                            <input id="emailEhloHostname" type="text" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label for="emailConnectTimeoutMs">CONNECT TIMEOUT MS</label>
+                            <input id="emailConnectTimeoutMs" type="number" min="1000" max="120000" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label for="emailSendTimeoutMs">SEND TIMEOUT MS</label>
+                            <input id="emailSendTimeoutMs" type="number" min="1000" max="120000" autocomplete="off">
+                        </div>
+                    </div>
+                    <div class="page-footer">
+                        <div class="page-footer-inner">
+                            <button type="button" class="btn btn-primary" onclick="saveEmail()">Save</button>
+                            <button type="button" class="btn btn-secondary" onclick="loadEmail()">Reset</button>
                         </div>
                     </div>
                 </div>
@@ -14375,7 +14731,7 @@
                         <p id="maintenanceStoreError" class="save-error" hidden></p>
                         <div id="maintenanceSettingsCard" class="upload-card">
                             <h3 class="upload-title">Settings</h3>
-                            <p class="field-hint">Export MQTT, Zigbee, hardware, devices, users, and consoles. Restore replaces those groups when present in the file. Wi-Fi is never included.</p>
+                            <p class="field-hint">Export MQTT, Zigbee, hardware, devices, users, consoles, and automations. Restore replaces those groups when present in the file. Wi-Fi and e-mail account settings are never included.</p>
                             <p id="settingsRestoreError" class="save-error" hidden></p>
                             <input id="settingsRestoreFile" type="file" accept="application/json,.json" hidden onchange="onSettingsRestoreFileSelected(event)">
                             <div class="dialog-actions">
@@ -14581,7 +14937,7 @@
                             <h3 class="group-title">MQTT</h3>
                             <div class="field field-check" id="devicePublishToMqttField">
                                 <input id="devicePublishToMqtt" type="checkbox" onchange="onPublishToMqttChange()">
-                                <label for="devicePublishToMqtt">Publish to MQTT</label>
+                                <span>Publish to MQTT</span>
                             </div>
                             <div id="deviceMqttTopicFields" class="mqtt-topic-fields">
                                 <div class="field field-inline">
@@ -14600,11 +14956,11 @@
                         </div>
                         <div class="field field-check">
                             <input id="deviceFullControl" type="checkbox">
-                            <label for="deviceFullControl">FULL CONTROL</label>
+                            <span>FULL CONTROL</span>
                         </div>
                         <div class="field field-check">
                             <input id="deviceDebug" type="checkbox">
-                            <label for="deviceDebug">DEBUG</label>
+                            <span>DEBUG</span>
                         </div>
                     </div>
                     <div id="parameter-tab-command" class="parameter-tab-panel tab-panel" role="tabpanel">
@@ -14723,38 +15079,38 @@
                 <p class="field-hint">Leave empty when editing to keep the current password. The stored hash is never shown.</p>
             </div>
             <div class="user-dialog-roles">
-                <label class="field-check">
+                <div class="field-check">
                     <input id="userIsAdmin" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
-                    Admin
-                </label>
-                <label class="field-check">
+                    <span>Admin</span>
+                </div>
+                <div class="field-check">
                     <input id="userEditDevices" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
-                    Edit devices
-                </label>
-                <label class="field-check">
+                    <span>Edit devices</span>
+                </div>
+                <div class="field-check">
                     <input id="userAddDevices" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
-                    Add devices
-                </label>
-                <label class="field-check">
+                    <span>Add devices</span>
+                </div>
+                <div class="field-check">
                     <input id="userRemoveDevices" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
-                    Delete devices
-                </label>
-                <label class="field-check">
+                    <span>Delete devices</span>
+                </div>
+                <div class="field-check">
                     <input id="userEditUsers" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
-                    Edit users
-                </label>
-                <label class="field-check">
+                    <span>Edit users</span>
+                </div>
+                <div class="field-check">
                     <input id="userEditConsoles" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
-                    Console editor
-                </label>
-                <label class="field-check">
+                    <span>Console editor</span>
+                </div>
+                <div class="field-check">
                     <input id="userControlDevices" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
-                    Other device control
-                </label>
-                <label class="field-check">
+                    <span>Other device control</span>
+                </div>
+                <div class="field-check">
                     <input id="userMonitor" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
-                    Monitor
-                </label>
+                    <span>Monitor</span>
+                </div>
             </div>
             <div id="userAssignedConsolesField" class="field">
                 <label>Assigned consoles</label>
@@ -14767,10 +15123,10 @@
                     <option value="light">Light</option>
                 </select>
             </div>
-            <label class="field-check">
+            <div class="field-check">
                 <input id="userIsBlocked" type="checkbox">
-                Blocked
-            </label>
+                <span>Blocked</span>
+            </div>
         </div>
         <div class="dialog-actions user-dialog-actions">
             <button type="button" id="userSaveBtn" class="btn btn-primary" onclick="saveUserDialog()">Save</button>
@@ -14806,10 +15162,10 @@
         <div class="automation-edit-body">
             <div class="automation-general-box automation-edit-section">
                 <h4 class="upload-title">General</h4>
-                <label class="field-check">
+                <div class="field-check">
                     <input id="automationEditActive" type="checkbox" onchange="updateAutomationImportEnabled()">
-                    Active
-                </label>
+                    <span>Active</span>
+                </div>
                 <div class="field">
                     <label for="automationEditName">Name</label>
                     <input id="automationEditName" type="text" autocomplete="off">
@@ -14827,27 +15183,27 @@
                     <input id="automationMinTriggerIntervalSec" type="number" min="0" step="1" placeholder="Optional">
                     <p class="field-hint">If set, this automation is skipped until that many seconds have passed since the last activation. Leave empty for no limit.</p>
                 </div>
-                <label class="field-check">
+                <div class="field-check">
                     <input id="automationEditDebug" type="checkbox">
-                    Debug
-                </label>
+                    <span>Debug</span>
+                </div>
             </div>
             <div class="automation-trigger-box automation-edit-section">
                 <h4 class="upload-title">Trigger</h4>
-                <label class="field-check">
+                <div class="field-check">
                     <input id="automationTimerUse" type="checkbox" onchange="updateAutomationTimerVisibility(); updateAutomationImportEnabled();">
-                    Use countdown timer
-                </label>
+                    <span>Use countdown timer</span>
+                </div>
                 <div id="automationTimerDetails">
-                    <label class="field-check">
+                    <div class="field-check">
                         <input id="automationTimerStartOnBoot" type="checkbox">
-                        Start on boot
-                    </label>
+                        <span>Start on boot</span>
+                    </div>
                     <p class="field-hint">If enabled, the timer starts 20 seconds after host boot using default time.</p>
-                    <label class="field-check">
+                    <div class="field-check">
                         <input id="automationTimerAutoRestart" type="checkbox">
-                        Auto restart
-                    </label>
+                        <span>Auto restart</span>
+                    </div>
                     <div class="field">
                         <label for="automationTimerDefaultTime">Default time (seconds)</label>
                         <input id="automationTimerDefaultTime" type="number" min="0" step="1">
@@ -14859,10 +15215,10 @@
             </div>
             <div class="automation-condition-box automation-edit-section">
                 <h4 class="upload-title">Condition</h4>
-                <label class="field-check">
+                <div class="field-check">
                     <input id="automationUseCondition" type="checkbox" onchange="updateAutomationConditionVisibility(); updateAutomationImportEnabled();">
-                    Use condition
-                </label>
+                    <span>Use condition</span>
+                </div>
                 <div id="automationConditionEditor"></div>
             </div>
             <div class="automation-actions-box automation-edit-section">
@@ -14898,10 +15254,10 @@
             <label for="consoleEditName">Name</label>
             <input id="consoleEditName" type="text" autocomplete="off">
         </div>
-        <label class="field-check">
+        <div class="field-check">
             <input id="consoleEditActive" type="checkbox">
-            Active
-        </label>
+            <span>Active</span>
+        </div>
         <div class="console-edit-grid-wrap">
             <div id="consoleEditGrid" class="console-grid"></div>
         </div>
@@ -15011,10 +15367,10 @@
                     <select id="consoleDeviceDecimals"></select>
                 </div>
                 <div id="consoleDeviceAsLogicalField" class="console-binding-general-row" hidden>
-                    <label class="field-check console-as-logical-check" for="consoleDeviceAsLogical">
+                    <div class="field-check console-as-logical-check">
                         <input id="consoleDeviceAsLogical" type="checkbox" onchange="onConsoleDeviceAsLogicalChange();">
                         <span>as logical</span>
-                    </label>
+                    </div>
                 </div>
                 <div id="consoleDeviceLogicalThresholdField" class="console-binding-general-row" hidden>
                     <label for="consoleDeviceLogicalThreshold">Compare (≥ is TRUE)</label>
@@ -15065,10 +15421,10 @@
             <div id="consoleDeviceClickActionSection" class="console-click-action-section">
                 <p class="field-hint">Click actions (one icon; OFF and ON may each run a different action)</p>
                 <div class="console-binding-general-row">
-                    <label class="field-check" for="consoleDeviceClickActionEnable">
+                    <div class="field-check">
                         <input id="consoleDeviceClickActionEnable" type="checkbox" onchange="onConsoleDeviceClickActionEnableChange();">
                         <span>Enable click actions</span>
-                    </label>
+                    </div>
                 </div>
                 <div id="consoleDeviceClickActionEditor" class="console-click-action-editor" hidden></div>
             </div>

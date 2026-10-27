@@ -31,6 +31,17 @@
         "docs/adr/0008-ota-slave-before-host.md",
         "docs/adr/0003-two-chips-two-images-joined-zip.md"
       ]
+    },
+    {
+      "id": "smtp-send",
+      "title": "Host outbound SMTP send algorithm",
+      "hardPaths": [
+        "src/EmailSender.cpp",
+        "include/EmailSender.h"
+      ],
+      "influencePaths": [
+        "platformio.ini"
+      ]
     }
   ]
 }

@@ -7,6 +7,7 @@
 
 #include <LittleFS.h>
 #include <ctype.h>
+#include <esp_heap_caps.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -59,6 +60,26 @@ bool AutomationStore::heapAllowsAllocation(size_t bytes) {
     return true;
 }
 
+bool AutomationStore::psramAllowsAllocation(size_t bytes) {
+    if (bytes == 0) {
+        return true;
+    }
+    const size_t freePsram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    const size_t maxBlock = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    return freePsram >= bytes && maxBlock >= bytes;
+}
+
+void *AutomationStore::allocateEmailMemory(size_t bytes) {
+    if (bytes == 0 || !psramAllowsAllocation(bytes)) {
+        return nullptr;
+    }
+    void *block = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (block == nullptr) {
+        block = ps_malloc(bytes);
+    }
+    return block;
+}
+
 char *AutomationStore::duplicateBoundedString(const char *source, size_t maxLength) {
     const char *text = source != nullptr ? source : "";
     size_t length = strlen(text);
@@ -75,6 +96,33 @@ char *AutomationStore::duplicateBoundedString(const char *source, size_t maxLeng
     memcpy(copy, text, length);
     copy[length] = '\0';
     return copy;
+}
+
+char *AutomationStore::duplicateEmailString(const char *source, size_t maxLength) {
+    const char *text = source != nullptr ? source : "";
+    size_t length = strlen(text);
+    if (length > maxLength) {
+        length = maxLength;
+    }
+    char *copy = (char *)allocateEmailMemory(length + 1);
+    if (copy == nullptr) {
+        return nullptr;
+    }
+    memcpy(copy, text, length);
+    copy[length] = '\0';
+    return copy;
+}
+
+void AutomationStore::freeEmailParamList(AutomationEmailParam *&head) {
+    while (head != nullptr) {
+        AutomationEmailParam *next = head->next;
+        free(head->ieeeText);
+        free(head->param);
+        free(head->title);
+        free(head);
+        head = next;
+    }
+    head = nullptr;
 }
 
 bool AutomationStore::isNameSafe(const char *name) {
@@ -168,6 +216,10 @@ void AutomationStore::freeActionList(AutomationAction *&listHead) {
         free(listHead->customValue);
         free(listHead->deviceCustomName);
         free(listHead->automationName);
+        free(listHead->emailReceivers);
+        free(listHead->emailTheme);
+        free(listHead->emailMessage);
+        freeEmailParamList(listHead->emailParams);
         free(listHead);
         listHead = next;
     }
@@ -983,18 +1035,20 @@ bool AutomationStore::parseActions(const char *objectJson, AutomationAction **ou
             return false;
         }
         String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
-        if (!heapAllowsAllocation(sizeof(AutomationAction))) {
-            freeActionList(*outActions);
-            return false;
+        String targetText;
+        extractJsonString(object.c_str(), "target", targetText);
+        const bool isEmailTarget = targetText == "e-mail";
+        AutomationAction *action = nullptr;
+        if (isEmailTarget) {
+            action = (AutomationAction *)allocateEmailMemory(sizeof(AutomationAction));
+        } else if (heapAllowsAllocation(sizeof(AutomationAction))) {
+            action = (AutomationAction *)malloc(sizeof(AutomationAction));
         }
-        AutomationAction *action = (AutomationAction *)malloc(sizeof(AutomationAction));
         if (action == nullptr) {
             freeActionList(*outActions);
             return false;
         }
         memset(action, 0, sizeof(*action));
-        String targetText;
-        extractJsonString(object.c_str(), "target", targetText);
         if (targetText.length() == 0 || targetText == "device") {
             action->target = AutomationTargetDevice;
             String ieeeText;
@@ -1149,6 +1203,170 @@ bool AutomationStore::parseActions(const char *objectJson, AutomationAction **ou
             if (extractJsonInt(object.c_str(), "time", startTime) && startTime > 0) {
                 action->hasStartTime = true;
                 action->startTime = (uint32_t)startTime;
+            }
+        } else if (isEmailTarget) {
+            action->target = AutomationTargetEmail;
+            String receiversText;
+            String themeText;
+            String messageText;
+            extractJsonString(object.c_str(), "receivers", receiversText);
+            extractJsonString(object.c_str(), "theme", themeText);
+            extractJsonString(object.c_str(), "message", messageText);
+            action->emailReceivers =
+                duplicateEmailString(receiversText.c_str(), AUTOMATION_EMAIL_RECEIVERS_MAX - 1);
+            action->emailTheme = duplicateEmailString(themeText.c_str(), AUTOMATION_EMAIL_THEME_MAX - 1);
+            action->emailMessage =
+                duplicateEmailString(messageText.c_str(), AUTOMATION_EMAIL_MESSAGE_MAX - 1);
+            if (action->emailReceivers == nullptr
+                || action->emailTheme == nullptr
+                || action->emailMessage == nullptr) {
+                freeActionList(*outActions);
+                free(action->emailReceivers);
+                free(action->emailTheme);
+                free(action->emailMessage);
+                free(action);
+                return false;
+            }
+            String parametersJson;
+            if (extractJsonKeyedSlice(object.c_str(), "parameters", '[', parametersJson)) {
+                AutomationEmailParam *paramTail = nullptr;
+                int paramCount = 0;
+                const char *paramCursor = parametersJson.c_str();
+                while (paramCursor != nullptr && *paramCursor != '\0') {
+                    const char *paramObjectStart = strchr(paramCursor, '{');
+                    if (paramObjectStart == nullptr) {
+                        break;
+                    }
+                    int paramDepth = 0;
+                    bool paramInString = false;
+                    bool paramEscape = false;
+                    const char *paramObjectEnd = nullptr;
+                    for (const char *scan = paramObjectStart; *scan != '\0'; scan++) {
+                        const char character = *scan;
+                        if (paramInString) {
+                            if (paramEscape) {
+                                paramEscape = false;
+                                continue;
+                            }
+                            if (character == '\\') {
+                                paramEscape = true;
+                                continue;
+                            }
+                            if (character == '"') {
+                                paramInString = false;
+                            }
+                            continue;
+                        }
+                        if (character == '"') {
+                            paramInString = true;
+                            continue;
+                        }
+                        if (character == '{') {
+                            paramDepth++;
+                            continue;
+                        }
+                        if (character == '}') {
+                            paramDepth--;
+                            if (paramDepth == 0) {
+                                paramObjectEnd = scan;
+                                break;
+                            }
+                        }
+                    }
+                    if (paramObjectEnd == nullptr) {
+                        freeActionList(*outActions);
+                        free(action->emailReceivers);
+                        free(action->emailTheme);
+                        free(action->emailMessage);
+                        freeEmailParamList(action->emailParams);
+                        free(action);
+                        return false;
+                    }
+                    if (paramCount >= AUTOMATION_EMAIL_PARAMS_MAX) {
+                        freeActionList(*outActions);
+                        free(action->emailReceivers);
+                        free(action->emailTheme);
+                        free(action->emailMessage);
+                        freeEmailParamList(action->emailParams);
+                        free(action);
+                        return false;
+                    }
+                    String paramObject =
+                        String(paramObjectStart).substring(0, (unsigned int)(paramObjectEnd - paramObjectStart + 1));
+                    AutomationEmailParam *emailParam =
+                        (AutomationEmailParam *)allocateEmailMemory(sizeof(AutomationEmailParam));
+                    if (emailParam == nullptr) {
+                        freeActionList(*outActions);
+                        free(action->emailReceivers);
+                        free(action->emailTheme);
+                        free(action->emailMessage);
+                        freeEmailParamList(action->emailParams);
+                        free(action);
+                        return false;
+                    }
+                    memset(emailParam, 0, sizeof(*emailParam));
+                    String ieeeText;
+                    String paramText;
+                    String titleText;
+                    extractJsonString(paramObject.c_str(), "ieee", ieeeText);
+                    extractJsonString(paramObject.c_str(), "param", paramText);
+                    extractJsonString(paramObject.c_str(), "title", titleText);
+                    int channel = 1;
+                    extractJsonInt(paramObject.c_str(), "channel", channel);
+                    if (channel < 1) {
+                        channel = 1;
+                    }
+                    emailParam->channel = (uint8_t)channel;
+                    emailParam->ieeeText = duplicateEmailString(ieeeText.c_str(), IEEE_TEXT_MAX - 1);
+                    emailParam->title =
+                        duplicateEmailString(titleText.c_str(), AUTOMATION_EMAIL_PARAM_TITLE_MAX - 1);
+                    if (emailParam->ieeeText == nullptr || emailParam->title == nullptr) {
+                        free(emailParam->ieeeText);
+                        free(emailParam->title);
+                        free(emailParam);
+                        freeActionList(*outActions);
+                        free(action->emailReceivers);
+                        free(action->emailTheme);
+                        free(action->emailMessage);
+                        freeEmailParamList(action->emailParams);
+                        free(action);
+                        return false;
+                    }
+                    if (paramText.length() > 0) {
+                        emailParam->param =
+                            duplicateEmailString(paramText.c_str(), AUTOMATION_PARAM_KEY_MAX - 1);
+                        if (emailParam->param == nullptr) {
+                            free(emailParam->ieeeText);
+                            free(emailParam->title);
+                            free(emailParam);
+                            freeActionList(*outActions);
+                            free(action->emailReceivers);
+                            free(action->emailTheme);
+                            free(action->emailMessage);
+                            freeEmailParamList(action->emailParams);
+                            free(action);
+                            return false;
+                        }
+                    }
+                    int customCluster = 0;
+                    int customAttrId = 0;
+                    if (extractJsonInt(paramObject.c_str(), "cluster", customCluster) && customCluster > 0) {
+                        emailParam->hasCluster = true;
+                        emailParam->cluster = (uint16_t)customCluster;
+                    }
+                    if (extractJsonInt(paramObject.c_str(), "attrId", customAttrId) && customAttrId >= 0) {
+                        emailParam->hasAttrId = true;
+                        emailParam->attrId = (uint16_t)customAttrId;
+                    }
+                    if (paramTail == nullptr) {
+                        action->emailParams = emailParam;
+                    } else {
+                        paramTail->next = emailParam;
+                    }
+                    paramTail = emailParam;
+                    paramCount++;
+                    paramCursor = paramObjectEnd + 1;
+                }
             }
         } else {
             free(action);
@@ -1836,6 +2054,45 @@ void AutomationStore::appendActionJson(String &json, const AutomationAction *act
         json += ",\"payload\":\"";
         appendJsonEscaped(json, action->payload, AUTOMATION_VALUE_MAX);
         json += "\"}";
+        return;
+    }
+    if (action->target == AutomationTargetEmail) {
+        json += "{\"target\":\"e-mail\",\"receivers\":\"";
+        appendJsonEscaped(json, action->emailReceivers, AUTOMATION_EMAIL_RECEIVERS_MAX);
+        json += "\",\"theme\":\"";
+        appendJsonEscaped(json, action->emailTheme, AUTOMATION_EMAIL_THEME_MAX);
+        json += "\",\"message\":\"";
+        appendJsonEscaped(json, action->emailMessage, AUTOMATION_EMAIL_MESSAGE_MAX);
+        json += "\",\"parameters\":[";
+        bool firstParam = true;
+        for (const AutomationEmailParam *emailParam = action->emailParams; emailParam != nullptr;
+             emailParam = emailParam->next) {
+            if (!firstParam) {
+                json += ",";
+            }
+            firstParam = false;
+            json += "{\"ieee\":\"";
+            appendJsonEscaped(json, emailParam->ieeeText, IEEE_TEXT_MAX);
+            json += "\",\"channel\":";
+            json += String((unsigned)emailParam->channel);
+            if (emailParam->param != nullptr && emailParam->param[0] != '\0') {
+                json += ",\"param\":\"";
+                appendJsonEscaped(json, emailParam->param, AUTOMATION_PARAM_KEY_MAX);
+                json += "\"";
+            }
+            if (emailParam->hasCluster) {
+                json += ",\"cluster\":";
+                json += String((unsigned)emailParam->cluster);
+            }
+            if (emailParam->hasAttrId) {
+                json += ",\"attrId\":";
+                json += String((unsigned)emailParam->attrId);
+            }
+            json += ",\"title\":\"";
+            appendJsonEscaped(json, emailParam->title, AUTOMATION_EMAIL_PARAM_TITLE_MAX);
+            json += "\"}";
+        }
+        json += "]}";
         return;
     }
     json += "{\"target\":\"automation\",\"name\":\"";

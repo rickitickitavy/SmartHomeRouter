@@ -1,0 +1,17 @@
+---
+description: Use recycle-bin icon buttons for repeated remove/delete controls
+alwaysApply: true
+---
+
+# Recycle-bin remove buttons
+
+When a screen has **many** remove/delete controls (table rows, list rows, action rows, parameter rows, and similar), NEVER use a text button labeled **Remove**, **Delete**, **Remove row**, or similar.
+
+ALWAYS use a **small recycle-bin icon button** (e.g. `🗑` with class `.console-widget-delete-btn` or an equivalent compact icon button). Keep a confirm dialog before deleting persisted entities.
+
+```text
+BAD:  [Remove] [Remove] [Remove] …
+GOOD: [🗑] [🗑] [🗑] …
+```
+
+Text "Delete" / "Remove" on a **single** primary dialog action (e.g. one footer Delete for the whole entity) is allowed when it is not a repeated per-row control.

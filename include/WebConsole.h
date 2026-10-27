@@ -107,6 +107,8 @@ private:
     void handleWifiPost(AsyncWebServerRequest *request);
     void handleMqttGet(AsyncWebServerRequest *request);
     void handleMqttPost(AsyncWebServerRequest *request);
+    void handleEmailGet(AsyncWebServerRequest *request);
+    void handleEmailPost(AsyncWebServerRequest *request);
     void handleZigbeeGet(AsyncWebServerRequest *request);
     void handleZigbeePost(AsyncWebServerRequest *request);
     void handleHardwareGet(AsyncWebServerRequest *request);
@@ -160,6 +162,8 @@ private:
     void sendAutomationWriteResult(AsyncWebServerRequest *request, AutomationWriteResult result);
     void appendMqttSettingsJson(String &json);
     bool applyMqttJson(const char *json, String *errorText);
+    void appendEmailSettingsJson(String &json);
+    bool applyEmailJson(const char *json, String *errorText);
     bool applyZigbeeJson(const char *json, String *errorText);
     bool applyHardwareJson(const char *json, String *errorText);
     void handleDevicesGet(AsyncWebServerRequest *request);

@@ -66,6 +66,26 @@ Web console HTTP/UI (`WebConsole`, `data/index.html`) is **not** part of this in
 
 ---
 
+## Zone `smtp-send`
+
+**Title:** Host outbound SMTP send algorithm  
+
+**Why frozen:** One-shot SMTP/TLS placement (CPU1, priority below `loopTask`), mutex serialization, and `async_tcp` pinned to CPU0 were iterated through WDT panics and router freezes. Small core/priority/WDT changes hang MQTT/UI or reboot the host.
+
+### Hard-frozen paths (hook-enforced)
+
+- `src/EmailSender.cpp`
+- `include/EmailSender.h`
+
+### Influence surface (ask human; may not be hook-blocked)
+
+- `platformio.ini` — host `CONFIG_ASYNC_TCP_RUNNING_CORE=0` (keeps `async_tcp` off the SMTP core); do not move that pin or re-enable SMTP-side core WDT games without approving this zone
+- Calling sites that change when/how `EmailSender::enqueue` runs are fine; do not pull SMTP/TLS back onto the automation or `loop` path
+
+Account settings UI / EEPROM email fields / automation email-action JSON are **not** this zone (config only). The frozen part is the send task algorithm itself.
+
+---
+
 ## Temporary allow (human only)
 
 When a human has approved a change in chat, create or edit:

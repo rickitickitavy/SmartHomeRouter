@@ -1,0 +1,23 @@
+---
+description: Checkbox toggles only when the square is clicked
+alwaysApply: true
+---
+
+# Checkbox click target is the square only
+
+A checkbox MUST toggle only when the operator clicks the checkbox **square** itself.
+
+Do **not** wrap the checkbox and its caption in a `<label>` (or otherwise bind the caption click to the input) so that clicking "NOT", "Use condition", "Active", or any other caption text flips the box.
+
+```html
+<!-- BAD — whole row toggles -->
+<label class="field-check"><input type="checkbox"> Use condition</label>
+
+<!-- GOOD — only the square toggles -->
+<div class="field-check">
+  <input type="checkbox" id="automationUseCondition">
+  <span>Use condition</span>
+</div>
+```
+
+Checkboxes MUST align to the **left** unless a layout explicitly asks otherwise. Prefer `.field-check`. Do not put a lone checkbox as a stretched child of a column `.field` (browsers center the square in the full-width control).

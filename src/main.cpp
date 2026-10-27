@@ -20,6 +20,7 @@
 #if defined(BOARD_ROLE_HOST)
 #include "AutomationStore.h"
 #include "AutomationEngine.h"
+#include "EmailSender.h"
 #include "InterChipHost.h"
 #endif
 #include "JsonField.h"
@@ -67,6 +68,7 @@ static ConsoleStore *consoleStore = nullptr;
 #if defined(BOARD_ROLE_HOST)
 static AutomationStore *automationStore = nullptr;
 static AutomationEngine *automationEngine = nullptr;
+static EmailSender *emailSender = nullptr;
 #endif
 static FoundDeviceList *foundDevices = nullptr;
 static DeviceStore *deviceStore = nullptr;
@@ -1849,6 +1851,7 @@ static void setupHost() {
     automationStore = new AutomationStore();
     automationStore->begin(true);
     automationEngine = new AutomationEngine();
+    emailSender = new EmailSender(settingsManager);
     topicMap = settingsManager->deviceMap();
     automationStore->setDeviceMap(topicMap);
     foundDevices = new FoundDeviceList();
@@ -1888,7 +1891,13 @@ static void setupHost() {
     webConsole->setDevicesFileHandler([]() {
         return settingsManager != nullptr ? settingsManager->devicesJsonFile() : String("[]");
     });
-    automationEngine->begin(automationStore, &ZIGBEE_SPI_PROXY, topicMap, applyManualDeviceCommand);
+    automationEngine->begin(
+        automationStore,
+        &ZIGBEE_SPI_PROXY,
+        topicMap,
+        applyManualDeviceCommand,
+        emailSender
+    );
     webConsole->setActionRunner([](const char *actionObjectJson) -> int {
         if (automationStore == nullptr || automationEngine == nullptr || actionObjectJson == nullptr) {
             return 503;

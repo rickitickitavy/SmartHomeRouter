@@ -486,7 +486,9 @@ html, body {
 .field input[type="text"],
 .field input[type="password"],
 .field input[type="number"],
-.field input[type="file"] {
+.field input[type="email"],
+.field input[type="file"],
+.field textarea {
     width: 100%;
     min-height: 44px;
     padding: 0.5rem 0.75rem;
@@ -496,9 +498,16 @@ html, body {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 6px;
+    box-sizing: border-box;
 }
 
-.field input:focus {
+.field textarea {
+    min-height: 5.5rem;
+    resize: vertical;
+}
+
+.field input:focus,
+.field textarea:focus {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
     border-color: var(--accent);
@@ -534,24 +543,42 @@ html, body {
 }
 
 .field-check {
+    display: flex;
     flex-direction: row;
     align-items: center;
+    justify-content: flex-start;
     gap: 0.75rem;
     min-height: 44px;
+    cursor: default;
+}
+
+/* Lone checkboxes in a column .field stretch full-width and look centered — pin left. */
+.field > input[type="checkbox"] {
+    align-self: flex-start;
+    width: 1.35rem;
+    height: 1.35rem;
+    margin: 0;
+    flex-shrink: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
 }
 
 .field-check input[type="checkbox"] {
     width: 1.35rem;
     height: 1.35rem;
     flex-shrink: 0;
+    align-self: center;
+    margin: 0;
     accent-color: var(--accent);
     cursor: pointer;
 }
 
-.field-check label {
+.field-check > span,
+.field-check > label {
     flex: 1;
-    cursor: pointer;
+    cursor: default;
     font-weight: 600;
+    user-select: none;
 }
 
 .upload-card {
@@ -2333,16 +2360,23 @@ html, body {
     justify-content: center;
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    background: var(--chrome-idle);
-    color: var(--muted);
+    background: var(--surface);
+    color: var(--text);
     cursor: pointer;
     font-size: 1rem;
     line-height: 1;
 }
 
-.console-widget-delete-btn:hover {
+.console-widget-delete-btn:hover:not(:disabled) {
     color: var(--accent);
     border-color: var(--accent);
+    background: var(--accent-soft);
+}
+
+.console-widget-delete-btn:disabled {
+    background: var(--chrome-idle);
+    color: var(--muted);
+    cursor: default;
 }
 
 .console-widget-title {
@@ -3737,20 +3771,215 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     margin-top: 0.15rem;
 }
 
-#automationEditDialog .automation-action-toolbar {
+#automationEditDialog .automation-action-block {
     display: flex;
     flex-direction: row;
-    flex-wrap: nowrap;
-    align-items: center;
-    gap: 0.35rem;
-    margin-top: 0.35rem;
+    align-items: flex-start;
+    gap: 0.55rem;
+    margin: 0 0 1rem;
+    padding: 0.75rem 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--surface) 88%, var(--bg) 12%);
 }
 
-#automationEditDialog .automation-action-toolbar .btn {
-    padding: 0.25rem 0.55rem;
-    min-height: 0;
-    line-height: 1.2;
+#automationEditDialog #automationActionsEditor > .automation-action-block + .automation-action-block {
+    margin-top: 0.85rem;
+}
+
+#automationEditDialog .automation-action-side-tools {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    flex: 0 0 auto;
+    padding-top: 0.15rem;
+}
+
+#automationEditDialog .automation-action-move-btn,
+#automationEditDialog .automation-action-side-tools .console-widget-delete-btn {
+    flex: 0 0 auto;
+    width: 32px;
+    min-width: 32px;
+    min-height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 0.95rem;
+    line-height: 1;
+}
+
+#automationEditDialog .automation-action-move-btn:hover:not(:disabled),
+#automationEditDialog .automation-action-side-tools .console-widget-delete-btn:hover:not(:disabled) {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
+
+#automationEditDialog .automation-action-move-btn:disabled {
+    background: var(--chrome-idle);
+    color: var(--muted);
+    cursor: default;
+}
+
+#automationEditDialog .automation-action-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+
+#automationEditDialog .automation-action-toolbar {
+    display: none;
+}
+
+#automationEditDialog .automation-email-fields-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    margin: 0;
+}
+
+#automationEditDialog .automation-email-fields-table th,
+#automationEditDialog .automation-email-fields-table td {
+    padding: 0.35rem 0.45rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    text-align: left;
+}
+
+#automationEditDialog .automation-email-fields-table th {
+    width: 6.75rem;
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--text);
+    white-space: nowrap;
+    padding-top: 0.7rem;
+}
+
+#automationEditDialog .automation-email-fields-table input[type="text"],
+#automationEditDialog .automation-email-fields-table textarea {
+    width: 100%;
+    margin: 0;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-sizing: border-box;
+    font-family: inherit;
+    font-size: 1rem;
+}
+
+#automationEditDialog .automation-email-fields-table input[type="text"] {
+    min-height: 40px;
+    padding: 0.45rem 0.7rem;
+}
+
+#automationEditDialog .automation-email-fields-table textarea {
+    min-height: 5rem;
+    padding: 0.5rem 0.7rem;
+    resize: vertical;
+}
+
+#automationEditDialog .automation-email-params {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    margin-top: 0.15rem;
+    padding-top: 0.55rem;
+    border-top: 1px solid var(--border);
+}
+
+#automationEditDialog .automation-email-params-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+#automationEditDialog .automation-email-params-table th,
+#automationEditDialog .automation-email-params-table td {
+    padding: 0.35rem 0.4rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+    text-align: left;
+}
+
+#automationEditDialog .automation-email-params-table th {
     font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--text);
+    background: var(--table-header);
+}
+
+#automationEditDialog .automation-email-params-table td:last-child,
+#automationEditDialog .automation-email-params-table th:last-child {
+    width: 2.75rem;
+    text-align: center;
+}
+
+#automationEditDialog .automation-email-params-table select,
+#automationEditDialog .automation-email-params-table input[type="text"] {
+    width: 100%;
+    min-height: 36px;
+    margin: 0;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-sizing: border-box;
+    font-family: inherit;
+    font-size: 0.95rem;
+    padding: 0.35rem 0.5rem;
+}
+
+#automationEditDialog input[type="text"],
+#automationEditDialog input[type="number"],
+#automationEditDialog input[type="password"],
+#automationEditDialog input[type="email"],
+#automationEditDialog textarea {
+    width: 100%;
+    max-width: 100%;
+    min-height: 44px;
+    padding: 0.5rem 0.75rem;
+    font-size: 1rem;
+    font-family: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-sizing: border-box;
+}
+
+#automationEditDialog textarea {
+    min-height: 5.5rem;
+    resize: vertical;
+}
+
+#automationEditDialog input[type="text"]:focus,
+#automationEditDialog input[type="number"]:focus,
+#automationEditDialog input[type="password"]:focus,
+#automationEditDialog input[type="email"]:focus,
+#automationEditDialog textarea:focus,
+#automationEditDialog select:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-color: var(--accent);
+}
+
+#automationEditDialog input:read-only,
+#automationEditDialog input:disabled,
+#automationEditDialog select:disabled,
+#automationEditDialog textarea:read-only,
+#automationEditDialog textarea:disabled {
+    background: color-mix(in srgb, var(--bg) 72%, var(--muted) 28%);
+    color: var(--muted);
 }
 
 #automationEditDialog .automation-add-btn {
@@ -3901,12 +4130,24 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 }
 
 #automationEditDialog #automationListenEditor > .field,
-#automationEditDialog #automationConditionEditor .field,
-#automationEditDialog #automationActionsEditor > .field {
+#automationEditDialog #automationConditionEditor .field {
     display: flex;
     flex-direction: column;
     align-items: stretch;
     gap: 0.45rem;
+}
+
+#automationEditDialog #automationActionsEditor > .automation-action-block {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 0.55rem;
+}
+
+#automationEditDialog .automation-action-body > .field {
+    padding: 0;
+    border: none;
+    background: transparent;
 }
 
 #section-automation.section-panel.active {

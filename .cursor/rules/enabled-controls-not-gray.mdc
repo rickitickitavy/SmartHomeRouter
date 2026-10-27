@@ -5,21 +5,27 @@ alwaysApply: true
 
 # Enabled controls are not gray
 
+**NEVER** gray any input, select, textarea, or button that is enabled and editable.
+
 Do **not** use gray / muted / chrome-idle fills or muted text for:
 
 - Enabled buttons (not `:disabled` / `.is-busy` / `.is-disabled`)
 - Enabled inputs, selects, and textareas that are **not** `readonly` / `:read-only` / `:disabled`
 
-Those controls MUST use normal interactive colors (`--surface` or accent primary, `--text`, `--border` / `--accent` as appropriate) so they read as editable and clickable.
+Those controls MUST use normal interactive colors (`--surface` or accent primary, `--text`, `--border` / `--accent` as appropriate) so they read as editable and clickable. Style `textarea` the same as enabled text inputs — never leave browser-default gray fills on enabled textareas.
 
-Gray / muted / mixed-bg styling is reserved for **disabled** or **readonly** controls only (so operators can tell they cannot edit).
+Gray / muted / chrome-idle styling is reserved for **disabled** or **readonly** controls only (so operators can tell they cannot edit).
 
 ```css
 /* BAD — enabled control looks disabled */
 button:not(:disabled) { background: var(--chrome-idle); color: var(--muted); }
 input:not(:disabled):not(:read-only) { background: color-mix(... var(--muted) ...); }
+textarea { /* unstyled → browser gray */ }
 
 /* GOOD — enabled vs readonly */
 button:not(:disabled) { background: var(--surface); color: var(--text); }
-input:read-only, input:disabled { background: color-mix(...); color: var(--muted); }
+input, select, textarea { background: var(--bg); color: var(--text); }
+input:read-only, input:disabled, textarea:read-only, textarea:disabled {
+  background: color-mix(...); color: var(--muted);
+}
 ```
