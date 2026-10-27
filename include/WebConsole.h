@@ -59,6 +59,7 @@ public:
     void setUsersRestoredHandler(UsersRestoredFn handler);
     void setMqttReloadHandler(VoidApplyFn handler);
     void setZigbeeApplyHandler(VoidApplyFn handler);
+    void setEmailSavedHandler(VoidApplyFn handler);
     void setActionRunner(ActionRunnerFn handler);
 
 private:
@@ -82,6 +83,7 @@ private:
     UsersRestoredFn applyUsersRestored = nullptr;
     VoidApplyFn reloadMqttRuntime = nullptr;
     VoidApplyFn applyZigbeeRuntime = nullptr;
+    VoidApplyFn onEmailSaved = nullptr;
     ActionRunnerFn runConsoleAction = nullptr;
     AsyncWebServer server;
     AsyncWebSocket devicesSocket;
@@ -107,6 +109,8 @@ private:
     void handleWifiPost(AsyncWebServerRequest *request);
     void handleMqttGet(AsyncWebServerRequest *request);
     void handleMqttPost(AsyncWebServerRequest *request);
+    void handleEmailGet(AsyncWebServerRequest *request);
+    void handleEmailPost(AsyncWebServerRequest *request);
     void handleZigbeeGet(AsyncWebServerRequest *request);
     void handleZigbeePost(AsyncWebServerRequest *request);
     void handleHardwareGet(AsyncWebServerRequest *request);
@@ -160,6 +164,8 @@ private:
     void sendAutomationWriteResult(AsyncWebServerRequest *request, AutomationWriteResult result);
     void appendMqttSettingsJson(String &json);
     bool applyMqttJson(const char *json, String *errorText);
+    void appendEmailSettingsJson(String &json, bool exportWithEmptyPassword = false);
+    bool applyEmailJson(const char *json, String *errorText, bool emptyPasswordMeansKeep = false);
     bool applyZigbeeJson(const char *json, String *errorText);
     bool applyHardwareJson(const char *json, String *errorText);
     void handleDevicesGet(AsyncWebServerRequest *request);

@@ -2,6 +2,7 @@
 #include "DeviceCustomCommand.h"
 #include "AutomationParam.h"
 #include "DeviceTopicMap.h"
+#include "EmailSender.h"
 #include "Logger.h"
 #include "ZigbeeSpiProxy.h"
 
@@ -19,6 +20,7 @@ AutomationEngine::AutomationEngine()
       spiProxy(nullptr),
       topicMap(nullptr),
       deviceCommand(nullptr),
+      emailSender(nullptr),
       lastTickMs(0),
       actionDepth(0),
       bootStartApplied(false) {
@@ -28,12 +30,14 @@ void AutomationEngine::begin(
     AutomationStore *automationStore,
     ZigbeeSpiProxy *proxy,
     DeviceTopicMap *map,
-    DeviceCommandFn commandFn
+    DeviceCommandFn commandFn,
+    EmailSender *sender
 ) {
     store = automationStore;
     spiProxy = proxy;
     topicMap = map;
     deviceCommand = commandFn;
+    emailSender = sender;
     lastTickMs = millis();
     bootStartApplied = false;
 }
@@ -314,6 +318,42 @@ void AutomationEngine::runAction(const AutomationAction *action) {
 
 void AutomationEngine::applyAction(const AutomationAction *action) {
     if (action == nullptr || store == nullptr) {
+        return;
+    }
+    if (action->target == AutomationTargetEmail) {
+        if (emailSender == nullptr) {
+            LOGGER.warning("Email action ignored: sender unavailable");
+            return;
+        }
+        String body;
+        if (action->emailMessage != nullptr && action->emailMessage[0] != '\0') {
+            body += action->emailMessage;
+            body += '\n';
+        }
+        for (const AutomationEmailParam *emailParam = action->emailParams; emailParam != nullptr;
+             emailParam = emailParam->next) {
+            const char *title = emailParam->title != nullptr ? emailParam->title : "";
+            char liveValue[AUTOMATION_VALUE_MAX];
+            liveValue[0] = '\0';
+            resolveStatus(
+                emailParam->ieeeText,
+                emailParam->channel,
+                emailParam->hasCluster,
+                emailParam->cluster,
+                emailParam->param,
+                liveValue,
+                sizeof(liveValue)
+            );
+            body += title;
+            body += ": ";
+            body += liveValue;
+            body += '\n';
+        }
+        emailSender->enqueue(
+            action->emailReceivers != nullptr ? action->emailReceivers : "",
+            action->emailTheme != nullptr ? action->emailTheme : "",
+            body.c_str()
+        );
         return;
     }
     if (action->target == AutomationTargetDevice) {

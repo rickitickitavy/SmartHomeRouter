@@ -3,4 +3,6 @@
 #
 # slave-spi-ota
 # firmware-update-process
+# smtp-send
 # src/FirmwareOta.cpp
+# src/EmailSender.cpp

@@ -36,6 +36,11 @@ public:
     static uint8_t clampLedBrightnessPercent(uint8_t percent);
     static void clampMqttClientTimeout(int &timeoutMs);
     static void clampZigbeeChannel(uint8_t &channel);
+    static void clampEmailPort(int &port);
+    static void clampEmailTimeoutMs(int &timeoutMs, int defaultMs);
+    static void clampEmailCheckAccountIntervalMin(int &intervalMin);
+    static bool isEmailConfigured(const EmailSettings &emailSettings);
+    void applyEmailDefaults();
 
 private:
     GlobalSettings settings;
@@ -50,4 +55,6 @@ private:
     void parseDevicesJson(const String &json);
     void upgradeLegacyMainFromEeprom();
     void upgradeMainFromVersion5();
+    void upgradeMainFromVersion6();
+    void upgradeMainFromVersion7();
 };

@@ -79,7 +79,7 @@ The Automation section MUST show a narrow left group list and a table of automat
 - **THEN** the message indicates merge/upsert behavior and that existing automations not in the file are kept
 
 ### Requirement: Automation edit dialog import and export
-Add or row edit MUST open an edit dialog with **General** (Active, then Name, then Group, Debug; no title), **Trigger** (countdown TIMER controls first, then listening devices with typed parameter pickers), Condition (enable checkbox plus editor when enabled, with typed comparison pickers), actions (device actions with typed pickers or automation targets), Export, and Import. Dialog Import MUST be enabled only when the form is empty (no listeners, no actions, condition disabled or empty, TIMER `use` false / defaults unset). Dialog Export MUST download one JSON file named from the automation’s `name`.
+Add or row edit MUST open an edit dialog with **General** (Active, then Name, then Group, Debug; no title), **Trigger** (countdown TIMER controls first, then listening devices with typed parameter pickers), Condition (enable checkbox plus editor when enabled, with typed comparison pickers), actions (device actions with typed pickers, automation targets, or **e-mail**), Export, and Import. Dialog Import MUST be enabled only when the form is empty (no listeners, no actions, condition disabled or empty, TIMER `use` false / defaults unset). Dialog Export MUST download one JSON file named from the automation’s `name`.
 
 #### Scenario: Group after name
 - **WHEN** the operator opens the automation edit dialog
@@ -92,6 +92,10 @@ Add or row edit MUST open an edit dialog with **General** (Active, then Name, th
 #### Scenario: No Title field
 - **WHEN** the operator opens the automation edit dialog
 - **THEN** there is no Title input
+
+#### Scenario: Email among action targets
+- **WHEN** the operator opens the Actions editor target control
+- **THEN** the options include device, automation, and e-mail
 
 ### Requirement: Automation Trigger rows use typed parameters
 
@@ -160,7 +164,7 @@ The console MUST offer known parameters based on the device’s classified type 
 - **THEN** the parameter list includes `temp` and `label` (in that order) plus CUSTOM
 
 ### Requirement: Automation actions target devices or automations
-The edit dialog Actions editor MUST let each action target a device (payload/channel as Manual command) or an automation. Automation-target ops MUST include ENABLE and DISABLE; when the selected target automation uses a timer, ops MUST also include STOP TIMER, START TIMER, and RESTART TIMER. START TIMER MUST allow an optional countdown time when the target has no default time.
+The edit dialog Actions editor MUST let each action target a device (payload/channel as Manual command), an automation, or **e-mail**. Automation-target ops MUST include ENABLE and DISABLE; when the selected target automation uses a timer, ops MUST also include STOP TIMER, START TIMER, and RESTART TIMER. START TIMER MUST allow an optional countdown time when the target has no default time. An **e-mail** target MUST use the email action editor fields (receivers, theme, message, parameters).
 
 #### Scenario: Automation action ops
 - **WHEN** the operator adds an action targeting an automation that uses a timer
@@ -169,6 +173,10 @@ The edit dialog Actions editor MUST let each action target a device (payload/cha
 #### Scenario: Device action unchanged shape
 - **WHEN** the operator adds a device-target action
 - **THEN** the row uses device, channel, and payload controls like Manual command
+
+#### Scenario: Email target shape
+- **WHEN** the operator adds an action targeting e-mail
+- **THEN** the row shows receivers, theme, message, and the email parameter list
 
 ### Requirement: Appearance follows Consoles in the sidebar
 The main sidebar MUST NOT include an Appearance section. Automation MUST sit immediately after Devices. Relative order MUST be Devices, Automation, Security, Consoles, then the account (user-name) tab and System (other earlier tabs unchanged).
@@ -386,6 +394,46 @@ The MQTT section MUST show SERVER TYPE as a three-option control (`disable`, `re
 - **WHEN** an admin restores a file whose MQTT object has `"enabled":true` and no `serverType`
 - **THEN** stored SERVER TYPE is `remote`
 
+### Requirement: Network E-mail tab
+The Network section MUST include an **E-mail** subtab alongside WiFi, MQTT, and ZigBee. Selecting **E-mail** MUST show the E-Mail settings card and hide the other Network tab panels without a full page reload. Only `isAdmin` MUST see Network settings including E-mail (same gate as other Network tabs).
+
+#### Scenario: Open E-mail tab
+- **WHEN** the operator opens Network and selects E-mail
+- **THEN** the E-Mail card is visible and WiFi/MQTT/ZigBee panels are hidden
+
+### Requirement: E-Mail card edits the email account group
+The E-Mail card MUST show and allow saving the outbound email account fields (SMTP host, port, encryption, auth flag, username, password with show/hide, From, display name, Reply-To, EHLO hostname, connection and send timeouts). Load MUST use `GET /api/email`; Save MUST use `POST /api/email`.
+
+#### Scenario: Load email settings
+- **WHEN** the operator opens the E-mail tab and the host has a stored SMTP host
+- **THEN** the card fields show the stored email account values
+
+#### Scenario: Save email settings
+- **WHEN** the operator enters a valid host, port, From, and encryption and saves
+- **THEN** the email group is persisted and a later GET returns those values
+
+### Requirement: E-Mail card Reset and footer
+Reset on the E-Mail card MUST reload stored values and MUST NOT write settings. Save and Reset MUST remain reachable (scroll or pinned footer like other Network cards).
+
+#### Scenario: Reset reloads without write
+- **WHEN** the operator edits a field then clicks Reset
+- **THEN** the form shows the last stored values and no new settings write occurs from Reset alone
+
+### Requirement: Email action editor in automations
+When an action target is **e-mail**, the Actions row MUST show receivers (text; semicolon-separated), theme (subject), message (multiline body), and a parameter list with Add/Remove for at most eight rows. Each parameter row MUST let the operator pick device, attribute (same known-parameter-or-CUSTOM pattern as Trigger for reading status), and title. The row MUST NOT collect a static value field for the parameter. Switching target away from e-mail MUST hide email-specific fields.
+
+#### Scenario: Email action fields visible
+- **WHEN** the operator sets an action target to e-mail
+- **THEN** receivers, theme, message, and the parameter list controls are visible
+
+#### Scenario: Parameter uses device attribute title
+- **WHEN** the operator adds an email parameter row
+- **THEN** the row offers device, attribute, and title inputs and does not offer a static value input
+
+#### Scenario: Eighth parameter is the last Add
+- **WHEN** the email action already has eight parameters
+- **THEN** Add is disabled or does not create a ninth row
+
 ### Requirement: SERVER field hidden when type is local
 When SERVER TYPE is `local`, the MQTT SERVER field MUST be hidden and POST `/api/mqtt` MUST NOT require `server`. When SERVER TYPE is `disable` or `remote`, the SERVER field MUST be visible. Empty SERVER on save in those modes MAY keep the stored default host string.
 
@@ -569,14 +617,18 @@ The Network group SHALL show Zigbee packets sent, MQTT packets sent, Zigbee pack
 - **THEN** Network shows Zigbee packets sent 4, MQTT packets sent 2, Zigbee packets received 9, and MQTT packets received 3
 
 ### Requirement: Status Connections group
-The Connections group SHALL show Web active connections, MQTT inbound connections, MQTT outbound connections, total inbound connections, and total outbound connections. Total inbound SHALL be Web active plus MQTT inbound. Total outbound SHALL be MQTT outbound. Values SHALL come from the gateway status API.
+The Connections group SHALL show Web active connections, MQTT inbound connections, MQTT outbound connections, total inbound connections, and total outbound connections. Web and MQTT rows SHALL keep their service-specific counts. Total inbound and total outbound SHALL be the host lwIP counts of live TCP sessions for all services (HTTP, WebSocket, MQTT, SMTP, and other FreeRTOS/lwIP users): inbound when the local port matches a listen PCB, outbound otherwise. Totals MAY exceed the sum of the Web and MQTT rows when other TCP sessions are open. Values SHALL come from the gateway status API.
 
 #### Scenario: Mixed web and MQTT connections
-- **WHEN** two web clients are active, three MQTT clients are connected inbound to the onboard broker, and the host MQTT client is connected outbound
+- **WHEN** two web clients are active, three MQTT clients are connected inbound to the onboard broker, the host MQTT client is connected outbound, and no other TCP sessions are open
 - **THEN** Connections shows Web active 2, MQTT inbound 3, MQTT outbound 1, total inbound 5, and total outbound 1
 
+#### Scenario: Totals include non-MQTT services
+- **WHEN** one web client is active, MQTT inbound is 0, MQTT outbound is 1, and an additional outbound SMTP TCP session is open
+- **THEN** Connections shows Web active 1, MQTT inbound 0, MQTT outbound 1, total inbound at least 1, and total outbound at least 2
+
 #### Scenario: No MQTT traffic
-- **WHEN** SERVER TYPE is disable and no web clients are active
+- **WHEN** SERVER TYPE is disable and no web clients are active and no other TCP sessions are open
 - **THEN** Connections shows Web active 0, MQTT inbound 0, MQTT outbound 0, total inbound 0, and total outbound 0
 
 ### Requirement: Status MQTT group

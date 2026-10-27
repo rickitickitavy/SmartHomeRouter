@@ -263,12 +263,13 @@ inline bool extractJsonKeyedSlice(const char *json, const char *key, char openBr
     if (json == nullptr || key == nullptr) {
         return false;
     }
-    String pattern = String("\"") + key + "\"";
-    const char *found = strstr(json, pattern.c_str());
+    // Only the root object's own fields (depth 1). Nested keys such as
+    // users[].consoles must not shadow the top-level "consoles" store array.
+    const char *found = findJsonKeyAtRootDepth(json, key);
     if (found == nullptr) {
         return false;
     }
-    const char *colon = strchr(found + pattern.length(), ':');
+    const char *colon = strchr(found, ':');
     if (colon == nullptr) {
         return false;
     }

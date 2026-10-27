@@ -38,6 +38,12 @@ SettingsManager::SettingsManager() {
     } else if (storedVersion == 5) {
         upgradeMainFromVersion5();
         saveMain(false);
+    } else if (storedVersion == 6) {
+        upgradeMainFromVersion6();
+        saveMain(false);
+    } else if (storedVersion == 7) {
+        upgradeMainFromVersion7();
+        saveMain(false);
     } else if (storedVersion == GLOBAL_CURRENT_SETTINGS_VERSION) {
         readSettings();
     } else {
@@ -66,6 +72,22 @@ SettingsManager::SettingsManager() {
         memcpy(&rawMqtt, &settings.mqtt.serverType, sizeof(rawMqtt));
         settings.mqtt.serverType = clampMqttServerType(rawMqtt);
     }
+    {
+        uint8_t rawEncryption = 0;
+        memcpy(&rawEncryption, &settings.email.encryption, sizeof(rawEncryption));
+        settings.email.encryption = clampEmailEncryptionMode(rawEncryption);
+    }
+    {
+        uint8_t rawAuth = 0;
+        memcpy(&rawAuth, &settings.email.authEnabled, sizeof(rawAuth));
+        if (rawAuth > 1) {
+            settings.email.authEnabled = true;
+        }
+    }
+    clampEmailPort(settings.email.port);
+    clampEmailTimeoutMs(settings.email.connectTimeoutMs, DEFAULT_EMAIL_CONNECT_TIMEOUT_MS);
+    clampEmailTimeoutMs(settings.email.sendTimeoutMs, DEFAULT_EMAIL_SEND_TIMEOUT_MS);
+    clampEmailCheckAccountIntervalMin(settings.email.checkAccountIntervalMin);
     memcpy(&committedMain, &settings, sizeof(settings));
     logSettings();
 }
@@ -93,8 +115,52 @@ void SettingsManager::applyDefaults() {
 
     settings.zigbee.channel = DEFAULT_ZIGBEE_CHANNEL;
     settings.zigbee.permitJoinOnBootSec = DEFAULT_PERMIT_JOIN_SEC;
+    applyEmailDefaults();
     setSpiSpeedHz(DEFAULT_SPI_SPEED_HZ);
     setLedBrightness(DEFAULT_LED_BRIGHTNESS_PERCENT, DEFAULT_LED_BRIGHTNESS_PERCENT);
+}
+
+void SettingsManager::applyEmailDefaults() {
+    memset(&settings.email, 0, sizeof(settings.email));
+    settings.email.port = DEFAULT_EMAIL_SMTP_PORT;
+    settings.email.encryption = EmailEncryptionStartTls;
+    settings.email.authEnabled = true;
+    settings.email.connectTimeoutMs = DEFAULT_EMAIL_CONNECT_TIMEOUT_MS;
+    settings.email.sendTimeoutMs = DEFAULT_EMAIL_SEND_TIMEOUT_MS;
+    settings.email.checkAccountIntervalMin = DEFAULT_EMAIL_CHECK_ACCOUNT_INTERVAL_MIN;
+}
+
+void SettingsManager::clampEmailPort(int &port) {
+    if (port < EMAIL_SMTP_PORT_MIN || port > EMAIL_SMTP_PORT_MAX) {
+        port = DEFAULT_EMAIL_SMTP_PORT;
+    }
+}
+
+void SettingsManager::clampEmailTimeoutMs(int &timeoutMs, int defaultMs) {
+    if (timeoutMs < EMAIL_TIMEOUT_MS_MIN || timeoutMs > EMAIL_TIMEOUT_MS_MAX) {
+        timeoutMs = defaultMs;
+    }
+}
+
+void SettingsManager::clampEmailCheckAccountIntervalMin(int &intervalMin) {
+    if (intervalMin < EMAIL_CHECK_ACCOUNT_INTERVAL_MIN
+        || intervalMin > EMAIL_CHECK_ACCOUNT_INTERVAL_MAX) {
+        intervalMin = DEFAULT_EMAIL_CHECK_ACCOUNT_INTERVAL_MIN;
+    }
+}
+
+bool SettingsManager::isEmailConfigured(const EmailSettings &emailSettings) {
+    if (emailSettings.host[0] == '\0' || emailSettings.fromAddress[0] == '\0') {
+        return false;
+    }
+    if (emailSettings.port < EMAIL_SMTP_PORT_MIN || emailSettings.port > EMAIL_SMTP_PORT_MAX) {
+        return false;
+    }
+    if (emailSettings.authEnabled
+        && (emailSettings.username[0] == '\0' || emailSettings.password[0] == '\0')) {
+        return false;
+    }
+    return true;
 }
 
 void SettingsManager::upgradeLegacyMainFromEeprom() {
@@ -106,6 +172,7 @@ void SettingsManager::upgradeLegacyMainFromEeprom() {
     settings.version = GLOBAL_CURRENT_SETTINGS_VERSION;
     settings.mqtt.serverBornTopic[0] = '\0';
     settings.mqtt.bornIntervalMin = DEFAULT_MQTT_BORN_INTERVAL_MIN;
+    applyEmailDefaults();
     memset(settings.alignPad, 0, sizeof(settings.alignPad));
     memset(settings.reserved, 0, sizeof(settings.reserved));
     topicMap.clearAll();
@@ -167,9 +234,127 @@ void SettingsManager::upgradeMainFromVersion5() {
     settings.mqtt.serverBornTopic[0] = '\0';
     settings.mqtt.bornIntervalMin = DEFAULT_MQTT_BORN_INTERVAL_MIN;
     settings.zigbee = legacySettings.zigbee;
+    applyEmailDefaults();
     memset(settings.alignPad, 0, sizeof(settings.alignPad));
     memcpy(settings.reserved, legacySettings.reserved, sizeof(settings.reserved));
     LOGGER.info("Settings upgraded from version 5; born topic defaults applied");
+}
+
+void SettingsManager::upgradeMainFromVersion6() {
+    struct SettingsMainCoreV6 {
+        char initMarker[4];
+        unsigned char version;
+        WifiSettings wifi;
+        MqttSettings mqtt;
+        ZigbeeSettings zigbee;
+    };
+    constexpr size_t kSettingsMainUsedV6 =
+        offsetof(SettingsMainCoreV6, zigbee) + sizeof(ZigbeeSettings);
+    constexpr size_t kSettingsAlignPadV6 = (128u - (kSettingsMainUsedV6 % 128u)) % 128u;
+    struct GlobalSettingsV6 {
+        char initMarker[4];
+        unsigned char version;
+        WifiSettings wifi;
+        MqttSettings mqtt;
+        ZigbeeSettings zigbee;
+        uint8_t alignPad[kSettingsAlignPadV6];
+        uint8_t reserved[256];
+    };
+
+    GlobalSettingsV6 legacySettings;
+    memset(&legacySettings, 0, sizeof(legacySettings));
+    uint8_t *legacyBytes = (uint8_t *)&legacySettings;
+    for (size_t i = 0; i < sizeof(GlobalSettingsV6); i++) {
+        legacyBytes[i] = EEPROM.read(i);
+    }
+
+    memset(&settings, 0, sizeof(settings));
+    memcpy(settings.initMarker, legacySettings.initMarker, sizeof(settings.initMarker));
+    settings.version = GLOBAL_CURRENT_SETTINGS_VERSION;
+    settings.wifi = legacySettings.wifi;
+    settings.mqtt = legacySettings.mqtt;
+    settings.zigbee = legacySettings.zigbee;
+    applyEmailDefaults();
+    memset(settings.alignPad, 0, sizeof(settings.alignPad));
+    memcpy(settings.reserved, legacySettings.reserved, sizeof(settings.reserved));
+    LOGGER.info("Settings upgraded from version 6; email defaults applied");
+}
+
+void SettingsManager::upgradeMainFromVersion7() {
+    struct EmailSettingsV7 {
+        char host[64];
+        int port;
+        EmailEncryptionMode encryption;
+        bool authEnabled;
+        char username[64];
+        char password[64];
+        char fromAddress[64];
+        char fromName[64];
+        char replyTo[64];
+        char ehloHostname[64];
+        int connectTimeoutMs;
+        int sendTimeoutMs;
+    };
+    struct SettingsMainCoreV7 {
+        char initMarker[4];
+        unsigned char version;
+        WifiSettings wifi;
+        MqttSettings mqtt;
+        ZigbeeSettings zigbee;
+        EmailSettingsV7 email;
+    };
+    constexpr size_t kSettingsMainUsedV7 =
+        offsetof(SettingsMainCoreV7, email) + sizeof(EmailSettingsV7);
+    constexpr size_t kSettingsAlignPadV7 = (128u - (kSettingsMainUsedV7 % 128u)) % 128u;
+    struct GlobalSettingsV7 {
+        char initMarker[4];
+        unsigned char version;
+        WifiSettings wifi;
+        MqttSettings mqtt;
+        ZigbeeSettings zigbee;
+        EmailSettingsV7 email;
+        uint8_t alignPad[kSettingsAlignPadV7];
+        uint8_t reserved[256];
+    };
+
+    GlobalSettingsV7 legacySettings;
+    memset(&legacySettings, 0, sizeof(legacySettings));
+    uint8_t *legacyBytes = (uint8_t *)&legacySettings;
+    for (size_t i = 0; i < sizeof(GlobalSettingsV7); i++) {
+        legacyBytes[i] = EEPROM.read(i);
+    }
+
+    memset(&settings, 0, sizeof(settings));
+    memcpy(settings.initMarker, legacySettings.initMarker, sizeof(settings.initMarker));
+    settings.version = GLOBAL_CURRENT_SETTINGS_VERSION;
+    settings.wifi = legacySettings.wifi;
+    settings.mqtt = legacySettings.mqtt;
+    settings.zigbee = legacySettings.zigbee;
+    memset(&settings.email, 0, sizeof(settings.email));
+    strncpy(settings.email.host, legacySettings.email.host, sizeof(settings.email.host) - 1);
+    settings.email.port = legacySettings.email.port;
+    settings.email.encryption = legacySettings.email.encryption;
+    settings.email.authEnabled = legacySettings.email.authEnabled;
+    strncpy(settings.email.username, legacySettings.email.username, sizeof(settings.email.username) - 1);
+    strncpy(settings.email.password, legacySettings.email.password, sizeof(settings.email.password) - 1);
+    strncpy(
+        settings.email.fromAddress,
+        legacySettings.email.fromAddress,
+        sizeof(settings.email.fromAddress) - 1
+    );
+    strncpy(settings.email.fromName, legacySettings.email.fromName, sizeof(settings.email.fromName) - 1);
+    strncpy(settings.email.replyTo, legacySettings.email.replyTo, sizeof(settings.email.replyTo) - 1);
+    strncpy(
+        settings.email.ehloHostname,
+        legacySettings.email.ehloHostname,
+        sizeof(settings.email.ehloHostname) - 1
+    );
+    settings.email.connectTimeoutMs = legacySettings.email.connectTimeoutMs;
+    settings.email.sendTimeoutMs = legacySettings.email.sendTimeoutMs;
+    settings.email.checkAccountIntervalMin = DEFAULT_EMAIL_CHECK_ACCOUNT_INTERVAL_MIN;
+    memset(settings.alignPad, 0, sizeof(settings.alignPad));
+    memcpy(settings.reserved, legacySettings.reserved, sizeof(settings.reserved));
+    LOGGER.info("Settings upgraded from version 7; email check interval default applied");
 }
 
 bool SettingsManager::mainEqualsCommitted() const {
@@ -387,6 +572,10 @@ void SettingsManager::logSettings() {
     LOGGER.info("  mqtt born interval min: " + String(settings.mqtt.bornIntervalMin));
     LOGGER.info("  zigbee channel: " + String(settings.zigbee.channel));
     LOGGER.info("  zigbee permitJoinOnBootSec: " + String(settings.zigbee.permitJoinOnBootSec));
+    LOGGER.info(
+        "  email host: " + String(settings.email.host) + ":" + String(settings.email.port)
+        + " configured=" + String(isEmailConfigured(settings.email) ? "yes" : "no")
+    );
     LOGGER.info("  devices used: " + String(topicMap.usedCount()) + "/" + String(DEVICE_MAP_SLOTS));
     LOGGER.info("  spi speed Hz: " + String((unsigned long)spiSpeedHz()));
     LOGGER.info(
