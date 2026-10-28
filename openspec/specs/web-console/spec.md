@@ -1793,11 +1793,15 @@ The Add-device search dialog found table MUST include a **Manufacturer** column.
 - **THEN** the found table Manufacturer cell shows `_TZ3000_wn65ixz9` and the Model cell shows `TS0001`
 
 ### Requirement: Join identity comes from Basic cluster reads
-After a Zigbee device joins, the coordinator MUST read Basic cluster attributes ManufacturerName (`0x0004`) and ModelIdentifier (`0x0005`) from a usable endpoint, store the char-string values on the bound device, and emit an updated join event so the found-devices API and manufacturer enum mapping receive those strings. Empty strings from an earlier join MUST NOT overwrite a later non-empty manufacturer or model on the found list.
+After a Zigbee device joins, the coordinator MUST read Basic cluster attributes ManufacturerName (`0x0004`) and ModelIdentifier (`0x0005`) from a usable endpoint, store the char-string values on the bound device, and emit an updated join event so the found-devices API and manufacturer enum mapping receive those strings. Empty strings from an earlier join MUST NOT overwrite a later non-empty manufacturer or model on the found list. Opening Search MUST clear the Arduino ZigbeeSwitch bind cache so a rejoin can bind again, sync neighbor short addresses during the pairing window, and when a short address changes MUST cancel in-flight Basic reads and re-queue identity (or re-emit known manufacturer/model) without requiring a reboot. Incomplete identity reads MUST allow several retries after timeout or drop.
 
 #### Scenario: Basic identity fills found manufacturer
 - **WHEN** a device joins and replies to Basic ManufacturerName with `_TZ3000_wn65ixz9` and ModelIdentifier with `TS0001`
 - **THEN** a subsequent found-devices list entry for that IEEE shows manufacturer `_TZ3000_wn65ixz9` and model `TS0001`
+
+#### Scenario: Search again after rejoin without reboot
+- **WHEN** a device was found once after boot and the operator opens Search again so the same IEEE rejoins with a new short address
+- **THEN** the coordinator updates the short address, re-reads or re-emits Basic identity, and found-devices again shows manufacturer and model without a coordinator reboot
 
 ### Requirement: Device edit shows readonly manufacturer for Zigbee
 The Zigbee device parameters/edit dialog MUST show a readonly **Manufacturer** field immediately after **Device class**. The field MUST display the human manufacturer label from the manufacturer enum (for example `Tuya`), including when Add opens from a found join string such as `_TZ3000_…` (mapped via the same join-string rules as registration). The field MUST be hidden for MQTT devices.

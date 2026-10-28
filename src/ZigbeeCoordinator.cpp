@@ -590,8 +590,51 @@ void ZigbeeCoordinator::startPairingWindow(uint8_t seconds) {
     pairingLedToggleMs = 0;
     pairingLedOn = false;
     STATUS_RGB.setPairingHeld(true);
+    // Arduino ZigbeeCore skips findEndpoint when IEEE is already in the switch bind list,
+    // so rejoins never refresh the short address. Drop that cache for Search so ANNCE binds
+    // again; our BoundZigbeeDevice table keeps control paths working.
+    {
+        std::list<zb_device_params_t *> cached = zigbeeSwitch.getBoundDevices();
+        for (zb_device_params_t *cachedDevice : cached) {
+            if (cachedDevice == nullptr) {
+                continue;
+            }
+            zigbeeSwitch.removeBoundDevice(cachedDevice);
+            free(cachedDevice);
+        }
+        zigbeeSwitch.clearBoundDevices();
+    }
     for (BoundZigbeeDevice *device = boundDeviceHead; device != nullptr; device = device->next) {
         device->pairingOffered = false;
+        if (!device->occupied) {
+            continue;
+        }
+        if (registryReady && isRegistered(device->ieee)) {
+            continue;
+        }
+        // Incomplete identity: allow retries; short sync below may refresh nwk first.
+        const char *manufacturer = deviceTopicCStr(device->manufacturer);
+        const char *model = deviceTopicCStr(device->model);
+        if (manufacturer[0] != '\0' && model[0] != '\0') {
+            continue;
+        }
+        device->basicIdentityRetries = 0;
+        device->basicIdentityQueued = false;
+    }
+    syncPairingNeighborShorts();
+    for (BoundZigbeeDevice *device = boundDeviceHead; device != nullptr; device = device->next) {
+        if (!device->occupied || (registryReady && isRegistered(device->ieee))) {
+            continue;
+        }
+        const char *manufacturer = deviceTopicCStr(device->manufacturer);
+        const char *model = deviceTopicCStr(device->model);
+        if (manufacturer[0] != '\0' && model[0] != '\0') {
+            emitDeviceJoinIdentity(device);
+            continue;
+        }
+        if (device->shortAddr != 0 && device->shortAddr != 0xFFFF) {
+            queueBasicIdentityReads(device);
+        }
     }
 }
 
@@ -761,7 +804,8 @@ void ZigbeeCoordinator::queueBasicIdentityReads(BoundZigbeeDevice *slot) {
         return;
     }
     slot->basicIdentityQueued = true;
-    const unsigned long basicGiveUpMs = millis() + kBasicIdentityReadTimeoutMs;
+    // Wait long enough for dest-command contention; reply timeout alone is shorter.
+    const unsigned long basicGiveUpMs = millis() + kBasicIdentityGiveUpMs;
     if (existingManufacturer[0] == '\0') {
         enqueueStatusRead(
             slot->ieee,
@@ -1064,10 +1108,96 @@ void ZigbeeCoordinator::refreshRegisteredShorts() {
     }
 }
 
+void ZigbeeCoordinator::releaseStatusReadsForIeee(const uint8_t ieee[8]) {
+    if (ieee == nullptr) {
+        return;
+    }
+    StatusReadItem *item = statusReadHead;
+    while (item != nullptr) {
+        StatusReadItem *next = item->next;
+        if (item->used && memcmp(item->ieee, ieee, 8) == 0) {
+            releaseStatusRead(item);
+        }
+        item = next;
+    }
+}
+
+void ZigbeeCoordinator::updateLibraryBoundShort(const uint8_t ieee[8], uint16_t shortAddr) {
+    if (ieee == nullptr || shortAddr == 0 || shortAddr == 0xFFFF) {
+        return;
+    }
+    std::list<zb_device_params_t *> boundLights = zigbeeSwitch.getBoundDevices();
+    for (zb_device_params_t *device : boundLights) {
+        if (device != nullptr && memcmp(device->ieee_addr, ieee, 8) == 0) {
+            device->short_addr = shortAddr;
+        }
+    }
+}
+
+void ZigbeeCoordinator::refreshIdentityAfterShortChange(BoundZigbeeDevice *slot) {
+    if (slot == nullptr || !slot->occupied) {
+        return;
+    }
+    releaseStatusReadsForIeee(slot->ieee);
+    slot->pendingBasicAttributeId = 0;
+    slot->basicIdentityRetries = 0;
+    slot->basicIdentityQueued = false;
+    const char *manufacturer = deviceTopicCStr(slot->manufacturer);
+    const char *model = deviceTopicCStr(slot->model);
+    if (manufacturer[0] == '\0' || model[0] == '\0') {
+        queueBasicIdentityReads(slot);
+    } else if (pairingUntilMs != 0 && !(registryReady && isRegistered(slot->ieee))) {
+        // Re-emit known identity so Search found-list shows manuf/model again after clear.
+        emitDeviceJoinIdentity(slot);
+    }
+}
+
+void ZigbeeCoordinator::syncPairingNeighborShorts() {
+    if (pairingUntilMs == 0 || !started) {
+        return;
+    }
+    esp_zb_nwk_info_iterator_t iterator = ESP_ZB_NWK_INFO_ITERATOR_INIT;
+    esp_zb_nwk_neighbor_info_t neighbor{};
+    while (esp_zb_nwk_get_next_neighbor(&iterator, &neighbor) == ESP_OK) {
+        if (isZeroIeee(neighbor.ieee_addr)
+            || neighbor.short_addr == 0
+            || neighbor.short_addr == 0xFFFF) {
+            continue;
+        }
+        BoundZigbeeDevice *slot = findByIeee(neighbor.ieee_addr);
+        if (slot == nullptr) {
+            if (registryReady && isRegistered(neighbor.ieee_addr)) {
+                rememberShortIeee(neighbor.short_addr, neighbor.ieee_addr, 0);
+                continue;
+            }
+            zb_device_params_t device{};
+            memcpy(device.ieee_addr, neighbor.ieee_addr, 8);
+            device.short_addr = neighbor.short_addr;
+            device.endpoint = 1;
+            storeBoundDevice(&device);
+            continue;
+        }
+        if (!slot->occupied) {
+            continue;
+        }
+        if (slot->shortAddr == neighbor.short_addr) {
+            continue;
+        }
+        LOGGER.info(
+            "Neighbor short sync ieee=" + formatIeeeText(neighbor.ieee_addr)
+            + " nwk=0x" + String(neighbor.short_addr, HEX)
+        );
+        slot->shortAddr = neighbor.short_addr;
+        updateLibraryBoundShort(neighbor.ieee_addr, neighbor.short_addr);
+        refreshIdentityAfterShortChange(slot);
+    }
+}
+
 void ZigbeeCoordinator::dispatch() {
     updatePairingLed();
     serviceCommandFlights();
     serviceTypeProbes();
+    syncPairingNeighborShorts();
     if (!started) {
         return;
     }
@@ -1078,6 +1208,7 @@ void ZigbeeCoordinator::dispatch() {
         const char *manufacturer = deviceTopicCStr(bound->manufacturer);
         const char *model = deviceTopicCStr(bound->model);
         if (manufacturer[0] != '\0' && model[0] != '\0') {
+            bound->basicIdentityQueued = false;
             continue;
         }
         bool hasBasicQueued = false;
@@ -1090,7 +1221,13 @@ void ZigbeeCoordinator::dispatch() {
                 break;
             }
         }
-        if (hasBasicQueued || bound->basicIdentityRetries >= 1) {
+        if (hasBasicQueued) {
+            continue;
+        }
+        // Flag stayed true after timeout/drop with an empty list — was permanently stuck at
+        // retries>=1. Allow several re-queues; Search also resets retries (startPairingWindow).
+        if (bound->basicIdentityRetries >= kMaxBasicIdentityRetries) {
+            bound->basicIdentityQueued = false;
             continue;
         }
         bound->basicIdentityRetries++;
@@ -1915,6 +2052,7 @@ void ZigbeeCoordinator::pumpStatusReads() {
         if (item->inFlight && (long)(nowMs - item->deadlineMs) >= 0) {
             LOGGER.warning("Status read timeout ep=" + String(item->endpoint));
             // Keep BoundZigbeeDevice::pendingBasicAttributeId so a late Basic reply can still apply.
+            // Leave basicIdentityQueued set so dispatch can detect an empty queue and retry.
             releaseStatusRead(item);
             item = next;
             continue;
@@ -1927,6 +2065,7 @@ void ZigbeeCoordinator::pumpStatusReads() {
                     bound->pendingBasicAttributeId = 0;
                 }
             }
+            // Leave basicIdentityQueued set so dispatch can detect an empty queue and retry.
             releaseStatusRead(item);
         }
         item = next;
