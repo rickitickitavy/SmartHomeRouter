@@ -8,7 +8,6 @@
 #include <esp_zigbee_core.h>
 #include <nwk/esp_zigbee_nwk.h>
 #include <zdo/esp_zigbee_zdo_command.h>
-#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -38,74 +37,6 @@ static String formatIeeeText(const uint8_t ieee[8]) {
         ieee[0]
     );
     return String(buffer);
-}
-
-static bool formatScaledMeasurement(char *out, size_t outSize, int32_t scaled, int divisor, int fracDigits) {
-    if (out == nullptr || outSize == 0 || divisor <= 0 || fracDigits < 0 || fracDigits > 2) {
-        return false;
-    }
-    int32_t whole = scaled / divisor;
-    int32_t fraction = scaled % divisor;
-    if (fraction < 0) {
-        fraction = -fraction;
-    }
-    if (fracDigits == 0) {
-        snprintf(out, outSize, "%ld", (long)whole);
-        return true;
-    }
-    if (scaled < 0 && whole == 0) {
-        snprintf(out, outSize, fracDigits == 1 ? "-0.%01ld" : "-0.%02ld", (long)fraction);
-        return true;
-    }
-    snprintf(out, outSize, fracDigits == 1 ? "%ld.%01ld" : "%ld.%02ld", (long)whole, (long)fraction);
-    return true;
-}
-
-static bool formatMeasurementText(
-    uint16_t clusterId,
-    uint16_t attributeId,
-    uint32_t raw,
-    char *out,
-    size_t outSize
-) {
-    if (out == nullptr || outSize == 0 || attributeId != 0x0000) {
-        return false;
-    }
-    out[0] = '\0';
-    const uint16_t word = (uint16_t)(raw & 0xFFFF);
-    if (clusterId == kZigbeeClusterTemperature) {
-        if (word == 0x8000) {
-            return false;
-        }
-        return formatScaledMeasurement(out, outSize, (int16_t)word, 100, 2);
-    }
-    if (clusterId == kZigbeeClusterHumidity) {
-        if (word == 0xFFFF) {
-            return false;
-        }
-        return formatScaledMeasurement(out, outSize, (int32_t)word, 100, 2);
-    }
-    if (clusterId == kZigbeeClusterPressure) {
-        if (word == 0x8000) {
-            return false;
-        }
-        return formatScaledMeasurement(out, outSize, (int16_t)word, 10, 1);
-    }
-    if (clusterId == 0x0404) {
-        if (word == 0xFFFF) {
-            return false;
-        }
-        return formatScaledMeasurement(out, outSize, (int32_t)word, 10, 1);
-    }
-    if (clusterId == kZigbeeClusterIlluminance) {
-        if (word == 0 || word == 0xFFFF) {
-            return false;
-        }
-        const int lux = (int)(pow(10.0, ((int)word - 1) / 10000.0) + 0.5);
-        snprintf(out, outSize, "%d", lux);
-        return true;
-    }
-    return false;
 }
 
 static bool copyZclCharStringAttr(
@@ -171,6 +102,8 @@ static bool isZeroIeee(const uint8_t ieee[8]) {
     return ieee != nullptr && memcmp(ieee, kZeroIeee, 8) == 0;
 }
 
+static ZigbeeCoordinator *coordinatorForDefaultResponse = nullptr;
+
 static void onZclSendStatus(zb_uint8_t param) {
     if (param == 0) {
         return;
@@ -178,11 +111,15 @@ static void onZclSendStatus(zb_uint8_t param) {
     const zb_zcl_command_send_status_t *sendStatus = ZB_BUF_GET_PARAM(param, zb_zcl_command_send_status_t);
     if (sendStatus->status == RET_OK) {
         STATUS_RGB.pulseAckSent();
+    } else if (coordinatorForDefaultResponse != nullptr) {
+        LOGGER.warning(
+            "ZCL APS delivery failed status=" + String((int)sendStatus->status)
+            + " ep=" + String((int)sendStatus->dst_endpoint)
+        );
+        coordinatorForDefaultResponse->noteApsSendFailed(sendStatus->dst_endpoint);
     }
     zb_buf_free(param);
 }
-
-static ZigbeeCoordinator *coordinatorForDefaultResponse = nullptr;
 
 static void onCoordinatorDefaultResponse(
     zb_cmd_type_t respToCmd,
@@ -1678,12 +1615,8 @@ void ZigbeeCoordinator::handleAttributeReport(
         }
         return;
     }
-    char measurementText[32];
-    if (lightStateHandler != nullptr
-        && formatMeasurementText(clusterId, attribute->id, value, measurementText, sizeof(measurementText))) {
-        lightStateHandler(measurementText, ieee, srcEndpoint, shortAddr, rssiForShortAddr(shortAddr));
-        return;
-    }
+    // Always shape measurement/attr reports with cl/attr/val (raw ZCL) so the host can
+    // match reportableData rows and convert. Host still writes converted endpoint status.
     if (lightStateHandler != nullptr && haveAttributeValue) {
         char attrMessage[80];
         snprintf(
@@ -1788,7 +1721,7 @@ bool ZigbeeCoordinator::controlOnOff(const uint8_t ieee[8], const char *command,
     if (slot == nullptr) {
         return false;
     }
-    if (slot->inFlight) {
+    if (slot->inFlight || !radioFlightBudgetAvailable()) {
         stashNextOnOff(slot, action.c_str());
         return true;
     }
@@ -1830,7 +1763,7 @@ bool ZigbeeCoordinator::writeAttribute(
     if (slot == nullptr) {
         return false;
     }
-    if (slot->inFlight) {
+    if (slot->inFlight || !radioFlightBudgetAvailable()) {
         stashNextWriteAttr(slot, clusterId, attributeId, dataType, attributeValue);
         return true;
     }
@@ -1945,7 +1878,7 @@ bool ZigbeeCoordinator::sendClusterCommand(
     if (slot == nullptr) {
         return true;
     }
-    if (slot->inFlight) {
+    if (slot->inFlight || !radioFlightBudgetAvailable()) {
         stashNextClusterCmd(slot, clusterId, commandId, payload, payloadLength);
         return true;
     }
@@ -2364,10 +2297,142 @@ ZigbeeCoordinator::DestCommandSlot *ZigbeeCoordinator::destSlotFor(
     return slot;
 }
 
-void ZigbeeCoordinator::markInFlight(DestCommandSlot *slot, uint16_t clusterId) {
+int ZigbeeCoordinator::countInFlightDestCommands() const {
+    int inFlightCount = 0;
+    for (const DestCommandSlot *slot = destFlightHead; slot != nullptr; slot = slot->next) {
+        if (slot->occupied && slot->inFlight) {
+            inFlightCount++;
+        }
+    }
+    return inFlightCount;
+}
+
+bool ZigbeeCoordinator::radioFlightBudgetAvailable() const {
+    return countInFlightDestCommands() < kMaxConcurrentRadioFlights;
+}
+
+void ZigbeeCoordinator::rememberInFlightOnOff(DestCommandSlot *slot, const char *command) {
+    if (slot == nullptr) {
+        return;
+    }
+    slot->inFlightKind = RadioCommandKind::OnOff;
+    memset(slot->inFlightOnOff, 0, sizeof(slot->inFlightOnOff));
+    slot->inFlightAttribute = 0;
+    slot->inFlightType = 0;
+    slot->inFlightValue = 0;
+    if (command != nullptr) {
+        strncpy(slot->inFlightOnOff, command, sizeof(slot->inFlightOnOff) - 1);
+    }
+}
+
+void ZigbeeCoordinator::rememberInFlightWriteAttr(
+    DestCommandSlot *slot,
+    uint16_t attributeId,
+    uint8_t dataType,
+    uint32_t attributeValue
+) {
+    if (slot == nullptr) {
+        return;
+    }
+    slot->inFlightKind = RadioCommandKind::WriteAttr;
+    memset(slot->inFlightOnOff, 0, sizeof(slot->inFlightOnOff));
+    slot->inFlightAttribute = attributeId;
+    slot->inFlightType = dataType;
+    slot->inFlightValue = attributeValue;
+}
+
+void ZigbeeCoordinator::rememberInFlightReadAttr(DestCommandSlot *slot, uint16_t attributeId) {
+    if (slot == nullptr) {
+        return;
+    }
+    slot->inFlightKind = RadioCommandKind::ReadAttr;
+    memset(slot->inFlightOnOff, 0, sizeof(slot->inFlightOnOff));
+    slot->inFlightAttribute = attributeId;
+    slot->inFlightType = 0;
+    slot->inFlightValue = 0;
+}
+
+void ZigbeeCoordinator::rememberInFlightClusterCmd(
+    DestCommandSlot *slot,
+    uint8_t commandId,
+    const uint8_t *payload,
+    uint8_t payloadLength
+) {
+    if (slot == nullptr) {
+        return;
+    }
+    slot->inFlightKind = RadioCommandKind::ClusterCmd;
+    memset(slot->inFlightOnOff, 0, sizeof(slot->inFlightOnOff));
+    slot->inFlightAttribute = 0;
+    slot->inFlightType = commandId;
+    const uint8_t bounded =
+        payloadLength >= sizeof(slot->inFlightOnOff) ? (uint8_t)(sizeof(slot->inFlightOnOff) - 1)
+                                                     : payloadLength;
+    slot->inFlightValue = bounded;
+    if (payload != nullptr && bounded > 0) {
+        memcpy(slot->inFlightOnOff, payload, bounded);
+    }
+}
+
+void ZigbeeCoordinator::clearInFlightState(DestCommandSlot *slot) {
+    if (slot == nullptr) {
+        return;
+    }
+    slot->inFlight = false;
+    slot->inFlightKind = RadioCommandKind::None;
+    slot->deliveryAttempts = 0;
+    slot->inFlightAttribute = 0;
+    slot->inFlightType = 0;
+    slot->inFlightValue = 0;
+    memset(slot->inFlightOnOff, 0, sizeof(slot->inFlightOnOff));
+}
+
+void ZigbeeCoordinator::retryOrAdvanceAfterDeliveryFailure(DestCommandSlot *slot) {
+    if (slot == nullptr) {
+        return;
+    }
+    const RadioCommandKind failedKind = slot->inFlightKind;
+    char failedOnOff[SPI_DEVICE_MESSAGE_MAX];
+    memcpy(failedOnOff, slot->inFlightOnOff, sizeof(failedOnOff));
+    const uint16_t failedCluster = slot->inFlightCluster;
+    const uint16_t failedAttribute = slot->inFlightAttribute;
+    const uint8_t failedType = slot->inFlightType;
+    const uint32_t failedValue = slot->inFlightValue;
+    const uint8_t attempts = slot->deliveryAttempts;
+    slot->inFlight = false;
+    slot->inFlightKind = RadioCommandKind::None;
+    memset(slot->inFlightOnOff, 0, sizeof(slot->inFlightOnOff));
+    if (attempts < kMaxDeliveryAttempts && !slot->hasNext && failedKind != RadioCommandKind::None) {
+        if (failedKind == RadioCommandKind::OnOff) {
+            stashNextOnOff(slot, failedOnOff);
+        } else if (failedKind == RadioCommandKind::WriteAttr) {
+            stashNextWriteAttr(slot, failedCluster, failedAttribute, failedType, failedValue);
+        } else if (failedKind == RadioCommandKind::ReadAttr) {
+            stashNextReadAttr(slot, failedCluster, failedAttribute);
+        } else if (failedKind == RadioCommandKind::ClusterCmd) {
+            stashNextClusterCmd(
+                slot,
+                failedCluster,
+                failedType,
+                (const uint8_t *)failedOnOff,
+                (uint8_t)failedValue
+            );
+        }
+        sendNextIfReady(slot);
+        return;
+    }
+    slot->deliveryAttempts = 0;
+    sendNextIfReady(slot);
+}
+
+void ZigbeeCoordinator::markInFlight(DestCommandSlot *slot, uint16_t clusterId, RadioCommandKind kind) {
     slot->inFlight = true;
     slot->inFlightCluster = clusterId;
+    slot->inFlightKind = kind;
     slot->inFlightDeadlineMs = millis() + kCommandInFlightTimeoutMs;
+    if (slot->deliveryAttempts < 255) {
+        slot->deliveryAttempts++;
+    }
 }
 
 void ZigbeeCoordinator::stashNextOnOff(DestCommandSlot *slot, const char *command) {
@@ -2453,10 +2518,14 @@ bool ZigbeeCoordinator::transmitClusterCmd(
         registeredMap
     );
     if (!sendZclToDevice(device, slot->endpoint, clusterId, true, commandId, payload, payloadLength)) {
+        if (!slot->hasNext) {
+            stashNextClusterCmd(slot, clusterId, commandId, payload, payloadLength);
+        }
         return false;
     }
+    rememberInFlightClusterCmd(slot, commandId, payload, payloadLength);
     STATUS_RGB.pulsePacketToDevice();
-    markInFlight(slot, clusterId);
+    markInFlight(slot, clusterId, RadioCommandKind::ClusterCmd);
     return true;
 }
 
@@ -2484,10 +2553,14 @@ bool ZigbeeCoordinator::transmitReadAttr(
             readPayload,
             2
         )) {
+        if (!slot->hasNext) {
+            stashNextReadAttr(slot, clusterId, attributeId);
+        }
         return false;
     }
+    rememberInFlightReadAttr(slot, attributeId);
     STATUS_RGB.pulsePacketToDevice();
-    markInFlight(slot, clusterId);
+    markInFlight(slot, clusterId, RadioCommandKind::ReadAttr);
     return true;
 }
 
@@ -2495,7 +2568,7 @@ bool ZigbeeCoordinator::transmitOnOff(DestCommandSlot *slot, const char *command
     BoundZigbeeDevice *device = findByIeee(slot->ieee);
     if (device == nullptr) {
         slot->occupied = false;
-        slot->inFlight = false;
+        clearInFlightState(slot);
         slot->hasNext = false;
         return false;
     }
@@ -2516,54 +2589,33 @@ bool ZigbeeCoordinator::transmitOnOff(DestCommandSlot *slot, const char *command
         registeredName(device->ieee),
         registeredMap
     );
+    uint8_t onOffCommandId = 0xFF;
     if (actionLower == "on" || actionLower == "1" || actionLower == "true") {
-        if (!sendZclToDevice(
-                device,
-                slot->endpoint,
-                ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
-                true,
-                ESP_ZB_ZCL_CMD_ON_OFF_ON_ID,
-                nullptr,
-                0
-            )) {
-            return false;
-        }
-        STATUS_RGB.pulsePacketToDevice();
-        markInFlight(slot, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF);
+        onOffCommandId = ESP_ZB_ZCL_CMD_ON_OFF_ON_ID;
+    } else if (actionLower == "off" || actionLower == "0" || actionLower == "false") {
+        onOffCommandId = ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID;
+    } else if (actionLower == "toggle") {
+        onOffCommandId = ESP_ZB_ZCL_CMD_ON_OFF_TOGGLE_ID;
+    } else {
         return true;
     }
-    if (actionLower == "off" || actionLower == "0" || actionLower == "false") {
-        if (!sendZclToDevice(
-                device,
-                slot->endpoint,
-                ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
-                true,
-                ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID,
-                nullptr,
-                0
-            )) {
-            return false;
+    if (!sendZclToDevice(
+            device,
+            slot->endpoint,
+            ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+            true,
+            onOffCommandId,
+            nullptr,
+            0
+        )) {
+        if (!slot->hasNext) {
+            stashNextOnOff(slot, action.c_str());
         }
-        STATUS_RGB.pulsePacketToDevice();
-        markInFlight(slot, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF);
-        return true;
+        return false;
     }
-    if (actionLower == "toggle") {
-        if (!sendZclToDevice(
-                device,
-                slot->endpoint,
-                ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
-                true,
-                ESP_ZB_ZCL_CMD_ON_OFF_TOGGLE_ID,
-                nullptr,
-                0
-            )) {
-            return false;
-        }
-        STATUS_RGB.pulsePacketToDevice();
-        markInFlight(slot, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF);
-        return true;
-    }
+    rememberInFlightOnOff(slot, action.c_str());
+    STATUS_RGB.pulsePacketToDevice();
+    markInFlight(slot, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, RadioCommandKind::OnOff);
     return true;
 }
 
@@ -2580,7 +2632,7 @@ bool ZigbeeCoordinator::sendZclToDevice(
         return false;
     }
     const bool haveShort = device->shortAddr != 0 && device->shortAddr != 0xFFFF;
-    return sendZclWithoutApsAck(
+    return sendZclPacket(
         haveShort ? ZB_APS_ADDR_MODE_16_ENDP_PRESENT : ZB_APS_ADDR_MODE_64_ENDP_PRESENT,
         device->ieee,
         haveShort ? device->shortAddr : 0,
@@ -2590,7 +2642,9 @@ bool ZigbeeCoordinator::sendZclToDevice(
         clusterSpecific,
         commandId,
         payload,
-        payloadLength
+        payloadLength,
+        false,
+        false
     );
 }
 
@@ -2606,6 +2660,36 @@ bool ZigbeeCoordinator::sendZclWithoutApsAck(
     const uint8_t *payload,
     uint16_t payloadLength
 ) {
+    return sendZclPacket(
+        addressMode,
+        ieee,
+        shortAddr,
+        dstEndpoint,
+        srcEndpoint,
+        clusterId,
+        clusterSpecific,
+        commandId,
+        payload,
+        payloadLength,
+        true,
+        true
+    );
+}
+
+bool ZigbeeCoordinator::sendZclPacket(
+    uint8_t addressMode,
+    const uint8_t ieee[8],
+    uint16_t shortAddr,
+    uint8_t dstEndpoint,
+    uint8_t srcEndpoint,
+    uint16_t clusterId,
+    bool clusterSpecific,
+    uint8_t commandId,
+    const uint8_t *payload,
+    uint16_t payloadLength,
+    bool disableApsAck,
+    bool disableDefaultResponse
+) {
     if (!esp_zb_lock_acquire(pdMS_TO_TICKS(100))) {
         LOGGER.warning("Zigbee lock failed for ZCL send");
         return false;
@@ -2618,11 +2702,13 @@ bool ZigbeeCoordinator::sendZclWithoutApsAck(
     }
     const zb_uint8_t frameType =
         clusterSpecific ? ZB_ZCL_FRAME_TYPE_CLUSTER_SPECIFIC : ZB_ZCL_FRAME_TYPE_COMMON;
+    const zb_uint8_t defaultResponseFlag =
+        disableDefaultResponse ? ZB_ZCL_DISABLE_DEFAULT_RESPONSE : ZB_ZCL_ENABLE_DEFAULT_RESPONSE;
     const zb_uint8_t frameControl = ZB_ZCL_CONSTRUCT_FRAME_CONTROL(
         frameType,
         ZB_ZCL_NOT_MANUFACTURER_SPECIFIC,
         ZB_ZCL_FRAME_DIRECTION_TO_SRV,
-        ZB_ZCL_DISABLE_DEFAULT_RESPONSE
+        defaultResponseFlag
     );
     zb_uint8_t *payloadPtr = (zb_uint8_t *)zb_zcl_start_command_header(
         buffer,
@@ -2652,7 +2738,7 @@ bool ZigbeeCoordinator::sendZclWithoutApsAck(
         clusterId,
         onZclSendStatus,
         ZB_FALSE,
-        ZB_TRUE,
+        disableApsAck ? ZB_TRUE : ZB_FALSE,
         0
     );
     esp_zb_lock_release();
@@ -2713,15 +2799,22 @@ bool ZigbeeCoordinator::transmitWriteAttr(
             writePayload,
             writeLength
         )) {
+        if (!slot->hasNext) {
+            stashNextWriteAttr(slot, clusterId, attributeId, dataType, attributeValue);
+        }
         return false;
     }
+    rememberInFlightWriteAttr(slot, attributeId, dataType, attributeValue);
     STATUS_RGB.pulsePacketToDevice();
-    markInFlight(slot, clusterId);
+    markInFlight(slot, clusterId, RadioCommandKind::WriteAttr);
     return true;
 }
 
 void ZigbeeCoordinator::sendNextIfReady(DestCommandSlot *slot) {
     if (slot == nullptr || slot->inFlight || !slot->hasNext) {
+        return;
+    }
+    if (!radioFlightBudgetAvailable()) {
         return;
     }
     const RadioCommandKind kind = slot->nextKind;
@@ -2763,7 +2856,7 @@ void ZigbeeCoordinator::serviceCommandFlights() {
             continue;
         }
         if (slot->inFlight && (long)(nowMs - slot->inFlightDeadlineMs) >= 0) {
-            slot->inFlight = false;
+            clearInFlightState(slot);
         }
         sendNextIfReady(slot);
         if (!slot->inFlight && !slot->hasNext) {
@@ -2788,7 +2881,27 @@ void ZigbeeCoordinator::noteDefaultResponse(uint8_t endpoint, uint16_t cluster) 
         }
     }
     if (bestSlot != nullptr) {
-        bestSlot->inFlight = false;
+        clearInFlightState(bestSlot);
+        sendNextIfReady(bestSlot);
+    }
+}
+
+void ZigbeeCoordinator::noteApsSendFailed(uint8_t dstEndpoint) {
+    DestCommandSlot *bestSlot = nullptr;
+    for (DestCommandSlot *slot = destFlightHead; slot != nullptr; slot = slot->next) {
+        if (!slot->occupied || !slot->inFlight) {
+            continue;
+        }
+        if (slot->endpoint != dstEndpoint) {
+            continue;
+        }
+        if (bestSlot == nullptr
+            || (long)(slot->inFlightDeadlineMs - bestSlot->inFlightDeadlineMs) < 0) {
+            bestSlot = slot;
+        }
+    }
+    if (bestSlot != nullptr) {
+        retryOrAdvanceAfterDeliveryFailure(bestSlot);
     }
 }
 

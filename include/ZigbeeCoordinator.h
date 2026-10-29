@@ -103,6 +103,7 @@ public:
     );
     void handleBasicIdentityRead(const esp_zb_zcl_attribute_t *attribute);
     void noteDefaultResponse(uint8_t endpoint, uint16_t cluster);
+    void noteApsSendFailed(uint8_t dstEndpoint);
     void setRegisteredMap(DeviceTopicMap *deviceMap);
     void clearRegisteredDevices();
     void upsertRegisteredDevice(const DeviceTopicEntry *entry);
@@ -118,6 +119,8 @@ public:
     static constexpr int kMaxStatusIssued = DEVICE_MAP_SLOTS;
     static constexpr int kMaxStatusAnswers = 32;
     static constexpr unsigned long kCommandInFlightTimeoutMs = 1500UL;
+    static constexpr int kMaxConcurrentRadioFlights = 3;
+    static constexpr uint8_t kMaxDeliveryAttempts = 3;
     static constexpr unsigned long kStatusReadGiveUpMs = 8000UL;
     static constexpr unsigned long kBasicIdentityReadTimeoutMs = 10000UL;
     static constexpr unsigned long kBasicIdentityGiveUpMs = 45000UL;
@@ -208,6 +211,12 @@ private:
         uint8_t endpoint = 255;
         uint16_t inFlightCluster = 0;
         unsigned long inFlightDeadlineMs = 0;
+        RadioCommandKind inFlightKind = RadioCommandKind::None;
+        char inFlightOnOff[SPI_DEVICE_MESSAGE_MAX]{};
+        uint16_t inFlightAttribute = 0;
+        uint8_t inFlightType = 0;
+        uint32_t inFlightValue = 0;
+        uint8_t deliveryAttempts = 0;
         RadioCommandKind nextKind = RadioCommandKind::None;
         char nextOnOff[SPI_DEVICE_MESSAGE_MAX]{};
         uint16_t nextCluster = 0;
@@ -304,6 +313,38 @@ private:
         const uint8_t *payload,
         uint16_t payloadLength
     );
+    bool sendZclPacket(
+        uint8_t addressMode,
+        const uint8_t ieee[8],
+        uint16_t shortAddr,
+        uint8_t dstEndpoint,
+        uint8_t srcEndpoint,
+        uint16_t clusterId,
+        bool clusterSpecific,
+        uint8_t commandId,
+        const uint8_t *payload,
+        uint16_t payloadLength,
+        bool disableApsAck,
+        bool disableDefaultResponse
+    );
+    int countInFlightDestCommands() const;
+    bool radioFlightBudgetAvailable() const;
+    void rememberInFlightOnOff(DestCommandSlot *slot, const char *command);
+    void rememberInFlightWriteAttr(
+        DestCommandSlot *slot,
+        uint16_t attributeId,
+        uint8_t dataType,
+        uint32_t attributeValue
+    );
+    void rememberInFlightReadAttr(DestCommandSlot *slot, uint16_t attributeId);
+    void rememberInFlightClusterCmd(
+        DestCommandSlot *slot,
+        uint8_t commandId,
+        const uint8_t *payload,
+        uint8_t payloadLength
+    );
+    void clearInFlightState(DestCommandSlot *slot);
+    void retryOrAdvanceAfterDeliveryFailure(DestCommandSlot *slot);
     bool transmitWriteAttr(
         DestCommandSlot *slot,
         uint16_t clusterId,
@@ -378,7 +419,7 @@ private:
     BoundZigbeeDevice::CoveringStatus *coveringStatusFor(BoundZigbeeDevice *slot, uint8_t endpoint);
     void sendNextIfReady(DestCommandSlot *slot);
     void serviceCommandFlights();
-    void markInFlight(DestCommandSlot *slot, uint16_t clusterId);
+    void markInFlight(DestCommandSlot *slot, uint16_t clusterId, RadioCommandKind kind);
     bool sendZclToDevice(
         BoundZigbeeDevice *device,
         uint8_t dstEndpoint,

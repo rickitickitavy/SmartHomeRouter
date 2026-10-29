@@ -461,6 +461,7 @@ inline bool deviceCustomCommandBuildZigbeeBody(
 
 inline bool deviceCustomCommandBuildPayloadForTransport(
     uint8_t transport,
+    bool zigbeeMqttProtocol,
     const DeviceCustomCommandDef *command,
     const char *valueText,
     char *out,
@@ -473,6 +474,16 @@ inline bool deviceCustomCommandBuildPayloadForTransport(
     const DeviceCustomCommandParamType paramType =
         (DeviceCustomCommandParamType)command->paramType;
     if (clampDeviceTransport(transport) == DeviceTransportMqtt) {
+        if (zigbeeMqttProtocol) {
+            return deviceCustomCommandBuildZigbeeBody(
+                command->name,
+                hasParam,
+                paramType,
+                valueText,
+                out,
+                outLen
+            );
+        }
         return deviceCustomCommandBuildMqttPayload(
             command->name,
             hasParam,

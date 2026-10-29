@@ -1255,6 +1255,9 @@
             if (device.transport != "mqtt" && typeof device.publishToMqtt === "boolean") {
                 body.publishToMqtt = device.publishToMqtt;
             }
+            if (device.transport == "mqtt") {
+                body.zigbeeProtocol = !!device.zigbeeProtocol;
+            }
             if ((device.type || "") === "userData") {
                 body.userDataFields = normalizeUserDataFields(device.userDataFields);
             }
@@ -2689,7 +2692,33 @@
             typeSelect.onchange = function () {
                 parameterDialogTypeId = typeSelect.value || "unknown";
                 renderUserDataFieldsEditor();
+                applyZigbeeProtocolControls();
             };
+        }
+
+        function typeSelectCurrentIsUserData() {
+            var typeSelect = document.getElementById("deviceTypeSelect");
+            if (parameterDialogTransport == "mqtt" && typeSelect) {
+                return typeSelect.value === "userData";
+            }
+            return (parameterDialogTypeId || "unknown") === "userData";
+        }
+
+        function applyZigbeeProtocolControls() {
+            var protocolField = document.getElementById("deviceZigbeeProtocolField");
+            var protocolInput = document.getElementById("deviceZigbeeProtocol");
+            var mqttDevice = parameterDialogTransport == "mqtt";
+            if (protocolField) {
+                protocolField.hidden = !mqttDevice;
+            }
+            if (protocolInput) {
+                // Remains editable on create and later edit; never lock like DEVICE SOURCE.
+                // Shown for every MQTT class, including User data (cl=0xFC00).
+                protocolInput.disabled = false;
+                if (!mqttDevice) {
+                    protocolInput.checked = false;
+                }
+            }
         }
 
         function ensureDeviceTypeCatalog() {
@@ -2721,7 +2750,8 @@
                 legrand: "Legrand",
                 schneider: "Schneider",
                 namron: "Namron",
-                develco: "Develco"
+                develco: "Develco",
+                zbeacon: "Zbeacon"
             };
             var key = deviceManufacturerJsonId(manufacturerId);
             return labels[key] || "Unknown";
@@ -2749,7 +2779,8 @@
                     legrand: 1,
                     schneider: 1,
                     namron: 1,
-                    develco: 1
+                    develco: 1,
+                    zbeacon: 1
                 },
                 text
             )) {
@@ -2802,6 +2833,9 @@
             }
             if (folded.indexOf("develco") >= 0) {
                 return "develco";
+            }
+            if (folded.indexOf("zbeacon") >= 0) {
+                return "zbeacon";
             }
             return "unknown";
         }
@@ -2858,6 +2892,7 @@
             }
             renderUserDataFieldsEditor();
             applyMqttPublishControls();
+            applyZigbeeProtocolControls();
         }
 
         function findFoundDevice(ieee) {
@@ -4700,6 +4735,11 @@
             if (debugInput) {
                 debugInput.checked = !!device.debug;
             }
+            var protocolInput = document.getElementById("deviceZigbeeProtocol");
+            if (protocolInput) {
+                protocolInput.checked =
+                    parameterDialogTransport == "mqtt" && !!device.zigbeeProtocol;
+            }
             var publishInput = document.getElementById("devicePublishToMqtt");
             if (publishInput) {
                 if (parameterDialogTransport == "mqtt") {
@@ -4711,8 +4751,21 @@
                 }
             }
             applyMqttPublishControls();
+            applyZigbeeProtocolControls();
             parameterDialogUserDataFields = normalizeUserDataFields(device.userDataFields);
             renderUserDataFieldsEditor();
+            if (Array.isArray(device.reportableData) && device.reportableData.length > 0) {
+                parameterDialogReportableData = normalizeReportableData(device.reportableData);
+            } else if (!parameterDialogIsEdit) {
+                // Create (found Zigbee Add or MQTT DEVICE): seed even when ieee is already known.
+                parameterDialogReportableData = reportableDataSeedFor(
+                    device.manufacturer || parameterDialogManufacturerId,
+                    device.type || parameterDialogTypeId
+                );
+            } else {
+                parameterDialogReportableData = normalizeReportableData(device.reportableData);
+            }
+            renderReportableDataEditor();
             parameterDialogCustomCommands = normalizeCustomCommands(device.customCommands);
             renderCustomCommandsEditor();
             document.getElementById("parameterDialogError").hidden = true;
@@ -5003,6 +5056,337 @@
             renderUserDataFieldsEditor();
         }
 
+        var parameterDialogReportableData = [];
+        var REPORTABLE_DATA_MAX_COUNT = 16;
+
+        function formatReportableIdToken(value) {
+            if (value === undefined || value === null || value === "") {
+                return "";
+            }
+            if (typeof value === "number") {
+                return "0x" + ("0000" + (value & 0xFFFF).toString(16).toUpperCase()).slice(-4);
+            }
+            var text = String(value).trim();
+            if (!text) {
+                return "";
+            }
+            var parsed = parseInt(text, 0);
+            if (isNaN(parsed)) {
+                return text;
+            }
+            return "0x" + ("0000" + (parsed & 0xFFFF).toString(16).toUpperCase()).slice(-4);
+        }
+
+        function normalizeReportableData(rawRows) {
+            var source = Array.isArray(rawRows) ? rawRows : [];
+            var normalized = [];
+            var index;
+            for (index = 0; index < source.length && normalized.length < REPORTABLE_DATA_MAX_COUNT; index++) {
+                var row = source[index] || {};
+                var typeId = String(row.type || "float");
+                if (typeId !== "int" && typeId !== "float" && typeId !== "bool" && typeId !== "string") {
+                    typeId = "float";
+                }
+                normalized.push({
+                    cluster: formatReportableIdToken(row.cluster != null ? row.cluster : row.cl),
+                    attribute: formatReportableIdToken(
+                        row.attribute != null ? row.attribute : (row.attr != null ? row.attr : row.attrId)
+                    ),
+                    type: typeId
+                });
+            }
+            return normalized;
+        }
+
+        function reportableDataSeedFor(manufacturerId, typeId) {
+            var rows = [];
+            var manuf = deviceManufacturerJsonId(manufacturerId);
+            function pushUnique(cluster, attribute, type) {
+                var clusterText = formatReportableIdToken(cluster);
+                var attributeText = formatReportableIdToken(attribute);
+                var index;
+                for (index = 0; index < rows.length; index++) {
+                    if (rows[index].cluster === clusterText && rows[index].attribute === attributeText) {
+                        return;
+                    }
+                }
+                if (rows.length >= REPORTABLE_DATA_MAX_COUNT) {
+                    return;
+                }
+                rows.push({ cluster: clusterText, attribute: attributeText, type: type });
+            }
+            if (manuf === "zbeacon") {
+                pushUnique(0x0402, 0x0000, "float");
+                pushUnique(0x0405, 0x0000, "float");
+                pushUnique(0x0001, 0x0021, "int");
+            }
+            var catalogEntry = null;
+            var catalogIndex;
+            for (catalogIndex = 0; catalogIndex < deviceTypeCatalog.length; catalogIndex++) {
+                if (deviceTypeCatalog[catalogIndex].id === typeId) {
+                    catalogEntry = deviceTypeCatalog[catalogIndex];
+                    break;
+                }
+            }
+            if (catalogEntry && catalogEntry.cluster) {
+                var clusterId = catalogEntry.cluster;
+                if (clusterId === 0x0402 || clusterId === 0x0405 || clusterId === 0x0400
+                    || clusterId === 0x0401 || clusterId === 0x0403) {
+                    pushUnique(clusterId, 0x0000, "float");
+                    pushUnique(0x0001, 0x0021, "int");
+                } else if (clusterId === 0x0406 || clusterId === 0x0500) {
+                    pushUnique(0x0001, 0x0021, "int");
+                }
+            }
+            return rows;
+        }
+
+        function reportableKnownClusters() {
+            var rows = [];
+            var seen = {};
+            var index;
+            for (index = 0; index < deviceTypeCatalog.length; index++) {
+                var entry = deviceTypeCatalog[index];
+                if (!entry || entry.cluster == null || entry.cluster === 0xFC00) {
+                    continue;
+                }
+                var token = formatReportableIdToken(entry.cluster);
+                if (seen[token]) {
+                    continue;
+                }
+                seen[token] = true;
+                rows.push({
+                    id: token,
+                    label: (entry.label || token) + " (" + token + ")"
+                });
+            }
+            rows.sort(function (left, right) {
+                return parseInt(left.id, 0) - parseInt(right.id, 0);
+            });
+            return rows;
+        }
+
+        function reportableKnownAttributesForCluster(clusterToken) {
+            var cluster = parseInt(clusterToken, 0);
+            if (isNaN(cluster)) {
+                return [{ id: "0x0000", label: "0x0000" }];
+            }
+            var attrs = [];
+            function pushAttr(id, label) {
+                attrs.push({ id: formatReportableIdToken(id), label: label + " (" + formatReportableIdToken(id) + ")" });
+            }
+            if (cluster === 0x0001) {
+                pushAttr(0x0020, "Battery voltage");
+                pushAttr(0x0021, "Battery percentage remaining");
+            } else if (cluster === 0x0006) {
+                pushAttr(0x0000, "On/Off");
+            } else if (cluster === 0x0400 || cluster === 0x0401 || cluster === 0x0402
+                || cluster === 0x0403 || cluster === 0x0404 || cluster === 0x0405) {
+                pushAttr(0x0000, "Measured value");
+            } else if (cluster === 0x0406) {
+                pushAttr(0x0000, "Occupancy");
+            } else if (cluster === 0x0500) {
+                pushAttr(0x0002, "Zone status");
+            } else if (cluster === 0x0102) {
+                pushAttr(0x0008, "Current position lift %");
+                pushAttr(0xF000, "Move status");
+            } else if (cluster === 0x0008) {
+                pushAttr(0x0000, "Current level");
+            } else if (cluster === 0x0300) {
+                pushAttr(0x0000, "Current hue");
+                pushAttr(0x0001, "Current saturation");
+                pushAttr(0x0003, "Current X");
+                pushAttr(0x0004, "Current Y");
+                pushAttr(0x0007, "Color temperature");
+            } else {
+                pushAttr(0x0000, "Attribute 0x0000");
+            }
+            return attrs;
+        }
+
+        function reportableDefaultTypeForCluster(clusterToken) {
+            var cluster = parseInt(clusterToken, 0);
+            if (cluster === 0x0001 || cluster === 0x0006 || cluster === 0x0500 || cluster === 0x0406) {
+                return "int";
+            }
+            if (cluster === 0x0400 || cluster === 0x0401 || cluster === 0x0402
+                || cluster === 0x0403 || cluster === 0x0404 || cluster === 0x0405) {
+                return "float";
+            }
+            return "float";
+        }
+
+        function fillReportableSelect(select, options, selectedId) {
+            select.innerHTML = "";
+            var wanted = formatReportableIdToken(selectedId);
+            var matched = false;
+            var index;
+            for (index = 0; index < options.length; index++) {
+                var option = document.createElement("option");
+                option.value = options[index].id;
+                option.textContent = options[index].label;
+                if (wanted && option.value === wanted) {
+                    option.selected = true;
+                    matched = true;
+                }
+                select.appendChild(option);
+            }
+            if (!matched && wanted) {
+                var orphan = document.createElement("option");
+                orphan.value = wanted;
+                orphan.textContent = wanted;
+                orphan.selected = true;
+                select.appendChild(orphan);
+            }
+            if (!select.value && options.length) {
+                select.value = options[0].id;
+            }
+            return select.value;
+        }
+
+        function reportableRowLabel(row) {
+            var clusterToken = formatReportableIdToken(row && row.cluster);
+            var clusters = reportableKnownClusters();
+            var clusterLabel = clusterToken;
+            var index;
+            for (index = 0; index < clusters.length; index++) {
+                if (clusters[index].id === clusterToken) {
+                    clusterLabel = clusters[index].label;
+                    break;
+                }
+            }
+            return clusterLabel + " / " + formatReportableIdToken(row && row.attribute);
+        }
+
+        function renderReportableDataEditor() {
+            var section = document.getElementById("deviceReportableDataSection");
+            var body = document.getElementById("deviceReportableDataBody");
+            if (!section || !body) {
+                return;
+            }
+            section.hidden = false;
+            section.style.display = "";
+            body.innerHTML = "";
+            var clusterOptions = reportableKnownClusters();
+            var rowIndex;
+            for (rowIndex = 0; rowIndex < parameterDialogReportableData.length; rowIndex++) {
+                (function (fieldIndex) {
+                    var field = parameterDialogReportableData[fieldIndex];
+                    var row = document.createElement("tr");
+                    var clusterCell = document.createElement("td");
+                    var clusterSelect = document.createElement("select");
+                    clusterSelect.className = "reportable-field-cluster";
+                    field.cluster = fillReportableSelect(clusterSelect, clusterOptions, field.cluster);
+                    clusterSelect.onchange = function () {
+                        parameterDialogReportableData[fieldIndex].cluster = clusterSelect.value;
+                        var attrs = reportableKnownAttributesForCluster(clusterSelect.value);
+                        parameterDialogReportableData[fieldIndex].attribute =
+                            fillReportableSelect(attributeSelect, attrs, attrs[0] ? attrs[0].id : "0x0000");
+                        var nextType = reportableDefaultTypeForCluster(clusterSelect.value);
+                        typeSelect.value = nextType;
+                        parameterDialogReportableData[fieldIndex].type = nextType;
+                    };
+                    clusterCell.appendChild(clusterSelect);
+
+                    var attributeCell = document.createElement("td");
+                    var attributeSelect = document.createElement("select");
+                    attributeSelect.className = "reportable-field-attribute";
+                    field.attribute = fillReportableSelect(
+                        attributeSelect,
+                        reportableKnownAttributesForCluster(field.cluster),
+                        field.attribute
+                    );
+                    attributeSelect.onchange = function () {
+                        parameterDialogReportableData[fieldIndex].attribute = attributeSelect.value;
+                    };
+                    attributeCell.appendChild(attributeSelect);
+
+                    var typeCell = document.createElement("td");
+                    var typeSelect = document.createElement("select");
+                    typeSelect.className = "reportable-field-type";
+                    ["int", "float", "bool", "string"].forEach(function (typeId) {
+                        var option = document.createElement("option");
+                        option.value = typeId;
+                        option.textContent = typeId;
+                        typeSelect.appendChild(option);
+                    });
+                    typeSelect.value = field.type || reportableDefaultTypeForCluster(field.cluster);
+                    field.type = typeSelect.value;
+                    typeSelect.onchange = function () {
+                        parameterDialogReportableData[fieldIndex].type = typeSelect.value;
+                    };
+                    typeCell.appendChild(typeSelect);
+
+                    var actionsCell = document.createElement("td");
+                    actionsCell.className = "user-data-field-actions";
+                    var upButton = document.createElement("button");
+                    upButton.type = "button";
+                    upButton.className = "console-widget-move-btn";
+                    upButton.textContent = "▲";
+                    upButton.title = "Move up";
+                    upButton.setAttribute("aria-label", "Move up");
+                    upButton.disabled = fieldIndex === 0;
+                    upButton.onclick = function () {
+                        moveReportableDataRow(fieldIndex, -1);
+                    };
+                    var downButton = document.createElement("button");
+                    downButton.type = "button";
+                    downButton.className = "console-widget-move-btn";
+                    downButton.textContent = "▼";
+                    downButton.title = "Move down";
+                    downButton.setAttribute("aria-label", "Move down");
+                    downButton.disabled = fieldIndex >= parameterDialogReportableData.length - 1;
+                    downButton.onclick = function () {
+                        moveReportableDataRow(fieldIndex, 1);
+                    };
+                    var removeButton = document.createElement("button");
+                    removeButton.type = "button";
+                    removeButton.className = "console-widget-delete-btn";
+                    removeButton.textContent = "🗑";
+                    removeButton.title = "Remove row";
+                    removeButton.setAttribute("aria-label", "Remove row");
+                    removeButton.onclick = function () {
+                        parameterDialogReportableData.splice(fieldIndex, 1);
+                        renderReportableDataEditor();
+                    };
+                    actionsCell.appendChild(upButton);
+                    actionsCell.appendChild(downButton);
+                    actionsCell.appendChild(removeButton);
+                    row.appendChild(clusterCell);
+                    row.appendChild(attributeCell);
+                    row.appendChild(typeCell);
+                    row.appendChild(actionsCell);
+                    body.appendChild(row);
+                })(rowIndex);
+            }
+        }
+
+        function moveReportableDataRow(fieldIndex, delta) {
+            var nextIndex = fieldIndex + delta;
+            if (nextIndex < 0 || nextIndex >= parameterDialogReportableData.length) {
+                return;
+            }
+            var swap = parameterDialogReportableData[fieldIndex];
+            parameterDialogReportableData[fieldIndex] = parameterDialogReportableData[nextIndex];
+            parameterDialogReportableData[nextIndex] = swap;
+            renderReportableDataEditor();
+        }
+
+        function addReportableDataRow() {
+            if (parameterDialogReportableData.length >= REPORTABLE_DATA_MAX_COUNT) {
+                return;
+            }
+            var clusters = reportableKnownClusters();
+            var defaultCluster = clusters.length ? clusters[0].id : "0x0402";
+            var attrs = reportableKnownAttributesForCluster(defaultCluster);
+            parameterDialogReportableData.push({
+                cluster: defaultCluster,
+                attribute: attrs.length ? attrs[0].id : "0x0000",
+                type: reportableDefaultTypeForCluster(defaultCluster)
+            });
+            renderReportableDataEditor();
+        }
+
         var parameterDialogCustomCommands = [];
         var DEVICE_CUSTOM_COMMAND_MAX_COUNT = 8;
         var DEVICE_CUSTOM_COMMAND_NAME_MAX_CHARS = 11;
@@ -5148,8 +5532,10 @@
             var channelsSelect = document.getElementById("deviceChannels");
             var fullControlInput = document.getElementById("deviceFullControl");
             var debugInput = document.getElementById("deviceDebug");
+            var protocolInput = document.getElementById("deviceZigbeeProtocol");
             var publishInput = document.getElementById("devicePublishToMqtt");
             var typeSelect = document.getElementById("deviceTypeSelect");
+            var protocolField = document.getElementById("deviceZigbeeProtocolField");
             return {
                 ieee: document.getElementById("deviceIeee").value,
                 name: document.getElementById("deviceName").value,
@@ -5159,6 +5545,12 @@
                 channels: channelsSelect ? channelsSelect.value : "1",
                 fullControl: fullControlInput ? !!fullControlInput.checked : false,
                 debug: debugInput ? !!debugInput.checked : false,
+                zigbeeProtocol: parameterDialogTransport == "mqtt"
+                    && protocolField
+                    && !protocolField.hidden
+                    && protocolInput
+                    ? !!protocolInput.checked
+                    : false,
                 publishToMqtt: parameterDialogTransport == "mqtt"
                     ? true
                     : (publishInput ? !!publishInput.checked : false),
@@ -5166,7 +5558,8 @@
                     ? typeSelect.value
                     : parameterDialogTypeId,
                 userDataFields: normalizeUserDataFields(parameterDialogUserDataFields),
-                customCommands: normalizeCustomCommands(parameterDialogCustomCommands)
+                customCommands: normalizeCustomCommands(parameterDialogCustomCommands),
+                reportableData: normalizeReportableData(parameterDialogReportableData)
             };
         }
 
@@ -5179,10 +5572,12 @@
                 && left.channels === right.channels
                 && left.fullControl === right.fullControl
                 && left.debug === right.debug
+                && left.zigbeeProtocol === right.zigbeeProtocol
                 && left.publishToMqtt === right.publishToMqtt
                 && left.type === right.type
                 && JSON.stringify(left.userDataFields || []) === JSON.stringify(right.userDataFields || [])
-                && JSON.stringify(left.customCommands || []) === JSON.stringify(right.customCommands || []);
+                && JSON.stringify(left.customCommands || []) === JSON.stringify(right.customCommands || [])
+                && JSON.stringify(left.reportableData || []) === JSON.stringify(right.reportableData || []);
         }
 
         function parameterDialogHasUnsavedChanges() {
@@ -5464,7 +5859,14 @@
                 type: typeId || "unknown",
                 transport: parameterDialogTransport || "zigbee"
             };
-            if (parameterDialogTransport != "mqtt") {
+            if (parameterDialogTransport == "mqtt") {
+                var protocolField = document.getElementById("deviceZigbeeProtocolField");
+                var protocolInput = document.getElementById("deviceZigbeeProtocol");
+                body.zigbeeProtocol = !!(protocolField
+                    && !protocolField.hidden
+                    && protocolInput
+                    && protocolInput.checked);
+            } else {
                 body.publishToMqtt = !!(document.getElementById("devicePublishToMqtt")
                     && document.getElementById("devicePublishToMqtt").checked);
                 body.manufacturer = parameterDialogManufacturerId || "unknown";
@@ -5516,6 +5918,7 @@
                 commands[commandIndex].name = commandName;
             }
             body.customCommands = commands;
+            body.reportableData = normalizeReportableData(parameterDialogReportableData);
             if (ieeeText) {
                 body.ieee = ieeeText;
             }
@@ -5875,8 +6278,81 @@
             return userDataSlotDisplayToken(device, fieldIndex);
         }
 
-        function placeBindingResolvedState(device, binding) {
+        function reportableBindingKey(cluster, attribute) {
+            return formatReportableIdToken(cluster) + "/" + formatReportableIdToken(attribute);
+        }
+
+        function reportableAttributeIsWildcard(attribute) {
+            if (attribute === undefined || attribute === null || attribute === "") {
+                return true;
+            }
+            var parsed = parseInt(attribute, 0);
+            return !isNaN(parsed) && parsed === 0;
+        }
+
+        function reportableValueMatchesWanted(row, wantedCluster, wantedAttribute) {
+            if (!row) {
+                return false;
+            }
+            if (formatReportableIdToken(row.cluster) !== formatReportableIdToken(wantedCluster)) {
+                return false;
+            }
+            if (reportableAttributeIsWildcard(wantedAttribute)) {
+                return true;
+            }
+            return formatReportableIdToken(row.attribute) === formatReportableIdToken(wantedAttribute);
+        }
+
+        function placeReportableValueForParam(device, paramId, channel) {
+            var parsed = parseReportableParamId(paramId);
+            if (!parsed || !device) {
+                return "";
+            }
+            var values = Array.isArray(device.reportableValues) ? device.reportableValues : [];
+            var index;
+            for (index = 0; index < values.length; index++) {
+                var row = values[index];
+                if (!row) {
+                    continue;
+                }
+                if ((row.ep == null || row.ep == channel)
+                    && reportableValueMatchesWanted(row, parsed.cluster, parsed.attribute)) {
+                    return row.value != null ? String(row.value) : "";
+                }
+            }
+            return "";
+        }
+
+        function normalizeBindingParamForDevice(device, binding) {
             var param = placeBindingParam(binding);
+            if (parseReportableParamId(param)) {
+                return param;
+            }
+            var legacyCluster = binding && (binding.reportableCluster != null
+                ? binding.reportableCluster
+                : binding.reportableCl);
+            var legacyAttribute = binding && (binding.reportableAttribute != null
+                ? binding.reportableAttribute
+                : binding.reportableAttr);
+            if (legacyCluster != null && legacyCluster !== "") {
+                return reportableParamId(
+                    legacyCluster,
+                    legacyAttribute != null && legacyAttribute !== "" ? legacyAttribute : "0x0000"
+                );
+            }
+            return param;
+        }
+
+        function placeBindingResolvedState(device, binding) {
+            var param = normalizeBindingParamForDevice(device, binding);
+            var reportableText = placeReportableValueForParam(
+                device,
+                param,
+                placeBindingChannel(binding)
+            );
+            if (reportableText !== "") {
+                return reportableText;
+            }
             if (param === "battery") {
                 return placeDeviceBatteryText(device);
             }
@@ -7712,6 +8188,43 @@
                 || key === "onoff";
         }
 
+        var REPORTABLE_PARAM_PREFIX = "reportable:";
+
+        function reportableParamId(cluster, attribute) {
+            return REPORTABLE_PARAM_PREFIX + reportableBindingKey(cluster, attribute);
+        }
+
+        function parseReportableParamId(paramId) {
+            var text = String(paramId || "");
+            if (text.indexOf(REPORTABLE_PARAM_PREFIX) !== 0) {
+                return null;
+            }
+            var key = text.substring(REPORTABLE_PARAM_PREFIX.length);
+            var parts = key.split("/");
+            if (parts.length < 2) {
+                return null;
+            }
+            return {
+                cluster: formatReportableIdToken(parts[0]),
+                attribute: formatReportableIdToken(parts[1])
+            };
+        }
+
+        function appendReportableParams(params, device) {
+            var rows = device && Array.isArray(device.reportableData) ? device.reportableData : [];
+            var index;
+            for (index = 0; index < rows.length; index++) {
+                if (!rows[index]) {
+                    continue;
+                }
+                params.push({
+                    id: reportableParamId(rows[index].cluster, rows[index].attribute),
+                    label: reportableRowLabel(rows[index]),
+                    reportableType: rows[index].type || "float"
+                });
+            }
+        }
+
         function automationKnownParamsForDevice(device, forWidget) {
             var typeId = device && device.type ? String(device.type) : "unknown";
             var params = [];
@@ -7728,6 +8241,7 @@
                     }
                     params.push({ id: fieldName, label: fieldName });
                 }
+                appendReportableParams(params, device);
                 // Widget bindings: schema field names only (no CUSTOM / battery).
                 if (!forWidget) {
                     params.push({ id: "custom", label: "CUSTOM" });
@@ -7748,6 +8262,7 @@
             } else {
                 params.push({ id: "sensorValue", label: "Sensor value" });
             }
+            appendReportableParams(params, device);
             params.push({ id: "battery", label: "Battery level" });
             params.push({ id: "custom", label: "CUSTOM" });
             return params;
@@ -12458,6 +12973,28 @@
                 return false;
             }
             var typeId = device.type || "";
+            var reportableParsed = parseReportableParamId(paramValue);
+            if (reportableParsed) {
+                var rows = Array.isArray(device.reportableData) ? device.reportableData : [];
+                var rowIndex;
+                for (rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+                    if (!rows[rowIndex]) {
+                        continue;
+                    }
+                    if (formatReportableIdToken(rows[rowIndex].cluster)
+                            !== reportableParsed.cluster) {
+                        continue;
+                    }
+                    var rowAttr = formatReportableIdToken(rows[rowIndex].attribute);
+                    if (rowAttr === reportableParsed.attribute
+                        || reportableAttributeIsWildcard(rows[rowIndex].attribute)
+                        || reportableAttributeIsWildcard(reportableParsed.attribute)) {
+                        var reportableType = String(rows[rowIndex].type || "float");
+                        return reportableType === "int" || reportableType === "float";
+                    }
+                }
+                return true;
+            }
             if (paramValue === "onOff") {
                 return false;
             }
@@ -13504,7 +14041,12 @@
                     fillAutomationChannelSelect(channelSelect, device, binding.channel || 1);
                     setHidden(document.getElementById("consoleDeviceChannelField"), channelSelect.hidden);
                     setHidden(document.getElementById("consoleDeviceParamField"), false);
-                    fillAutomationParamSelect(paramSelect, device, binding.param || "", true);
+                    fillAutomationParamSelect(
+                        paramSelect,
+                        device,
+                        normalizeBindingParamForDevice(device, binding) || "",
+                        true
+                    );
                     setHidden(document.getElementById("consoleDeviceClusterField"), true);
                     setHidden(document.getElementById("consoleDeviceAttrField"), true);
                     setHidden(document.getElementById("consoleDeviceUnitField"), true);
@@ -14951,6 +15493,10 @@
                             <label for="deviceTransport">DEVICE SOURCE</label>
                             <input id="deviceTransport" type="text" readonly>
                         </div>
+                        <div class="field field-check" id="deviceZigbeeProtocolField" hidden>
+                            <input id="deviceZigbeeProtocol" type="checkbox">
+                            <span>Zigbee protocol</span>
+                        </div>
                         <div class="field" id="deviceTypeReadonlyField">
                             <label for="deviceType">DEVICE CLASS</label>
                             <input id="deviceType" type="text" readonly>
@@ -15005,6 +15551,29 @@
                                 </table>
                             </div>
                             <button type="button" class="btn btn-secondary btn-inline" id="deviceUserDataFieldAddBtn" onclick="addUserDataFieldRow()">Add field</button>
+                        </div>
+                        <div id="deviceReportableDataSection" class="form-section">
+                            <h3 class="group-title">Reported data</h3>
+                            <div class="table-wrap">
+                                <table class="data-table" id="deviceReportableDataTable">
+                                    <colgroup>
+                                        <col class="reportable-col-cluster">
+                                        <col class="reportable-col-attribute">
+                                        <col class="reportable-col-type">
+                                        <col class="reportable-col-actions">
+                                    </colgroup>
+                                    <thead>
+                                        <tr>
+                                            <th>Cluster</th>
+                                            <th>Attribute</th>
+                                            <th>Type</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="deviceReportableDataBody"></tbody>
+                                </table>
+                            </div>
+                            <button type="button" class="btn btn-secondary btn-inline" id="deviceReportableDataAddBtn" onclick="addReportableDataRow()">Add</button>
                         </div>
                         <div id="deviceCustomCommandsSection" class="form-section">
                             <h3 class="group-title">Custom commands</h3>

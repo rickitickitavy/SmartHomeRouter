@@ -893,6 +893,78 @@ html, body {
     display: none !important;
 }
 
+/* Permanent: enabled table controls in device dialogs must never look gray/disabled. */
+#parameterDialog .data-table input:not(:disabled):not([readonly]),
+#parameterDialog .data-table select:not(:disabled):not([readonly]),
+#parameterDialog .data-table textarea:not(:disabled):not([readonly]) {
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 0.875rem;
+    box-sizing: border-box;
+}
+
+#parameterDialog .data-table input:disabled,
+#parameterDialog .data-table input[readonly],
+#parameterDialog .data-table select:disabled,
+#parameterDialog .data-table textarea:disabled,
+#parameterDialog .data-table textarea[readonly] {
+    color: var(--muted);
+    background: color-mix(in srgb, var(--muted) 18%, var(--surface));
+}
+
+#deviceReportableDataTable {
+    table-layout: fixed;
+    width: 100%;
+}
+
+#deviceReportableDataTable .reportable-col-cluster {
+    width: 42%;
+}
+
+#deviceReportableDataTable .reportable-col-attribute {
+    width: 32%;
+}
+
+#deviceReportableDataTable .reportable-col-type {
+    width: 14%;
+}
+
+#deviceReportableDataTable .reportable-col-actions {
+    width: 12%;
+}
+
+#deviceReportableDataTable td {
+    padding: 0.25rem 0.45rem;
+    vertical-align: middle;
+}
+
+#deviceReportableDataTable .reportable-field-cluster,
+#deviceReportableDataTable .reportable-field-attribute,
+#deviceReportableDataTable .reportable-field-type {
+    width: 100%;
+    max-width: 100%;
+    min-height: 33px;
+    height: 33px;
+    padding: 0.2rem 0.45rem;
+    appearance: menulist;
+    -webkit-appearance: menulist;
+}
+
+#deviceReportableDataSection #deviceReportableDataAddBtn {
+    background: var(--surface);
+    color: var(--text);
+    border-color: var(--border);
+}
+
+#deviceReportableDataSection #deviceReportableDataAddBtn:hover:not(:disabled) {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
 #deviceUserDataFieldsTable td {
     padding: 0.25rem 0.45rem;
 }
@@ -4217,16 +4289,22 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 .user-consoles-checkboxes {
     display: flex;
     flex-direction: column;
+    align-items: stretch;
     gap: 0.35rem;
     max-height: 10rem;
     overflow: auto;
     padding: 0.35rem 0;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 .user-console-assign-row {
+    width: 100%;
+    box-sizing: border-box;
     min-height: 2.25rem;
     cursor: grab;
     gap: 0.5rem;
+    justify-content: flex-start;
 }
 
 .user-console-assign-row.is-dragging {
@@ -4238,11 +4316,19 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     outline-offset: 1px;
 }
 
-.user-console-assign-drag {
+/* Drag handle is a span; do not let .field-check > span { flex: 1 } stretch it
+   (that pushed checkbox + label to the middle of the row). */
+.user-console-assign-row > .user-console-assign-drag {
+    flex: 0 0 auto;
     color: var(--muted);
     user-select: none;
     cursor: grab;
     padding: 0 0.15rem;
+}
+
+.user-console-assign-row > span:last-child {
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
 #userDialog .user-dialog-panel {

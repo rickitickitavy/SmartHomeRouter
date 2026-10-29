@@ -20,7 +20,8 @@ enum DeviceManufacturer : uint8_t {
     DeviceManufacturerLegrand = 12,
     DeviceManufacturerSchneider = 13,
     DeviceManufacturerNamron = 14,
-    DeviceManufacturerDevelco = 15
+    DeviceManufacturerDevelco = 15,
+    DeviceManufacturerZbeacon = 16
 };
 
 inline const char *deviceManufacturerJsonId(uint8_t manufacturer) {
@@ -55,6 +56,8 @@ inline const char *deviceManufacturerJsonId(uint8_t manufacturer) {
             return "namron";
         case DeviceManufacturerDevelco:
             return "develco";
+        case DeviceManufacturerZbeacon:
+            return "zbeacon";
         default:
             return "unknown";
     }
@@ -92,6 +95,8 @@ inline const char *deviceManufacturerLabel(uint8_t manufacturer) {
             return "Namron";
         case DeviceManufacturerDevelco:
             return "Develco";
+        case DeviceManufacturerZbeacon:
+            return "Zbeacon";
         default:
             return "Unknown";
     }
@@ -145,6 +150,9 @@ inline DeviceManufacturer deviceManufacturerFromJsonId(const char *jsonId) {
     }
     if (strcmp(jsonId, "develco") == 0) {
         return DeviceManufacturerDevelco;
+    }
+    if (strcmp(jsonId, "zbeacon") == 0) {
+        return DeviceManufacturerZbeacon;
     }
     return DeviceManufacturerUnknown;
 }
@@ -233,6 +241,9 @@ inline DeviceManufacturer deviceManufacturerFromJoinString(const char *manufactu
     }
     if (deviceManufacturerStringContainsFold(manufacturerName, "develco")) {
         return DeviceManufacturerDevelco;
+    }
+    if (deviceManufacturerStringContainsFold(manufacturerName, "zbeacon")) {
+        return DeviceManufacturerZbeacon;
     }
     return DeviceManufacturerUnknown;
 }

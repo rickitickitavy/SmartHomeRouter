@@ -184,7 +184,67 @@ void ZigbeeSpiProxy::releaseSlot(CachedDevice *slot) {
     slot->manufacturer = nullptr;
     free(slot->model);
     slot->model = nullptr;
+    clearReportableValues(slot);
     delete slot;
+}
+
+void ZigbeeSpiProxy::clearReportableValues(CachedDevice *slot) {
+    if (slot == nullptr) {
+        return;
+    }
+    if (slot->reportableValues != nullptr) {
+        for (uint8_t index = 0; index < slot->reportableValueCount; index++) {
+            free(slot->reportableValues[index].value);
+            slot->reportableValues[index].value = nullptr;
+        }
+        free(slot->reportableValues);
+        slot->reportableValues = nullptr;
+    }
+    slot->reportableValueCount = 0;
+}
+
+void ZigbeeSpiProxy::noteReportableValue(
+    CachedDevice *slot,
+    uint8_t endpoint,
+    uint16_t cluster,
+    uint16_t attribute,
+    const char *valueText
+) {
+    if (slot == nullptr || valueText == nullptr || !DeviceTopicMap::isUsableEndpoint(endpoint)) {
+        return;
+    }
+    if (slot->reportableValues != nullptr) {
+        for (uint8_t index = 0; index < slot->reportableValueCount; index++) {
+            ReportableValueSlot &existing = slot->reportableValues[index];
+            if (existing.endpoint == endpoint
+                && existing.cluster == cluster
+                && existing.attribute == attribute) {
+                free(existing.value);
+                existing.value = DeviceTopicMap::duplicateBoundedString(
+                    valueText,
+                    kReportableValueTextMaxLen
+                );
+                return;
+            }
+        }
+    }
+    if (slot->reportableValueCount >= kReportableValueSlotMax) {
+        return;
+    }
+    ReportableValueSlot *grown = (ReportableValueSlot *)realloc(
+        slot->reportableValues,
+        (size_t)(slot->reportableValueCount + 1) * sizeof(ReportableValueSlot)
+    );
+    if (grown == nullptr) {
+        return;
+    }
+    slot->reportableValues = grown;
+    ReportableValueSlot &created = slot->reportableValues[slot->reportableValueCount];
+    created.endpoint = endpoint;
+    created.cluster = cluster;
+    created.attribute = attribute;
+    created.value = DeviceTopicMap::duplicateBoundedString(valueText, kReportableValueTextMaxLen);
+    slot->reportableValueCount++;
 }
 
 void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, const char *message) {
@@ -197,11 +257,18 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
             !slot->hasBattery || slot->batteryPercent != (uint8_t)parsedPercent;
         slot->hasBattery = true;
         slot->batteryPercent = parsedPercent;
+        char batteryMessage[16];
+        snprintf(batteryMessage, sizeof(batteryMessage), "%u", parsedPercent);
+        noteReportableValue(
+            slot,
+            endpoint,
+            kZigbeeClusterPowerConfig,
+            kZigbeeAttrBatteryPercentageRemaining,
+            batteryMessage
+        );
         // Battery may re-report the same %; pass valueChanged so listeners can filter by eventType.
         // Notify with a plain number so GREATER/LESS compares work (no "BATTERY " prefix).
         if (statusValueChanged != nullptr && DeviceTopicMap::isUsableEndpoint(endpoint)) {
-            char batteryMessage[16];
-            snprintf(batteryMessage, sizeof(batteryMessage), "%u", parsedPercent);
             statusValueChanged(
                 slot->ieee,
                 endpoint,
@@ -212,16 +279,105 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
         }
         return;
     }
+    unsigned parsedCluster = 0;
+    unsigned parsedAttr = 0;
+    unsigned long parsedValue = 0;
+    char reportableConverted[kReportableValueTextMaxLen];
+    reportableConverted[0] = '\0';
+    const bool haveClAttrVal =
+        sscanf(message, "cl=0x%X,attr=0x%X,val=0x%lX", &parsedCluster, &parsedAttr, &parsedValue) == 3
+        || sscanf(
+               message,
+               "%*[^ ] cl=0x%X,attr=0x%X,val=0x%lX",
+               &parsedCluster,
+               &parsedAttr,
+               &parsedValue
+           ) == 3
+        || sscanf(message, "cl=0x%X,attr=0x%X,val=%lu", &parsedCluster, &parsedAttr, &parsedValue) == 3
+        || sscanf(
+               message,
+               "%*[^ ] cl=0x%X,attr=0x%X,val=%lu",
+               &parsedCluster,
+               &parsedAttr,
+               &parsedValue
+           ) == 3;
+    if (haveClAttrVal && registryMap != nullptr) {
+        const DeviceTopicEntry *entry = registryMap->findByIeee(slot->ieee);
+        if (entry != nullptr && entry->reportableDataCount > 0) {
+            const int rowIndex = reportableDataFindIndex(
+                entry->reportableData,
+                entry->reportableDataCount,
+                (uint16_t)parsedCluster,
+                (uint16_t)parsedAttr
+            );
+            if (rowIndex >= 0) {
+                if (reportableDataConvertZclValue(
+                        (uint16_t)parsedCluster,
+                        (uint16_t)parsedAttr,
+                        (uint32_t)parsedValue,
+                        (ReportableDataType)entry->reportableData[rowIndex].type,
+                        reportableConverted,
+                        sizeof(reportableConverted)
+                    )) {
+                    noteReportableValue(
+                        slot,
+                        endpoint,
+                        (uint16_t)parsedCluster,
+                        (uint16_t)parsedAttr,
+                        reportableConverted
+                    );
+                    if ((uint16_t)parsedCluster == kZigbeeClusterPowerConfig
+                        && (uint16_t)parsedAttr == kZigbeeAttrBatteryPercentageRemaining) {
+                        unsigned batteryFromConverted = 0;
+                        if (sscanf(reportableConverted, "%u", &batteryFromConverted) == 1) {
+                            slot->hasBattery = true;
+                            slot->batteryPercent = batteryFromConverted;
+                        }
+                    }
+                    // Prefer converted text for endpoint status so legacy gauges keep working.
+                    message = reportableConverted;
+                }
+            } else if ((uint16_t)parsedCluster != kUserDataClusterId
+                       && (uint16_t)parsedCluster != kZigbeeClusterOnOff
+                       && (uint16_t)parsedCluster != kZigbeeClusterIasZone
+                       && (uint16_t)parsedCluster != kZigbeeClusterWindowCovering) {
+                // Always log unknown reportable pairs, even when device DEBUG is off.
+                char ieeeText[24];
+                snprintf(
+                    ieeeText,
+                    sizeof(ieeeText),
+                    "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
+                    slot->ieee[7],
+                    slot->ieee[6],
+                    slot->ieee[5],
+                    slot->ieee[4],
+                    slot->ieee[3],
+                    slot->ieee[2],
+                    slot->ieee[1],
+                    slot->ieee[0]
+                );
+                LOGGER.info(
+                    String("Unknown reportable cl=0x")
+                    + String(parsedCluster, HEX)
+                    + ",attr=0x"
+                    + String(parsedAttr, HEX)
+                    + " ieee="
+                    + ieeeText
+                );
+            }
+        }
+    }
     String userDataBraceList;
     bool haveUserDataBrace = false;
     if (strstr(message, "cl=0x") != nullptr && strstr(message, "attr=") != nullptr) {
-        if (!userDataMessageIsClusterReport(message)) {
-            return;
+        // Dispatch by cluster in the packet — only 0xFC00 uses user-data brace schema.
+        if (userDataMessageIsClusterReport(message)) {
+            if (userDataExtractBraceList(message, &userDataBraceList) && userDataBraceList.length() > 0) {
+                haveUserDataBrace = true;
+            }
+            // Non-brace 0xFC00 vals still fall through as shaped status text.
         }
-        if (!userDataExtractBraceList(message, &userDataBraceList) || userDataBraceList.length() == 0) {
-            return;
-        }
-        haveUserDataBrace = true;
+        // Other clusters (On/Off, Power Config, …) fall through unchanged.
     } else {
         const char *braceCursor = message;
         while (*braceCursor == ' ' || *braceCursor == '\t') {
@@ -1484,6 +1640,34 @@ void ZigbeeSpiProxy::appendListTelemetry(const uint8_t ieee[8], String &json) co
     if (slot->hasBattery) {
         json += ",\"battery\":";
         json += String((unsigned)slot->batteryPercent);
+    }
+    if (slot->reportableValues != nullptr && slot->reportableValueCount > 0) {
+        json += ",\"reportableValues\":[";
+        bool firstReportable = true;
+        for (uint8_t index = 0; index < slot->reportableValueCount; index++) {
+            const ReportableValueSlot &valueSlot = slot->reportableValues[index];
+            if (valueSlot.value == nullptr) {
+                continue;
+            }
+            if (!firstReportable) {
+                json += ",";
+            }
+            firstReportable = false;
+            char clusterText[12];
+            char attributeText[12];
+            snprintf(clusterText, sizeof(clusterText), "0x%04X", (unsigned)valueSlot.cluster);
+            snprintf(attributeText, sizeof(attributeText), "0x%04X", (unsigned)valueSlot.attribute);
+            json += "{\"ep\":";
+            json += String((unsigned)valueSlot.endpoint);
+            json += ",\"cluster\":\"";
+            json += clusterText;
+            json += "\",\"attribute\":\"";
+            json += attributeText;
+            json += "\",\"value\":\"";
+            appendJsonEscaped(json, valueSlot.value, strlen(valueSlot.value) + 1);
+            json += "\"}";
+        }
+        json += "]";
     }
     if (slot->channels == nullptr || slot->channelCapacity == 0) {
         return;

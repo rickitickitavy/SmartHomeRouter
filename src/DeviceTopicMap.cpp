@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 static size_t jsonEscapeCap(const char *value) {
     if (value == nullptr) {
@@ -70,6 +71,7 @@ void DeviceTopicMap::clearEntryStrings(DeviceTopicEntry *entry) {
     free(entry->model);
     userDataClearFieldDefs(&entry->userDataFields, &entry->userDataFieldCount);
     deviceCustomCommandClear(&entry->customCommands, &entry->customCommandCount);
+    reportableDataClear(&entry->reportableData, &entry->reportableDataCount);
     entry->friendlyName = nullptr;
     entry->stateTopic = nullptr;
     entry->commandTopic = nullptr;
@@ -112,6 +114,7 @@ bool DeviceTopicMap::cloneEntry(DeviceTopicEntry *destination, const DeviceTopic
     destination->fullControl = source->fullControl;
     destination->debug = source->debug;
     destination->publishToMqtt = source->publishToMqtt;
+    destination->zigbeeProtocol = source->zigbeeProtocol;
     destination->zigbeeType = source->zigbeeType;
     destination->manufacturer = source->manufacturer;
     destination->model = duplicateBoundedString(source->model, DEVICE_MODEL_MAX);
@@ -134,6 +137,15 @@ bool DeviceTopicMap::cloneEntry(DeviceTopicEntry *destination, const DeviceTopic
             &destination->customCommandCount,
             source->customCommands,
             source->customCommandCount
+        )) {
+        clearEntryStrings(destination);
+        return false;
+    }
+    if (!reportableDataCopy(
+            &destination->reportableData,
+            &destination->reportableDataCount,
+            source->reportableData,
+            source->reportableDataCount
         )) {
         clearEntryStrings(destination);
         return false;
@@ -309,6 +321,9 @@ String DeviceTopicMap::statePublishTopic(const DeviceTopicEntry *entry, uint8_t 
     if (entry == nullptr || deviceTopicEmpty(entry->stateTopic)) {
         return "";
     }
+    if (deviceUsesExactMqttTopics(entry)) {
+        return String(entry->stateTopic);
+    }
     if (usesTopicSuffix(entry->channelCount) && isUsableEndpoint(endpoint)) {
         return String(entry->stateTopic) + "/" + String(endpoint);
     }
@@ -319,6 +334,9 @@ String DeviceTopicMap::commandPublishTopic(const DeviceTopicEntry *entry, uint8_
     if (entry == nullptr || deviceTopicEmpty(entry->commandTopic)) {
         return "";
     }
+    if (deviceUsesExactMqttTopics(entry)) {
+        return String(entry->commandTopic);
+    }
     if (usesTopicSuffix(entry->channelCount) && isUsableEndpoint(endpoint)) {
         return String(entry->commandTopic) + "/" + String(endpoint);
     }
@@ -327,7 +345,10 @@ String DeviceTopicMap::commandPublishTopic(const DeviceTopicEntry *entry, uint8_
 
 String DeviceTopicMap::statePublishPayload(const DeviceTopicEntry *entry, uint8_t endpoint, const char *message) {
     const char *body = message != nullptr ? message : "";
-    if (entry != nullptr && usesPayloadParse(entry->channelCount) && isUsableEndpoint(endpoint)) {
+    if (entry != nullptr
+        && !deviceUsesExactMqttTopics(entry)
+        && usesPayloadParse(entry->channelCount)
+        && isUsableEndpoint(endpoint)) {
         return String("ch-") + String(endpoint) + "##" + body;
     }
     return String(body);
@@ -352,6 +373,286 @@ bool DeviceTopicMap::parseChannelPayload(const char *payload, uint8_t *endpoint,
     *endpoint = (uint8_t)parsed;
     *action = String(separator + 2);
     return true;
+}
+
+static bool bodyHasKeyEquals(const char *body, const char *key) {
+    if (body == nullptr || key == nullptr || key[0] == '\0') {
+        return false;
+    }
+    const size_t keyLen = strlen(key);
+    const char *cursor = body;
+    while (*cursor != '\0') {
+        while (*cursor == ' ' || *cursor == '\t' || *cursor == ',') {
+            cursor++;
+        }
+        if (strncasecmp(cursor, key, keyLen) == 0 && cursor[keyLen] == '=') {
+            return true;
+        }
+        const char *nextComma = strchr(cursor, ',');
+        if (nextComma == nullptr) {
+            break;
+        }
+        cursor = nextComma + 1;
+    }
+    return false;
+}
+
+static bool bodyLooksZigbeeShaped(const char *body) {
+    return bodyHasKeyEquals(body, "cl") || bodyHasKeyEquals(body, "cmd");
+}
+
+static String ensureProtocolEndpoint(const String &body, uint8_t endpoint) {
+    if (bodyHasKeyEquals(body.c_str(), "ep")) {
+        return body;
+    }
+    const uint8_t usable = DeviceTopicMap::isUsableEndpoint(endpoint) ? endpoint : 1;
+    if (body.length() == 0) {
+        return String("ep=") + String((unsigned)usable);
+    }
+    return body + ",ep=" + String((unsigned)usable);
+}
+
+uint8_t DeviceTopicMap::endpointFromProtocolBody(const char *body, uint8_t fallbackEndpoint) {
+    const uint8_t fallback = isUsableEndpoint(fallbackEndpoint) ? fallbackEndpoint : 1;
+    if (body == nullptr || body[0] == '\0') {
+        return fallback;
+    }
+    ZclWriteFields writeFields;
+    if (parseFullControlBody(body, fallback, &writeFields) && writeFields.parsedAny) {
+        if (isUsableEndpoint(writeFields.endpoint)) {
+            return writeFields.endpoint;
+        }
+    }
+    ZclCommandFields commandFields;
+    if (parseZclCommandBody(body, fallback, &commandFields) && commandFields.parsed) {
+        if (isUsableEndpoint(commandFields.endpoint)) {
+            return commandFields.endpoint;
+        }
+    }
+    return fallback;
+}
+
+String DeviceTopicMap::encodeZigbeeProtocolCommand(
+    const DeviceTopicEntry *entry,
+    const char *message,
+    uint8_t endpoint
+) {
+    const uint8_t usable = isUsableEndpoint(endpoint) ? endpoint : 1;
+    String body = String(message != nullptr ? message : "");
+    body.trim();
+    if (body.length() == 0) {
+        return ensureProtocolEndpoint("", usable);
+    }
+    if (bodyLooksZigbeeShaped(body.c_str())) {
+        return ensureProtocolEndpoint(body, usable);
+    }
+
+    if (entry != nullptr && zigbeeDeviceTypeIsUserData(entry->zigbeeType)) {
+        // Only brace-list payloads use the user-data cluster (0xFC00). Other
+        // shortcuts / already-shaped bodies keep their own cluster ids.
+        const char *braceCursor = body.c_str();
+        while (*braceCursor == ' ' || *braceCursor == '\t') {
+            braceCursor++;
+        }
+        if (*braceCursor == '{') {
+            String wrapped = "cl=0x";
+            char clusterHex[8];
+            snprintf(clusterHex, sizeof(clusterHex), "%04X", (unsigned)kUserDataClusterId);
+            wrapped += clusterHex;
+            wrapped += ",attr=0x";
+            char attrHex[8];
+            snprintf(attrHex, sizeof(attrHex), "%04X", (unsigned)kUserDataAttributeId);
+            wrapped += attrHex;
+            wrapped += ",val=";
+            wrapped += body;
+            return ensureProtocolEndpoint(wrapped, usable);
+        }
+    }
+
+    String shortcut = body;
+    shortcut.toLowerCase();
+    char encoded[96];
+    if (shortcut == "on") {
+        snprintf(
+            encoded,
+            sizeof(encoded),
+            "cl=0x%04X,attr=0x0000,val=0x1,ep=%u",
+            (unsigned)kZigbeeClusterOnOff,
+            (unsigned)usable
+        );
+        return String(encoded);
+    }
+    if (shortcut == "off") {
+        snprintf(
+            encoded,
+            sizeof(encoded),
+            "cl=0x%04X,attr=0x0000,val=0x0,ep=%u",
+            (unsigned)kZigbeeClusterOnOff,
+            (unsigned)usable
+        );
+        return String(encoded);
+    }
+    if (shortcut == "toggle") {
+        snprintf(
+            encoded,
+            sizeof(encoded),
+            "cl=0x%04X,cmd=0x02,ep=%u",
+            (unsigned)kZigbeeClusterOnOff,
+            (unsigned)usable
+        );
+        return String(encoded);
+    }
+
+    ZclCommandFields commandFields;
+    if (parseZclCommandBody(body.c_str(), usable, &commandFields) && commandFields.parsed) {
+        if (commandFields.payloadLength == 0) {
+            snprintf(
+                encoded,
+                sizeof(encoded),
+                "cl=0x%04X,cmd=0x%02X,ep=%u",
+                (unsigned)commandFields.clusterId,
+                (unsigned)commandFields.commandId,
+                (unsigned)usable
+            );
+            return String(encoded);
+        }
+        if (commandFields.clusterId == kZigbeeClusterWindowCovering
+            && commandFields.commandId == kZigbeeWindowCoveringCmdGoToLiftPercentage
+            && commandFields.payloadLength >= 1) {
+            snprintf(
+                encoded,
+                sizeof(encoded),
+                "cl=0x%04X,cmd=0x%02X,val=%u,ep=%u",
+                (unsigned)commandFields.clusterId,
+                (unsigned)commandFields.commandId,
+                (unsigned)commandFields.payload[0],
+                (unsigned)usable
+            );
+            return String(encoded);
+        }
+        if (commandFields.clusterId == kZigbeeClusterLevelControl
+            && commandFields.payloadLength >= 1) {
+            snprintf(
+                encoded,
+                sizeof(encoded),
+                "cl=0x%04X,cmd=0x%02X,val=%u,ep=%u",
+                (unsigned)commandFields.clusterId,
+                (unsigned)commandFields.commandId,
+                (unsigned)commandFields.payload[0],
+                (unsigned)usable
+            );
+            return String(encoded);
+        }
+        snprintf(
+            encoded,
+            sizeof(encoded),
+            "cl=0x%04X,cmd=0x%02X,ep=%u",
+            (unsigned)commandFields.clusterId,
+            (unsigned)commandFields.commandId,
+            (unsigned)usable
+        );
+        return String(encoded);
+    }
+    return body;
+}
+
+String DeviceTopicMap::normalizeZigbeeProtocolStatus(const char *message) {
+    if (message == nullptr || message[0] == '\0') {
+        return String();
+    }
+    // Prefer key=value parse so decimal val=70 works (not only val=0x…).
+    // Apply semantics from the packet's cl=/attr=, not from device type.
+    ZclWriteFields writeFields;
+    if (parseFullControlBody(message, 1, &writeFields)
+        && writeFields.parsedAny
+        && writeFields.hasWrite) {
+        if (writeFields.clusterId == kZigbeeClusterOnOff && writeFields.attributeId == 0x0000) {
+            return writeFields.attributeValue != 0 ? String("ON") : String("OFF");
+        }
+        if (writeFields.clusterId == kZigbeeClusterIasZone
+            && writeFields.attributeId == kZigbeeAttrIasZoneStatus) {
+            return (writeFields.attributeValue & 0x1u) != 0 ? String("LEAK") : String("DRY");
+        }
+        if (writeFields.clusterId == kZigbeeClusterWindowCovering
+            && writeFields.attributeId == kZigbeeAttrCurrentPositionLiftPercentage) {
+            return String((unsigned)writeFields.attributeValue);
+        }
+        if (writeFields.clusterId == kZigbeeClusterWindowCovering
+            && writeFields.attributeId == kZigbeeAttrWindowCoveringMoveStatus) {
+            if (writeFields.attributeValue == kZigbeeWindowCoveringMoveDown) {
+                return String("DOWN");
+            }
+            if (writeFields.attributeValue == kZigbeeWindowCoveringMoveUp) {
+                return String("UP");
+            }
+            return String("STOPPED");
+        }
+        if (writeFields.clusterId == kZigbeeClusterPowerConfig
+            && writeFields.attributeId == kZigbeeAttrBatteryPercentageRemaining) {
+            // MQTT often sends human % (0–100). ZCL raw is 0–200 in half-percent units.
+            unsigned percent = 0;
+            if (writeFields.attributeValue <= 100u) {
+                percent = (unsigned)writeFields.attributeValue;
+            } else if (zigbeeBatteryPercentageRemainingValid(writeFields.attributeValue)) {
+                percent = zigbeeBatteryPercentageFromRemaining(writeFields.attributeValue);
+            } else {
+                percent = 100;
+            }
+            char batteryMessage[24];
+            snprintf(batteryMessage, sizeof(batteryMessage), "BATTERY %u", percent);
+            return String(batteryMessage);
+        }
+        // userData (0xFC00) and other clusters: keep the shaped body so
+        // noteReportTelemetry can dispatch by cl= from the packet.
+        return String(message);
+    }
+    unsigned parsedCluster = 0;
+    unsigned parsedAttr = 0;
+    unsigned long parsedValue = 0;
+    if (sscanf(message, "cl=0x%X,attr=0x%X,val=0x%lX", &parsedCluster, &parsedAttr, &parsedValue) == 3
+        || sscanf(
+               message,
+               "%*[^ ] cl=0x%X,attr=0x%X,val=0x%lX",
+               &parsedCluster,
+               &parsedAttr,
+               &parsedValue
+           ) == 3) {
+        if (parsedCluster == kZigbeeClusterOnOff && parsedAttr == 0x0000) {
+            return parsedValue != 0 ? String("ON") : String("OFF");
+        }
+        if (parsedCluster == kZigbeeClusterIasZone && parsedAttr == kZigbeeAttrIasZoneStatus) {
+            return (parsedValue & 0x1u) != 0 ? String("LEAK") : String("DRY");
+        }
+        if (parsedCluster == kZigbeeClusterWindowCovering
+            && parsedAttr == kZigbeeAttrCurrentPositionLiftPercentage) {
+            return String((unsigned)parsedValue);
+        }
+        if (parsedCluster == kZigbeeClusterWindowCovering
+            && parsedAttr == kZigbeeAttrWindowCoveringMoveStatus) {
+            if (parsedValue == kZigbeeWindowCoveringMoveDown) {
+                return String("DOWN");
+            }
+            if (parsedValue == kZigbeeWindowCoveringMoveUp) {
+                return String("UP");
+            }
+            return String("STOPPED");
+        }
+        if (parsedCluster == kZigbeeClusterPowerConfig
+            && parsedAttr == kZigbeeAttrBatteryPercentageRemaining) {
+            unsigned percent = 0;
+            if (parsedValue <= 100u) {
+                percent = (unsigned)parsedValue;
+            } else if (zigbeeBatteryPercentageRemainingValid((uint32_t)parsedValue)) {
+                percent = zigbeeBatteryPercentageFromRemaining((uint32_t)parsedValue);
+            } else {
+                percent = 100;
+            }
+            char batteryMessage[24];
+            snprintf(batteryMessage, sizeof(batteryMessage), "BATTERY %u", percent);
+            return String(batteryMessage);
+        }
+    }
+    return String(message);
 }
 
 static bool parseNumericField(const String &text, uint32_t *outValue) {
@@ -660,7 +961,7 @@ static DeviceTopicEntry *findByMappedTopic(
         if (mappedTopicEquals(mappedTopic, topic)) {
             return entry;
         }
-        if (!DeviceTopicMap::usesTopicSuffix(entry->channelCount)) {
+        if (deviceUsesExactMqttTopics(entry) || !DeviceTopicMap::usesTopicSuffix(entry->channelCount)) {
             continue;
         }
         const size_t prefixLength = strlen(mappedTopic);
@@ -722,6 +1023,7 @@ DeviceTopicEntry *DeviceTopicMap::upsert(
     uint8_t preservedFullControl = 0;
     uint8_t preservedDebug = 0;
     uint8_t preservedPublishToMqtt = 0;
+    uint8_t preservedZigbeeProtocol = 0;
     uint8_t preservedZigbeeType = ZigbeeDeviceTypeUnknown;
     uint8_t preservedManufacturer = DeviceManufacturerUnknown;
     char *preservedModel = nullptr;
@@ -730,6 +1032,7 @@ DeviceTopicEntry *DeviceTopicMap::upsert(
         preservedFullControl = entry->fullControl;
         preservedDebug = entry->debug;
         preservedPublishToMqtt = entry->publishToMqtt;
+        preservedZigbeeProtocol = entry->zigbeeProtocol;
         preservedZigbeeType = entry->zigbeeType;
         preservedManufacturer = entry->manufacturer;
         preservedModel = entry->model;
@@ -751,6 +1054,7 @@ DeviceTopicEntry *DeviceTopicMap::upsert(
     entry->fullControl = preservedFullControl;
     entry->debug = preservedDebug;
     entry->publishToMqtt = preservedPublishToMqtt;
+    entry->zigbeeProtocol = preservedZigbeeProtocol;
     entry->zigbeeType = preservedZigbeeType;
     entry->manufacturer = preservedManufacturer;
     free(entry->model);
@@ -779,6 +1083,7 @@ DeviceTopicEntry *DeviceTopicMap::upsertFromEntry(const DeviceTopicEntry *source
     }
     entry->debug = source->debug ? 1 : 0;
     entry->publishToMqtt = source->publishToMqtt ? 1 : 0;
+    entry->zigbeeProtocol = source->zigbeeProtocol ? 1 : 0;
     if (source->zigbeeType != ZigbeeDeviceTypeUnknown) {
         entry->zigbeeType = source->zigbeeType;
     }
@@ -816,6 +1121,17 @@ DeviceTopicEntry *DeviceTopicMap::upsertFromEntry(const DeviceTopicEntry *source
                 source->customCommandCount
             )) {
             deviceCustomCommandClear(&entry->customCommands, &entry->customCommandCount);
+        }
+    }
+    // Reportable data is host-only; SPI sync never carries it — keep existing when absent.
+    if (source->reportableDataCount > 0) {
+        if (!reportableDataCopy(
+                &entry->reportableData,
+                &entry->reportableDataCount,
+                source->reportableData,
+                source->reportableDataCount
+            )) {
+            reportableDataClear(&entry->reportableData, &entry->reportableDataCount);
         }
     }
     return entry;
@@ -1031,7 +1347,15 @@ void DeviceTopicMap::replaceFromJson(const String &json) {
                 } else {
                     entry->transport = DeviceTransportZigbee;
                 }
-                if (clampDeviceTransport(entry->transport) != DeviceTransportMqtt) {
+                if (clampDeviceTransport(entry->transport) == DeviceTransportMqtt) {
+                    bool parsedZigbeeProtocol = false;
+                    if (extractJsonBool(object.c_str(), "zigbeeProtocol", parsedZigbeeProtocol)) {
+                        entry->zigbeeProtocol = parsedZigbeeProtocol ? 1 : 0;
+                    } else {
+                        entry->zigbeeProtocol = 0;
+                    }
+                } else {
+                    entry->zigbeeProtocol = 0;
                     bool parsedPublishToMqtt = false;
                     if (extractJsonBool(object.c_str(), "publishToMqtt", parsedPublishToMqtt)) {
                         entry->publishToMqtt = parsedPublishToMqtt ? 1 : 0;
@@ -1065,6 +1389,16 @@ void DeviceTopicMap::replaceFromJson(const String &json) {
                     if (!customValid) {
                         deviceCustomCommandClear(&entry->customCommands, &entry->customCommandCount);
                     }
+                }
+                reportableDataClear(&entry->reportableData, &entry->reportableDataCount);
+                String reportableSlice;
+                if (extractJsonKeyedSlice(object.c_str(), "reportableData", '[', reportableSlice)
+                    && reportableSlice.length() > 0) {
+                    reportableDataAssignFromJson(
+                        &entry->reportableData,
+                        &entry->reportableDataCount,
+                        reportableSlice.c_str()
+                    );
                 }
             }
         }
@@ -1294,7 +1628,10 @@ static void appendDeviceListEntryJson(
     json += ",\"transport\":\"";
     json += deviceTransportJsonId(deviceEntry->transport);
     json += "\"";
-    if (clampDeviceTransport(deviceEntry->transport) != DeviceTransportMqtt) {
+    if (clampDeviceTransport(deviceEntry->transport) == DeviceTransportMqtt) {
+        json += ",\"zigbeeProtocol\":";
+        json += deviceEntry->zigbeeProtocol ? "true" : "false";
+    } else {
         json += ",\"publishToMqtt\":";
         json += deviceEntry->publishToMqtt ? "true" : "false";
     }
@@ -1304,6 +1641,8 @@ static void appendDeviceListEntryJson(
     }
     json += ",\"customCommands\":";
     json += deviceCustomCommandsToJson(deviceEntry->customCommands, deviceEntry->customCommandCount);
+    json += ",\"reportableData\":";
+    json += reportableDataToJson(deviceEntry->reportableData, deviceEntry->reportableDataCount);
     if (isOnline != nullptr) {
         json += ",\"online\":";
         json += isOnline(deviceEntry->ieee) ? "true" : "false";
