@@ -355,6 +355,35 @@ const char *ConsoleStore::gaugeTypeJsonId(uint8_t gaugeType) {
     return "arc";
 }
 
+uint8_t ConsoleStore::parseLinearStyleId(const char *text) {
+    if (text == nullptr) {
+        return CONSOLE_LINEAR_STYLE_BAR;
+    }
+    if (strcmp(text, "filled") == 0) {
+        return CONSOLE_LINEAR_STYLE_FILLED;
+    }
+    if (strcmp(text, "vertical") == 0) {
+        return CONSOLE_LINEAR_STYLE_VERTICAL;
+    }
+    if (strcmp(text, "verticalFilled") == 0) {
+        return CONSOLE_LINEAR_STYLE_VERTICAL_FILLED;
+    }
+    return CONSOLE_LINEAR_STYLE_BAR;
+}
+
+const char *ConsoleStore::linearStyleJsonId(uint8_t linearStyle) {
+    if (linearStyle == CONSOLE_LINEAR_STYLE_FILLED) {
+        return "filled";
+    }
+    if (linearStyle == CONSOLE_LINEAR_STYLE_VERTICAL) {
+        return "vertical";
+    }
+    if (linearStyle == CONSOLE_LINEAR_STYLE_VERTICAL_FILLED) {
+        return "verticalFilled";
+    }
+    return "bar";
+}
+
 void ConsoleStore::freeCompositeCellList(ConsoleCompositeCell *&listHead) {
     while (listHead != nullptr) {
         ConsoleCompositeCell *next = listHead->next;
@@ -557,16 +586,20 @@ bool ConsoleStore::parseGaugeConfig(const char *bindingJson, ConsoleBinding *bin
     }
     memset(gauge, 0, sizeof(*gauge));
     gauge->gaugeType = CONSOLE_GAUGE_TYPE_ARC;
+    gauge->linearStyle = CONSOLE_LINEAR_STYLE_BAR;
     gauge->gaugeMin = 0.0f;
     gauge->gaugeMax = 100.0f;
     gauge->ranges = nullptr;
     String typeText;
+    String linearStyleText;
     double minValue = 0.0;
     double maxValue = 100.0;
     extractJsonString(gaugeJson.c_str(), "type", typeText);
+    extractJsonString(gaugeJson.c_str(), "linearStyle", linearStyleText);
     extractJsonDouble(gaugeJson.c_str(), "min", minValue);
     extractJsonDouble(gaugeJson.c_str(), "max", maxValue);
     gauge->gaugeType = parseGaugeTypeId(typeText.c_str());
+    gauge->linearStyle = parseLinearStyleId(linearStyleText.c_str());
     gauge->gaugeMin = (float)minValue;
     gauge->gaugeMax = (float)maxValue;
     if (gauge->gaugeMax < gauge->gaugeMin) {
@@ -1856,7 +1889,13 @@ void ConsoleStore::appendGaugeJson(String &json, const ConsoleBinding *binding) 
     }
     json += ",\"gauge\":{\"type\":\"";
     json += gaugeTypeJsonId(binding->gauge->gaugeType);
-    json += "\",\"min\":";
+    json += "\"";
+    if (binding->gauge->gaugeType == CONSOLE_GAUGE_TYPE_LINEAR) {
+        json += ",\"linearStyle\":\"";
+        json += linearStyleJsonId(binding->gauge->linearStyle);
+        json += "\"";
+    }
+    json += ",\"min\":";
     json += String(binding->gauge->gaugeMin, 4);
     json += ",\"max\":";
     json += String(binding->gauge->gaugeMax, 4);
