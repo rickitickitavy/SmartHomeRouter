@@ -3,7 +3,9 @@
 #include "GlobalSettings.h"
 #include "SpiProtocol.h"
 #include "UserDataPayload.h"
+#include "ReportableData.h"
 #include "DeviceCustomCommand.h"
+#include "ZigbeeDeviceType.h"
 #include <Arduino.h>
 #include <stddef.h>
 
@@ -19,10 +21,13 @@ struct DeviceTopicEntry {
     uint8_t userDataFieldCount;
     DeviceCustomCommandDef *customCommands;
     uint8_t customCommandCount;
+    ReportableDataDef *reportableData;
+    uint8_t reportableDataCount;
     uint8_t channelCount;
     uint8_t fullControl;
     uint8_t debug;
     uint8_t publishToMqtt;
+    uint8_t zigbeeProtocol;
     uint8_t zigbeeType;
     uint8_t manufacturer;
     char *model;
@@ -39,6 +44,18 @@ inline bool devicePublishesToMqtt(const DeviceTopicEntry *entry) {
         return true;
     }
     return entry->publishToMqtt != 0;
+}
+
+inline bool deviceUsesExactMqttTopics(const DeviceTopicEntry *entry) {
+    if (entry == nullptr || !entry->used) {
+        return false;
+    }
+    return clampDeviceTransport(entry->transport) == DeviceTransportMqtt && entry->zigbeeProtocol != 0;
+}
+
+inline bool deviceUsesZigbeeMqttProtocol(const DeviceTopicEntry *entry) {
+    // All MQTT device classes, including userData (cluster 0xFC00).
+    return deviceUsesExactMqttTopics(entry);
 }
 
 inline const char *deviceTopicCStr(const char *value) {
@@ -87,6 +104,13 @@ public:
     static String commandPublishTopic(const DeviceTopicEntry *entry, uint8_t endpoint);
     static String statePublishPayload(const DeviceTopicEntry *entry, uint8_t endpoint, const char *message);
     static bool parseChannelPayload(const char *payload, uint8_t *endpoint, String *action);
+    static uint8_t endpointFromProtocolBody(const char *body, uint8_t fallbackEndpoint);
+    static String encodeZigbeeProtocolCommand(
+        const DeviceTopicEntry *entry,
+        const char *message,
+        uint8_t endpoint
+    );
+    static String normalizeZigbeeProtocolStatus(const char *message);
 
     struct ZclWriteFields {
         uint16_t clusterId;

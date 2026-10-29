@@ -5,6 +5,7 @@
 #include "DeviceManufacturer.h"
 #include "JsonField.h"
 #include "UserDataPayload.h"
+#include "ReportableData.h"
 #include "ZigbeeDeviceType.h"
 #include "ZigbeeSpiProxy.h"
 #include "FirmwareOta.h"
@@ -2523,7 +2524,16 @@ void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
     } else if (!isEdit) {
         entry->debug = 0;
     }
-    if (transport != DeviceTransportMqtt) {
+    if (transport == DeviceTransportMqtt) {
+        // Editable on create and later edit (unlike transport, which stays fixed).
+        bool parsedZigbeeProtocol = false;
+        if (extractJsonBool(body.c_str(), "zigbeeProtocol", parsedZigbeeProtocol)) {
+            entry->zigbeeProtocol = parsedZigbeeProtocol ? 1 : 0;
+        } else if (!isEdit) {
+            entry->zigbeeProtocol = 0;
+        }
+    } else {
+        entry->zigbeeProtocol = 0;
         bool parsedPublishToMqtt = false;
         if (extractJsonBool(body.c_str(), "publishToMqtt", parsedPublishToMqtt)) {
             entry->publishToMqtt = parsedPublishToMqtt ? 1 : 0;
@@ -2616,6 +2626,33 @@ void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
                 return;
             }
         }
+    }
+    reportableDataClear(&entry->reportableData, &entry->reportableDataCount);
+    String reportableSlice;
+    const bool haveReportable =
+        extractJsonKeyedSlice(body.c_str(), "reportableData", '[', reportableSlice);
+    if (haveReportable) {
+        if (reportableSlice.length() > 0) {
+            reportableDataAssignFromJson(
+                &entry->reportableData,
+                &entry->reportableDataCount,
+                reportableSlice.c_str()
+            );
+        }
+    } else if (!isEdit) {
+        reportableDataAssignSeeded(
+            &entry->reportableData,
+            &entry->reportableDataCount,
+            entry->manufacturer,
+            entry->zigbeeType
+        );
+    } else if (existing != nullptr && existing->reportableDataCount > 0) {
+        reportableDataCopy(
+            &entry->reportableData,
+            &entry->reportableDataCount,
+            existing->reportableData,
+            existing->reportableDataCount
+        );
     }
     if (foundDevices != nullptr) {
         foundDevices->removeIeee(ieee);

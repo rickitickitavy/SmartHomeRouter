@@ -383,6 +383,7 @@ void AutomationEngine::applyAction(const AutomationAction *action) {
             char customPayload[AUTOMATION_VALUE_MAX];
             if (!deviceCustomCommandBuildPayloadForTransport(
                     entry->transport,
+                    deviceUsesZigbeeMqttProtocol(entry),
                     command,
                     action->customValue,
                     customPayload,

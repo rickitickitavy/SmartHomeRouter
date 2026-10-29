@@ -1,0 +1,15 @@
+---
+description: Device-command / Zigbee fixes apply to all device kinds unless human scopes them
+alwaysApply: true
+---
+
+# All device kinds (default scope)
+
+Keep in sync with `~/.cursor/rules/all-device-kinds.mdc` when that file changes.
+
+When the human talks about Zigbee (or mixed) devices missing commands, group/automation bursts, delivery, retries, pacing, or “not all devices received the command”:
+
+- Default scope is **ALL device kinds** (On/Off, covering, write-attr, cluster commands, multi-endpoint / multi-channel, and any other command path in the same radio/control stack) — not only On/Off switchers.
+- NEVER propose, design, or implement a fix that applies **only** to On/Off (or any other single kind) unless the human **explicitly** says to limit the change to that kind.
+- Examples of group/channel talk (“4 relays”, “4 channels of the same device”) are still **all kinds** unless they name a kind restriction.
+- Do not offer “On/Off-only” options as the default path; if a kind-limited option exists, label it clearly as scoped and only use it after an explicit human choice.

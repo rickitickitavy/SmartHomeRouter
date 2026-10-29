@@ -204,7 +204,16 @@ static void applyDeviceConfigPayload(const char *payload) {
     if (extractJsonBool(payload, "debug", parsedDebug)) {
         entry->debug = parsedDebug ? 1 : 0;
     }
-    if (clampDeviceTransport(entry->transport) != DeviceTransportMqtt) {
+    if (clampDeviceTransport(entry->transport) == DeviceTransportMqtt) {
+        // Editable on create and later edit (unlike transport, which stays fixed).
+        bool parsedZigbeeProtocol = false;
+        if (extractJsonBool(payload, "zigbeeProtocol", parsedZigbeeProtocol)) {
+            entry->zigbeeProtocol = parsedZigbeeProtocol ? 1 : 0;
+        } else if (!isEdit) {
+            entry->zigbeeProtocol = 0;
+        }
+    } else {
+        entry->zigbeeProtocol = 0;
         bool parsedPublishToMqtt = false;
         if (extractJsonBool(payload, "publishToMqtt", parsedPublishToMqtt)) {
             entry->publishToMqtt = parsedPublishToMqtt ? 1 : 0;
@@ -238,11 +247,29 @@ static void applyDeviceConfigPayload(const char *payload) {
                 customCommandsSlice.c_str(),
                 &customValid
             )
+
             || !customValid) {
             LOGGER.error("Invalid customCommands");
             deviceCustomCommandClear(&entry->customCommands, &entry->customCommandCount);
             return;
         }
+    }
+    reportableDataClear(&entry->reportableData, &entry->reportableDataCount);
+    String reportableSlice;
+    if (extractJsonKeyedSlice(payload, "reportableData", '[', reportableSlice)
+        && reportableSlice.length() > 0) {
+        reportableDataAssignFromJson(
+            &entry->reportableData,
+            &entry->reportableDataCount,
+            reportableSlice.c_str()
+        );
+    } else if (!isEdit) {
+        reportableDataAssignSeeded(
+            &entry->reportableData,
+            &entry->reportableDataCount,
+            entry->manufacturer,
+            entry->zigbeeType
+        );
     }
     mqttClient->subscribeDeviceCommands();
     persistHostDeviceList();
@@ -257,7 +284,7 @@ struct PendingWifiCommand {
     bool used;
     uint8_t ieee[8];
     uint8_t endpoint;
-    char action[64];
+    char action[96];
 };
 
 static constexpr int kPendingWifiCommands = 8;
@@ -270,6 +297,14 @@ static bool enqueueWifiDeviceCommand(const DeviceTopicEntry *entry, const char *
     }
     if (deviceTopicEmpty(entry->commandTopic)) {
         LOGGER.warning("WiFi command topic is empty");
+        return false;
+    }
+    const uint8_t commandEndpoint = DeviceTopicMap::isUsableEndpoint(endpoint) ? endpoint : 1;
+    String publishAction = String(action);
+    if (deviceUsesZigbeeMqttProtocol(entry)) {
+        publishAction = DeviceTopicMap::encodeZigbeeProtocolCommand(entry, action, commandEndpoint);
+    }
+    if (publishAction.length() == 0) {
         return false;
     }
     portENTER_CRITICAL(&pendingWifiCommandMux);
@@ -285,8 +320,8 @@ static bool enqueueWifiDeviceCommand(const DeviceTopicEntry *entry, const char *
     }
     memset(slot, 0, sizeof(*slot));
     memcpy(slot->ieee, entry->ieee, 8);
-    slot->endpoint = DeviceTopicMap::isUsableEndpoint(endpoint) ? endpoint : 1;
-    strncpy(slot->action, action, sizeof(slot->action) - 1);
+    slot->endpoint = commandEndpoint;
+    strncpy(slot->action, publishAction.c_str(), sizeof(slot->action) - 1);
     slot->used = true;
     portEXIT_CRITICAL(&pendingWifiCommandMux);
     return true;
@@ -520,6 +555,9 @@ static DeviceTopicEntry *findWifiStateEntry(const char *topic, uint8_t *topicEnd
         if (entry == nullptr || entry->transport != DeviceTransportMqtt || deviceTopicEmpty(entry->stateTopic)) {
             continue;
         }
+        if (deviceUsesExactMqttTopics(entry)) {
+            continue;
+        }
         const size_t mappedLength = strlen(entry->stateTopic);
         if (strncmp(topic, entry->stateTopic, mappedLength) != 0) {
             continue;
@@ -556,7 +594,10 @@ static void applyWifiMqttState(const char *topic, const char *payload) {
     }
     String body = trimmedMqttText(payload);
     uint8_t statusEndpoint = topicEndpoint;
-    if (DeviceTopicMap::usesPayloadParse(entry->channelCount)) {
+    if (deviceUsesZigbeeMqttProtocol(entry)) {
+        statusEndpoint = DeviceTopicMap::endpointFromProtocolBody(body.c_str(), 1);
+        body = DeviceTopicMap::normalizeZigbeeProtocolStatus(body.c_str());
+    } else if (DeviceTopicMap::usesPayloadParse(entry->channelCount)) {
         uint8_t parsedEndpoint = 0;
         String parsedAction;
         if (DeviceTopicMap::parseChannelPayload(payload, &parsedEndpoint, &parsedAction)) {
@@ -1216,6 +1257,7 @@ static void runDeviceRegistryFixtures() {
         || deviceManufacturerFromJoinString("Schneider Electric") != DeviceManufacturerSchneider
         || deviceManufacturerFromJoinString("Namron") != DeviceManufacturerNamron
         || deviceManufacturerFromJoinString("Develco") != DeviceManufacturerDevelco
+        || deviceManufacturerFromJoinString("Zbeacon") != DeviceManufacturerZbeacon
         || deviceConfigListFor(DeviceManufacturerInnr, ZigbeeDeviceTypeOnOff, nullptr) == 0
         || deviceConfigListFor(DeviceManufacturerDevelco, ZigbeeDeviceTypeOnOff, nullptr) == 0
         || deviceConfigListFor(DeviceManufacturerPhilipsHue, 11 /* levelControl */, nullptr) == 0

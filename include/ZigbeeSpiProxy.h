@@ -129,6 +129,14 @@ private:
     };
     static_assert(sizeof(EndpointStatus) < 64, "EndpointStatus must not embed status buffers");
 
+    struct ReportableValueSlot {
+        uint8_t endpoint;
+        uint16_t cluster;
+        uint16_t attribute;
+        char *value;
+    };
+    static constexpr uint8_t kReportableValueSlotMax = 32;
+
     struct CachedDevice {
         CachedDevice *next;
         uint8_t ieee[8];
@@ -144,8 +152,10 @@ private:
         bool hasRssi;
         bool hasBattery;
         unsigned batteryPercent;
+        ReportableValueSlot *reportableValues;
+        uint8_t reportableValueCount;
     };
-    static_assert(sizeof(CachedDevice) < 96, "CachedDevice must not embed manufacturer/model arrays");
+    static_assert(sizeof(CachedDevice) < 112, "CachedDevice must not embed manufacturer/model arrays");
 
     struct PendingDeviceChange {
         bool used;
@@ -231,6 +241,14 @@ private:
     static CoveringStatus *ensureCoveringStatus(EndpointStatus *status);
     static void assignBoundedField(char *&destination, const char *source, size_t maxLen);
     void noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, const char *message);
+    void noteReportableValue(
+        CachedDevice *slot,
+        uint8_t endpoint,
+        uint16_t cluster,
+        uint16_t attribute,
+        const char *valueText
+    );
+    void clearReportableValues(CachedDevice *slot);
     void notifyDeviceLiveChanged(const uint8_t ieee[8]);
     bool enqueueRegistryFrame(uint8_t flags, const DeviceTopicEntry *entry);
     bool queueDeviceChange(uint8_t flags, const DeviceTopicEntry *entry);
