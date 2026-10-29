@@ -6343,15 +6343,40 @@
             return param;
         }
 
+        function reportableFormatTypeId(paramId) {
+            var parsed = parseReportableParamId(paramId);
+            if (!parsed) {
+                return "";
+            }
+            var cluster = parseInt(parsed.cluster, 0);
+            if (cluster === 0x0402) {
+                return "temperatureMeasurement";
+            }
+            if (cluster === 0x0405) {
+                return "relativeHumidity";
+            }
+            if (cluster === 0x0403) {
+                return "pressureMeasurement";
+            }
+            if (cluster === 0x0400 || cluster === 0x0401) {
+                return "illuminanceMeasurement";
+            }
+            if (cluster === 0x0404) {
+                return "flowMeasurement";
+            }
+            return "";
+        }
+
         function placeBindingResolvedState(device, binding) {
             var param = normalizeBindingParamForDevice(device, binding);
-            var reportableText = placeReportableValueForParam(
-                device,
-                param,
-                placeBindingChannel(binding)
-            );
-            if (reportableText !== "") {
-                return reportableText;
+            if (parseReportableParamId(param)) {
+                // Do not fall back to shared endpoint status — that makes every
+                // reportable Parameter show the same last measurement.
+                return placeReportableValueForParam(
+                    device,
+                    param,
+                    placeBindingChannel(binding)
+                );
             }
             if (param === "battery") {
                 return placeDeviceBatteryText(device);
@@ -6470,8 +6495,12 @@
                 return NaN;
             }
             var typeId = device.type || "";
-            var param = placeBindingParam(binding);
+            var param = normalizeBindingParamForDevice(device, binding);
             var rawState = placeBindingResolvedState(device, binding);
+            var reportableType = reportableFormatTypeId(param);
+            if (reportableType) {
+                return placeMeasurementNumericValue(reportableType, rawState, binding.unit);
+            }
             if (isMeasurementDeviceType(typeId) && param !== "battery") {
                 return placeMeasurementNumericValue(typeId, rawState, binding.unit);
             }
@@ -6886,7 +6915,7 @@
             }
             var typeId = device.type || "";
             var channel = placeBindingChannel(binding);
-            var param = placeBindingParam(binding);
+            var param = normalizeBindingParamForDevice(device, binding);
             var showTypeControls = param === "status"
                 || param === ""
                 || (typeId === "windowCovering" && param === "position");
@@ -7006,13 +7035,19 @@
                 var rawState = placeBindingResolvedState(device, binding);
                 var gaugeNumeric;
                 var gaugeDisplay;
-                if (isMeasurementDeviceType(typeId) && param !== "battery") {
-                    gaugeNumeric = placeMeasurementNumericValue(typeId, rawState, binding.unit);
+                var gaugeFormatType = reportableFormatTypeId(param) || typeId;
+                if ((reportableFormatTypeId(param) || isMeasurementDeviceType(typeId))
+                    && param !== "battery") {
+                    gaugeNumeric = placeMeasurementNumericValue(
+                        gaugeFormatType,
+                        rawState,
+                        binding.unit
+                    );
                     gaugeDisplay = placeMeasurementGaugeDisplay(
-                        typeId,
+                        gaugeFormatType,
                         rawState,
                         binding.unit,
-                        placeBindingDecimals(binding, typeId)
+                        placeBindingDecimals(binding, gaugeFormatType)
                     );
                 } else {
                     gaugeNumeric = parseBindingNumericValue(rawState);
@@ -7023,6 +7058,26 @@
                     gaugeNumeric,
                     gaugeDisplay
                 ));
+            } else if (parseReportableParamId(param)) {
+                var reportableValueLabel = document.createElement("span");
+                reportableValueLabel.className = "console-sensor-value";
+                var reportableRaw = placeBindingResolvedState(device, binding);
+                var reportableFormat = reportableFormatTypeId(param) || typeId;
+                if (reportableFormat && isMeasurementDeviceType(reportableFormat)) {
+                    reportableValueLabel.textContent = placeFormatMeasurement(
+                        reportableFormat,
+                        reportableRaw,
+                        binding.unit,
+                        placeBindingDecimals(binding, reportableFormat)
+                    );
+                } else {
+                    reportableValueLabel.textContent = reportableRaw
+                        ? (binding.unit
+                            ? (reportableRaw + " " + binding.unit)
+                            : reportableRaw)
+                        : "—";
+                }
+                controls.appendChild(reportableValueLabel);
             } else if (isMeasurementDeviceType(typeId) && param !== "battery") {
                 var valueLabel = document.createElement("span");
                 valueLabel.className = "console-sensor-value";
