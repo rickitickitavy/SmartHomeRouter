@@ -1,17 +1,28 @@
-# ESP32 Zigbee–MQTT gateway
+# Mini-HA router
 
-PlatformIO / Arduino firmware for **two chips, two images**:
+PlatformIO / Arduino firmware for a **LAN Mini-HA router / hub** (Wi‑Fi AP/STA + Zigbee + MQTT + automation) — not a WAN IP router. Two chips, two images:
 
 | Role | Chip | PlatformIO env | Responsibility |
 |------|------|----------------|----------------|
 | **Host** | ESP32-S3-N16R8 | `esp32-s3-host` | Wi‑Fi (AP/STA), web console, MQTT, device registry, SPI master, joined OTA |
 | **Slave** | ESP32-C6 | `esp32-c6-slave` | Zigbee ZCZR coordinator, SPI slave |
 
+### What it does
+
+- Dual-chip Zigbee coordinator (slave) orchestrated by a Wi‑Fi host over SPI
+- Web console with role-based access (admin / simple user)
+- Device registry for Zigbee, MQTT, and user-data devices
+- MQTT as remote broker client or onboard local broker
+- Automations (triggers, conditions, actions)
+- Household control consoles (widgets, gauges, bindings)
+- Joined firmware update (slave + host in one package)
+- User-data cluster devices for custom attributes
+
 Role is fixed by **which image is flashed** to which chip (compile-time `BOARD_ROLE_HOST` / `BOARD_ROLE_SLAVE`). There is **no GPIO15 role strap** and **no shared binary** for both boards. Field updates use one **joined package** (ZIP with `slave.bin` + `host.bin`) from the web console **System → Update**.
 
 The host publishes device state to **per-device MQTT topics**. The slave runs the Zigbee coordinator after the host pushes settings.
 
-This is not a port of the Node.js Zigbee2MQTT converter database.
+This is not a port of the Node.js Zigbee2MQTT converter database. The default SoftAP/STA network name `z2m-gateway` is a **Wi‑Fi BSSID**, not the product title.
 
 ## Hardware / USB
 
@@ -101,7 +112,7 @@ Wi-Fi group (also the **WiFi** sidebar form):
 
 | Field | Meaning |
 |-------|---------|
-| **BSSID** | One network name for STA join and AP advertise (default `z2m-gateway`) |
+| **BSSID** | One network name for STA join and AP advertise (default `z2m-gateway`; network name only, not the Mini-HA router product title) |
 | **PASSWORD** | PSK for STA and AP. Default `00000000` |
 | **DEVICE_NAME** | Wi-Fi hostname only (not the AP/STA network name) |
 | **AP IP** | SoftAP address, AP mode only. Default `192.168.0.1` |
