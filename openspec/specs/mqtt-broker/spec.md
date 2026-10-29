@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Gives the host an optional lightweight MQTT 3.1.1 broker so the gateway can replace an external broker (including Home Assistant) on the LAN when SERVER TYPE is local.
+Gives the Mini-HA router host an optional lightweight MQTT 3.1.1 broker so it can replace an external broker (including Home Assistant) on the LAN when SERVER TYPE is local.
 
 ## Requirements
 
