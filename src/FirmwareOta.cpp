@@ -274,9 +274,10 @@ void FirmwareOta::fail(const char *message) {
     streamPos = 0;
     slaveFrameFails = 0;
     slavePackClaimed = false;
-    slaveNoRespondResets = 0;
+    slaveSpiCycleCount = 0;
     slaveVerifyDeadlineMs = 0;
     slaveVerifyResetPending = false;
+    slaveVerifyAwaitingReadyForResend = false;
     endSlaveSpiClockOverride();
     STATUS_RGB.setUpdateBlinkManual(false);
     clearStagingFiles();
@@ -690,11 +691,19 @@ void FirmwareOta::startSlaveUploadCycle() {
     slaveFrameFails = 0;
     slavePackClaimed = false;
     slaveVerifyResetPending = false;
+    slaveVerifyAwaitingReadyForResend = false;
+    if (slaveSpiCycleCount < 255) {
+        slaveSpiCycleCount++;
+    }
     currentPhase = Phase::Slave;
     beginSlaveSpiClockOverride();
     STATUS_RGB.setUpdateBlinkManual(true);
     INTER_CHIP_HOST.holdForFirmwareOta();
     INTER_CHIP_HOST.noteKeepaliveQuiet();
+    LOGGER.info(
+        "Slave SPI transfer cycle "
+        + String((int)slaveSpiCycleCount) + "/" + String((int)kSlaveVerifyMaxCycles)
+    );
 }
 
 void FirmwareOta::beginSlaveVersionVerify() {
@@ -704,7 +713,7 @@ void FirmwareOta::beginSlaveVersionVerify() {
     lastSlavePayloadLength = 0;
     lastSlaveDataBytes = 0;
     slaveVerifyResetPending = false;
-    slaveNoRespondResets = 0;
+    slaveVerifyAwaitingReadyForResend = false;
     INTER_CHIP_HOST.clearSlaveFirmwareVersion();
     slaveVerifyDeadlineMs = millis() + kSlaveVerifyWaitMs;
     currentPhase = Phase::VerifyingSlave;
@@ -712,7 +721,8 @@ void FirmwareOta::beginSlaveVersionVerify() {
     LOGGER.info(
         "Slave image transferred; waiting up to 20s for version "
         + String(expectedSlaveVersion[0] != '\0' ? expectedSlaveVersion : "(changed)")
-        + " (no-respond resets 0/" + String((int)kSlaveVerifyMaxResets) + ")"
+        + " (SPI cycle "
+        + String((int)slaveSpiCycleCount) + "/" + String((int)kSlaveVerifyMaxCycles) + ")"
     );
 }
 
@@ -724,11 +734,23 @@ void FirmwareOta::pumpSlaveVersionVerify() {
         slaveVerifyResetPending = false;
         INTER_CHIP_HOST.clearSlaveFirmwareVersion();
         INTER_CHIP_HOST.resetSlaveSynchronous();
-        slaveVerifyDeadlineMs = millis() + kSlaveVerifyWaitMs;
+        slaveVerifyAwaitingReadyForResend = true;
         LOGGER.info(
-            "Slave reset (no version response); waiting ready and version "
-            + String((int)slaveNoRespondResets) + "/" + String((int)kSlaveVerifyMaxResets)
+            "Slave reset after version verify fail; waiting ready then full SPI resend "
+            + String((int)slaveSpiCycleCount) + "/" + String((int)kSlaveVerifyMaxCycles)
         );
+        return;
+    }
+    if (slaveVerifyAwaitingReadyForResend) {
+        if (!INTER_CHIP_HOST.isNormal()) {
+            return;
+        }
+        slaveVerifyAwaitingReadyForResend = false;
+        LOGGER.info(
+            "Slave ready after verify fail; starting full SPI transfer "
+            + String((int)(slaveSpiCycleCount + 1)) + "/" + String((int)kSlaveVerifyMaxCycles)
+        );
+        startSlaveUploadCycle();
         return;
     }
     if (slaveVersionMatchesExpected()) {
@@ -742,38 +764,25 @@ void FirmwareOta::pumpSlaveVersionVerify() {
         }
         return;
     }
-    // Pre-OTA version means the slave has not rebooted into the new image yet — keep waiting.
-    // Never treat that as a mismatch resend (that caused multi-minute double SPI uploads).
+    // Keep waiting through the full window (including pre-OTA / empty samples).
     if ((long)(millis() - slaveVerifyDeadlineMs) < 0) {
         return;
     }
-    // Deadline: decide from the sample we have (must have a version before any SPI resend).
-    if (!slaveVersionSampleAvailable() || slaveVersionIsPreOta()) {
-        if (slaveNoRespondResets >= kSlaveVerifyMaxResets) {
-            fail("Slave did not report expected firmware version after transfer");
-            return;
-        }
-        slaveNoRespondResets++;
-        slaveVerifyResetPending = true;
-        LOGGER.warning(
-            !slaveVersionSampleAvailable()
-                ? ("Slave did not respond with version within 20s; will reset "
-                   + String((int)slaveNoRespondResets) + "/"
-                   + String((int)kSlaveVerifyMaxResets))
-                : ("Slave still reports pre-OTA version \""
-                   + String(INTER_CHIP_HOST.slaveFirmwareVersion())
-                   + "\" after 20s; will reset "
-                   + String((int)slaveNoRespondResets) + "/"
-                   + String((int)kSlaveVerifyMaxResets))
-        );
+    // Deadline without expected version: reboot → wait ready → full SPI cycle (max 3).
+    if (slaveSpiCycleCount >= kSlaveVerifyMaxCycles) {
+        fail("Slave did not report expected firmware version after transfer");
         return;
     }
+    const String seen =
+        slaveVersionSampleAvailable()
+            ? String(INTER_CHIP_HOST.slaveFirmwareVersion())
+            : String("(none)");
     LOGGER.warning(
-        "Slave version mismatch after wait (seen=\""
-        + String(INTER_CHIP_HOST.slaveFirmwareVersion())
-        + "\"); re-uploading SPI image"
+        "Slave version verify failed after 20s (seen=\"" + seen
+        + "\"); will reboot and full SPI resend "
+        + String((int)(slaveSpiCycleCount + 1)) + "/" + String((int)kSlaveVerifyMaxCycles)
     );
-    startSlaveUploadCycle();
+    slaveVerifyResetPending = true;
 }
 
 void FirmwareOta::finishSlaveOnlySuccess() {
@@ -920,7 +929,7 @@ void FirmwareOta::pumpPackagePrepare() {
     }
     strncpy(preOtaSlaveVersion, INTER_CHIP_HOST.slaveFirmwareVersion(), sizeof(preOtaSlaveVersion) - 1);
     preOtaSlaveVersion[sizeof(preOtaSlaveVersion) - 1] = '\0';
-    slaveNoRespondResets = 0;
+    slaveSpiCycleCount = 0;
     startSlaveUploadCycle();
     LOGGER.info(
         hasHostImage ? "Joined package stream ready, updating slave then host"

@@ -1,0 +1,17 @@
+---
+description: Console UI fixes must stay synced between operator and simple-user pages
+alwaysApply: true
+---
+
+# Sync operator and simple-user console UI
+
+Keep in sync with `~/.cursor/rules/sync-operator-simple-user-ui.mdc` when that file changes.
+
+Operator / base console live view is primarily `data/index.html` (Place and related console rendering). Simple-user consoles are `data/user.html`. Shared styles are often in `data/css/all.css`.
+
+When fixing or changing console widget / binding / live-value / gauge / connection / device-control display behavior:
+
+- ALWAYS apply the same behavioral fix to **both** the operator page and the simple-user page unless the human **explicitly** scopes the change to one page.
+- NEVER leave a fix only in `index.html` (or only in `user.html`) when the same rendering or live-value path exists on the other page.
+- Before calling a console UI fix done, verify the matching helper/path on the other page (for example reportable param resolution, measurement formatting, gauge styles, connection overlay).
+- Shared CSS in `data/css/all.css` that both pages use MUST stay consistent with both pages’ markup/classes.

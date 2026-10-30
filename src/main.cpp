@@ -18,6 +18,7 @@
 #include "UserStore.h"
 #include "ConsoleStore.h"
 #if defined(BOARD_ROLE_HOST)
+#include "ActionCommandQueue.h"
 #include "AutomationStore.h"
 #include "AutomationEngine.h"
 #include "EmailSender.h"
@@ -72,6 +73,7 @@ static ConsoleStore *consoleStore = nullptr;
 static AutomationStore *automationStore = nullptr;
 static AutomationEngine *automationEngine = nullptr;
 static EmailSender *emailSender = nullptr;
+ActionCommandQueue actionCommandQueue;
 #endif
 static FoundDeviceList *foundDevices = nullptr;
 static DeviceStore *deviceStore = nullptr;
@@ -410,7 +412,7 @@ static void applyRegisteredDeviceCommand(
     ZIGBEE_SPI_PROXY.controlOnOff(entry->ieee, action.c_str(), commandEndpoint);
 }
 
-static int applyManualDeviceCommand(const char *ieeeText, const char *payload, int channel) {
+static int applyManualDeviceCommandImmediate(const char *ieeeText, const char *payload, int channel) {
     if (topicMap == nullptr) {
         return 400;
     }
@@ -450,6 +452,18 @@ static int applyManualDeviceCommand(const char *ieeeText, const char *payload, i
     }
     applyRegisteredDeviceCommand(entry, applyPayload, topicEndpoint);
     return 200;
+}
+
+static int applyManualDeviceCommand(const char *ieeeText, const char *payload, int channel) {
+#if defined(BOARD_ROLE_HOST)
+    if (settingsManager != nullptr && settingsManager->useQueueForBaseDeviceCommand()) {
+        if (!actionCommandQueue.enqueueDeviceCommand(ieeeText, payload, channel)) {
+            return 503;
+        }
+        return 200;
+    }
+#endif
+    return applyManualDeviceCommandImmediate(ieeeText, payload, channel);
 }
 
 static void hostCollectZigbeeStatuses() {
@@ -1086,6 +1100,8 @@ static String hostGatewayStatusJson() {
     json += String((unsigned long)(emailSender != nullptr ? emailSender->emailsSent() : 0));
     json += ",\"emailQueue\":";
     json += String((unsigned long)(emailSender != nullptr ? emailSender->emailsInQueue() : 0));
+    json += ",\"actionQueue\":";
+    json += String((unsigned long)actionCommandQueue.busyCount());
     json += "}";
     return json;
 }
@@ -1994,11 +2010,20 @@ static void setupHost() {
     webConsole->setDevicesFileHandler([]() {
         return settingsManager != nullptr ? settingsManager->devicesJsonFile() : String("[]");
     });
+    actionCommandQueue.begin();
+    actionCommandQueue.setHandlers(
+        applyManualDeviceCommandImmediate,
+        [](const AutomationAction *action, uint8_t depth) {
+            if (automationEngine != nullptr) {
+                automationEngine->applyQueuedAction(action, depth);
+            }
+        }
+    );
     automationEngine->begin(
         automationStore,
         &ZIGBEE_SPI_PROXY,
         topicMap,
-        applyManualDeviceCommand,
+        applyManualDeviceCommandImmediate,
         emailSender
     );
     webConsole->setActionRunner([](const char *actionObjectJson) -> int {
@@ -2152,6 +2177,7 @@ void loop() {
     if (automationEngine != nullptr) {
         automationEngine->tick();
     }
+    actionCommandQueue.tick();
     if (emailSender != nullptr) {
         emailSender->tick();
     }

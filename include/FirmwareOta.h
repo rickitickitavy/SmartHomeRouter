@@ -21,9 +21,9 @@ public:
 
     static constexpr const char *kPackagePath = "/ota/package.zip";
     static constexpr uint8_t kMaxSlaveFrameFails = 5;
-    /** No-response → reset retries before the joined update fails. */
-    static constexpr uint8_t kSlaveVerifyMaxResets = 5;
-    /** Wait for slave version (or ready) before each reset or success. */
+    /** Full SPI transfer + verify cycles (send → wait version → reboot+resend). */
+    static constexpr uint8_t kSlaveVerifyMaxCycles = 3;
+    /** Wait for expected slave version after each SPI transfer. */
     static constexpr unsigned long kSlaveVerifyWaitMs = 20000UL;
 
     bool busy() const;
@@ -99,9 +99,10 @@ private:
     bool spiClockOverrideActive = false;
     char expectedSlaveVersion[SPI_STATUS_VERSION_MAX + 1]{};
     char preOtaSlaveVersion[SPI_STATUS_VERSION_MAX + 1]{};
-    uint8_t slaveNoRespondResets = 0;
+    uint8_t slaveSpiCycleCount = 0;
     unsigned long slaveVerifyDeadlineMs = 0;
     bool slaveVerifyResetPending = false;
+    bool slaveVerifyAwaitingReadyForResend = false;
 
     void fail(const char *message);
     void clearStagingFiles();

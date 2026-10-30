@@ -472,7 +472,7 @@ The WiFi section SHALL scroll when its fields do not fit the main panel. Save an
 
 ### Requirement: Log tab shows recent firmware logs
 
-The Log tab MUST display recent firmware log lines that are also emitted on USB when console logging is enabled. The page MUST be able to refresh that list without leaving the Log tab. Older lines MAY drop when the in-memory buffer is full. The Refresh control MUST stay visible without a second page scroller hiding it, MUST be left-aligned, and MUST use a compact content width (not a full-width bar). The Log card MUST NOT repeat a second “Log” title under the Log tab. The on-screen list MAY show only a bounded tail (on the order of 64 KiB) for UI performance. A **Download full log** control MUST download the entire current ring used length (up to ring capacity, typically the PSRAM ring), not only that on-screen tail.
+The Log tab MUST display recent firmware log lines that are also emitted on USB when console logging is enabled. The page MUST be able to refresh that list without leaving the Log tab. Older lines MAY drop when the in-memory buffer is full. The Refresh control MUST stay visible without a second page scroller hiding it, MUST be left-aligned, and MUST use a compact content width (not a full-width bar). The Log card MUST NOT repeat a second “Log” title under the Log tab. The on-screen list MAY show only a bounded tail (on the order of 64 KiB) for UI performance. A **Download full log** control MUST download the entire current ring used length (up to ring capacity, typically the PSRAM ring), not only that on-screen tail. The download MUST use a dedicated full-ring HTTP path that MUST NOT be handled by the bounded view-tail endpoint (including when that view path is a prefix of the download path).
 
 #### Scenario: New log line appears
 
@@ -500,6 +500,10 @@ The Log tab MUST display recent firmware log lines that are also emitted on USB 
 #### Scenario: Download equals ring when small
 - **WHEN** the ring holds less than 64 KiB and the operator activates Download full log
 - **THEN** the downloaded file contains the full current ring text
+
+#### Scenario: Download path is not the view-tail response
+- **WHEN** the operator activates Download full log while the ring holds more than the on-screen view cap
+- **THEN** the response is the full-ring download (attachment of used length), not the bounded view-tail body capped near 64 KiB
 
 ### Requirement: Escape dismisses overlay dialogs
 
@@ -1036,12 +1040,12 @@ Consoles MUST show a table with columns Console name, Active, and Users (user na
 
 ### Requirement: Hardware tab sets blue and green LED brightness
 
-System → Hardware SHALL show SPI speed plus **BLUE LED brightness** and **GREEN LED brightness** as integer fields from 1 to 100 (percent). GET `/api/hardware` SHALL return `spiSpeedHz`, `blueLedBrightness`, and `greenLedBrightness`. POST `/api/hardware` SHALL require all three, reject values outside 1–100 for either brightness, persist them with hardware settings, apply them without requiring a reboot, and push brightness to the slave when the link is up. Factory default for both brightness fields SHALL be 100. Only `isAdmin` SHALL use Hardware.
+System → Hardware SHALL show SPI speed plus **BLUE LED brightness** and **GREEN LED brightness** as integer fields from 1 to 100 (percent), and a checkbox **use queue for base device command** (square-only toggle; default unchecked / false). GET `/api/hardware` SHALL return `spiSpeedHz`, `blueLedBrightness`, `greenLedBrightness`, and `useQueueForBaseDeviceCommand` (boolean). POST `/api/hardware` SHALL require the brightness and SPI fields as today, accept the boolean (omitted on older clients MUST mean false), reject values outside 1–100 for either brightness, persist them with hardware settings, apply brightness without requiring a reboot, push brightness to the slave when the link is up, and persist the queue flag for use by the action/command FIFO. Factory default for both brightness fields SHALL be 100. Factory default for **use queue for base device command** SHALL be false. Only `isAdmin` SHALL use Hardware.
 
 #### Scenario: Load shows brightness
 
 - **WHEN** an admin opens System → Hardware
-- **THEN** blue and green brightness show the stored values (default 100 if never saved)
+- **THEN** blue and green brightness show the stored values (default 100 if never saved) and the queue checkbox reflects the stored flag (default unchecked)
 
 #### Scenario: Save applies brightness
 
@@ -1052,6 +1056,11 @@ System → Hardware SHALL show SPI speed plus **BLUE LED brightness** and **GREE
 
 - **WHEN** POST `/api/hardware` sends `blueLedBrightness` 0 or 101
 - **THEN** the host responds 400 and does not change stored brightness
+
+#### Scenario: Save queue flag
+
+- **WHEN** the admin checks **use queue for base device command** and saves
+- **THEN** GET `/api/hardware` returns `useQueueForBaseDeviceCommand` true and base UI device commands use the action/command FIFO
 
 ### Requirement: Login Enter focuses empty password
 
@@ -1172,7 +1181,7 @@ System → Update SHALL show an admin-only **Wait for update slave** control for
 - **THEN** the host ends the pause and the control returns to the inactive label
 
 ### Requirement: Status Memory shows free RAM and PSRAM
-The Status Memory card MUST be titled to reflect free memory (for example **Free memory** or group title **Memory** with row labels **Free RAM** / **Free PSRAM**). Values MUST show free heap/PSRAM in kB and free percent of total (not used amounts). When PSRAM is absent, PSRAM MUST show as unavailable (em dash or equivalent), not zero used.
+The Status Memory card MUST be titled to reflect free memory (for example **Free memory** or group title **Memory** with row labels **Free RAM** / **Free PSRAM**). Values MUST show free heap/PSRAM in kB and free percent of total (not used amounts). When PSRAM is absent, PSRAM MUST show as unavailable (em dash or equivalent), not zero used. The Free memory group MUST also show the action/command FIFO busy count (pending element count) from gateway status. Operator Status and simple-user Status MUST both show that busy count.
 
 #### Scenario: Free heap displayed
 - **WHEN** the operator opens Status and the host reports free heap
@@ -1181,6 +1190,25 @@ The Status Memory card MUST be titled to reflect free memory (for example **Free
 #### Scenario: Free PSRAM when present
 - **WHEN** PSRAM is present
 - **THEN** the Memory card shows free PSRAM in kB and free percent
+
+#### Scenario: Queue busy count in Free memory
+
+- **WHEN** Status is open and three elements are pending in the action/command FIFO
+- **THEN** Free memory shows busy count 3 on the operator page and on the simple-user Status view
+
+### Requirement: Base UI device commands honor hardware queue flag
+
+POST `/api/devices/command` (Manual command, Devices row type actions, Place and simple-user widget controls, and any other base live control using that path) MUST enqueue on the action/command FIFO when **use queue for base device command** is true, for every device kind that path supports. When the flag is false, that path MUST keep immediate execution. Devices Configure (`/api/devices/configure`) MUST remain outside this queue.
+
+#### Scenario: Flag on queues Manual command
+
+- **WHEN** the flag is true and the operator sends `ON` via Manual command
+- **THEN** the body is enqueued and applied only when the main-loop FIFO drain runs it
+
+#### Scenario: Flag off keeps Devices row action immediate
+
+- **WHEN** the flag is false and the operator chooses OFF from a Devices row type-action menu
+- **THEN** the host applies OFF on the immediate device-command path
 
 ### Requirement: Console editor can bind automations
 In the Consoles edit dialog, adding a binding MUST allow choosing a registered device or an automation. Automation bindings MUST appear as On/Off rows in the editor preview (display only; no active change until Save + user view). Saved layouts MUST round-trip automation bindings through export/import and settings restore.

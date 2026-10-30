@@ -601,6 +601,10 @@
             } else {
                 setStatusText("statusPsramUsage", "—");
             }
+            setStatusText(
+                "statusActionQueue",
+                payload && payload.actionQueue != null ? String(payload.actionQueue) : "—"
+            );
             if (payload && payload.wifiRssiDbm != null) {
                 setStatusText("statusWifiSignal", String(payload.wifiRssiDbm) + " dBm");
             } else {
@@ -684,7 +688,8 @@
             ]);
             appendStatusGroup(stack, "Free memory", [
                 ["Free RAM", "statusHeapUsage"],
-                ["Free PSRAM", "statusPsramUsage"]
+                ["Free PSRAM", "statusPsramUsage"],
+                ["Action queue", "statusActionQueue"]
             ]);
             appendStatusGroup(stack, "Devices", [
                 ["Zigbee devices", "statusZigbeeDevices"],
@@ -1020,6 +1025,111 @@
             return binding && binding.param ? String(binding.param) : "status";
         }
 
+        function formatReportableIdToken(value) {
+            if (value === undefined || value === null || value === "") {
+                return "";
+            }
+            if (typeof value === "number") {
+                return "0x" + ("0000" + (value & 0xFFFF).toString(16).toUpperCase()).slice(-4);
+            }
+            var text = String(value).trim();
+            if (!text) {
+                return "";
+            }
+            var parsed = parseInt(text, 0);
+            if (isNaN(parsed)) {
+                return text;
+            }
+            return "0x" + ("0000" + (parsed & 0xFFFF).toString(16).toUpperCase()).slice(-4);
+        }
+
+        var REPORTABLE_PARAM_PREFIX = "reportable:";
+
+        function reportableBindingKey(cluster, attribute) {
+            return formatReportableIdToken(cluster) + "/" + formatReportableIdToken(attribute);
+        }
+
+        function reportableParamId(cluster, attribute) {
+            return REPORTABLE_PARAM_PREFIX + reportableBindingKey(cluster, attribute);
+        }
+
+        function parseReportableParamId(paramId) {
+            var text = String(paramId || "");
+            if (text.indexOf(REPORTABLE_PARAM_PREFIX) !== 0) {
+                return null;
+            }
+            var key = text.substring(REPORTABLE_PARAM_PREFIX.length);
+            var parts = key.split("/");
+            if (parts.length < 2) {
+                return null;
+            }
+            return {
+                cluster: formatReportableIdToken(parts[0]),
+                attribute: formatReportableIdToken(parts[1])
+            };
+        }
+
+        function reportableAttributeIsWildcard(attribute) {
+            if (attribute === undefined || attribute === null || attribute === "") {
+                return true;
+            }
+            var parsed = parseInt(attribute, 0);
+            return !isNaN(parsed) && parsed === 0;
+        }
+
+        function reportableValueMatchesWanted(row, wantedCluster, wantedAttribute) {
+            if (!row) {
+                return false;
+            }
+            if (formatReportableIdToken(row.cluster) !== formatReportableIdToken(wantedCluster)) {
+                return false;
+            }
+            if (reportableAttributeIsWildcard(wantedAttribute)) {
+                return true;
+            }
+            return formatReportableIdToken(row.attribute) === formatReportableIdToken(wantedAttribute);
+        }
+
+        function reportableValueForParam(device, paramId, channel) {
+            var parsed = parseReportableParamId(paramId);
+            if (!parsed || !device) {
+                return "";
+            }
+            var values = Array.isArray(device.reportableValues) ? device.reportableValues : [];
+            var index;
+            for (index = 0; index < values.length; index++) {
+                var row = values[index];
+                if (!row) {
+                    continue;
+                }
+                if ((row.ep == null || row.ep == channel)
+                    && reportableValueMatchesWanted(row, parsed.cluster, parsed.attribute)) {
+                    return row.value != null ? String(row.value) : "";
+                }
+            }
+            return "";
+        }
+
+        function normalizeBindingParamForDevice(device, binding) {
+            var param = bindingParamId(binding);
+            if (parseReportableParamId(param)) {
+                return param;
+            }
+            var legacyCluster = binding && (binding.reportableCluster != null
+                ? binding.reportableCluster
+                : binding.reportableCl);
+            var legacyAttribute = binding && (binding.reportableAttribute != null
+                ? binding.reportableAttribute
+                : binding.reportableAttr);
+            if (legacyCluster != null && legacyCluster !== "") {
+                return reportableParamId(
+                    legacyCluster,
+                    legacyAttribute != null && legacyAttribute !== "" ? legacyAttribute : "0x0000"
+                );
+            }
+            return param;
+        }
+
         function deviceBatteryText(device) {
             if (!device || device.battery === undefined || device.battery === null || device.battery === "") {
                 return "";
@@ -1137,7 +1247,16 @@
         }
 
         function bindingResolvedState(device, binding) {
-            var param = bindingParamId(binding);
+            var param = normalizeBindingParamForDevice(device, binding);
+            if (parseReportableParamId(param)) {
+                // Do not fall back to shared endpoint status — that makes every
+                // reportable Parameter show the same last measurement.
+                return reportableValueForParam(
+                    device,
+                    param,
+                    bindingChannel(binding)
+                );
+            }
             if (param === "battery") {
                 return deviceBatteryText(device);
             }
@@ -2479,7 +2598,6 @@
             if (!device || !binding) {
                 return NaN;
             }
-            var param = bindingParamId(binding);
             var rawState = bindingResolvedState(device, binding);
             var measureKind = bindingMeasureKind(device, binding);
             if (measureKind && measureKind !== "battery") {
@@ -2492,7 +2610,10 @@
             if (!bindingAsLogicalEnabled(binding) || !device) {
                 return false;
             }
-            return bindingParamIsNumeric(device, bindingParamId(binding));
+            return bindingParamIsNumeric(
+                device,
+                normalizeBindingParamForDevice(device, binding)
+            );
         }
 
 
@@ -2505,16 +2626,11 @@
         }
 
         function reportableFormatTypeId(paramId) {
-            var text = String(paramId || "");
-            if (text.indexOf("reportable:") !== 0) {
+            var parsed = parseReportableParamId(paramId);
+            if (!parsed) {
                 return "";
             }
-            var key = text.substring("reportable:".length);
-            var parts = key.split("/");
-            if (parts.length < 1) {
-                return "";
-            }
-            var cluster = parseInt(parts[0], 0);
+            var cluster = parseInt(parsed.cluster, 0);
             if (cluster === 0x0402) {
                 return "temperatureMeasurement";
             }
@@ -2534,7 +2650,7 @@
         }
 
         function bindingMeasureKind(device, binding) {
-            var param = bindingParamId(binding);
+            var param = normalizeBindingParamForDevice(device, binding);
             if (param === "battery") {
                 return "battery";
             }
@@ -2951,7 +3067,7 @@
             }
             var typeId = device.type || "";
             var channel = bindingChannel(binding);
-            var param = bindingParamId(binding);
+            var param = normalizeBindingParamForDevice(device, binding);
             var showTypeControls = param === "status"
                 || param === ""
                 || (typeId === "windowCovering" && param === "position");
@@ -3096,13 +3212,15 @@
                 var gaugeNumeric;
                 var gaugeDisplay;
                 var measureKind = bindingMeasureKind(device, binding);
-                if (measureKind && measureKind !== "battery") {
-                    gaugeNumeric = measurementNumericValue(measureKind, rawState, binding.unit);
+                if ((reportableFormatTypeId(param) || (measureKind && measureKind !== "battery"))
+                    && param !== "battery") {
+                    var gaugeKind = reportableFormatTypeId(param) || measureKind || typeId;
+                    gaugeNumeric = measurementNumericValue(gaugeKind, rawState, binding.unit);
                     gaugeDisplay = measurementGaugeDisplay(
-                        measureKind,
+                        gaugeKind,
                         rawState,
                         binding.unit,
-                        bindingDecimals(binding, measureKind)
+                        bindingDecimals(binding, gaugeKind)
                     );
                 } else {
                     gaugeNumeric = parseBindingNumericValue(rawState);
@@ -3113,6 +3231,26 @@
                     gaugeNumeric,
                     gaugeDisplay
                 ));
+            } else if (parseReportableParamId(param)) {
+                var reportableValueLabel = document.createElement("span");
+                reportableValueLabel.className = "console-sensor-value";
+                var reportableRaw = bindingResolvedState(device, binding);
+                var reportableFormat = reportableFormatTypeId(param) || typeId;
+                if (reportableFormat && isMeasurementDeviceType(reportableFormat)) {
+                    reportableValueLabel.textContent = formatMeasurementDisplay(
+                        reportableFormat,
+                        reportableRaw,
+                        binding.unit,
+                        bindingDecimals(binding, reportableFormat)
+                    );
+                } else {
+                    reportableValueLabel.textContent = reportableRaw
+                        ? (binding.unit
+                            ? (reportableRaw + " " + binding.unit)
+                            : reportableRaw)
+                        : "—";
+                }
+                controls.appendChild(reportableValueLabel);
             } else if (bindingMeasureKind(device, binding)
                 && bindingMeasureKind(device, binding) !== "battery") {
                 var valueMeasureKind = bindingMeasureKind(device, binding);
@@ -3120,7 +3258,7 @@
                 valueLabel.className = "console-sensor-value";
                 valueLabel.textContent = formatMeasurementDisplay(
                     valueMeasureKind,
-                    measurementStateForBinding(device, binding),
+                    bindingResolvedState(device, binding),
                     binding.unit,
                     bindingDecimals(binding, valueMeasureKind)
                 );

@@ -83,6 +83,8 @@ public:
     bool consumeZigbeeLostReboot();
     bool completeCommandResult(uint8_t seq, bool ok);
     bool hasOutboundPending() const;
+    /** Clear deferred Zigbee command queue (OTA exclusive SPI). */
+    void clearDeferredRadioCommands();
 
 private:
     static constexpr int kQueue = 32;
@@ -164,6 +166,7 @@ private:
     bool enqueueUserMap(const uint8_t *payload, uint16_t length);
     void removeOutboundAt(int index);
     void clearOutbound();
+    bool isFirmwareTransferQuiet() const;
     void updateIrq();
     void handleHostFrame(const SpiFrame &frame);
     bool takeOutbound(SpiFrame &frame);

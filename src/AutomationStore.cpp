@@ -296,6 +296,30 @@ bool AutomationStore::parseSingleActionJson(const char *actionObjectJson, Automa
     return parseActions(wrapped.c_str(), outActions);
 }
 
+bool AutomationStore::cloneSingleAction(const AutomationAction *source, AutomationAction **outAction) {
+    if (outAction == nullptr || source == nullptr) {
+        return false;
+    }
+    *outAction = nullptr;
+    String json;
+    appendActionJson(json, source);
+    if (json.length() == 0) {
+        return false;
+    }
+    AutomationAction *parsed = nullptr;
+    if (!parseSingleActionJson(json.c_str(), &parsed) || parsed == nullptr) {
+        freeActionList(parsed);
+        return false;
+    }
+    AutomationAction *extra = parsed->next;
+    parsed->next = nullptr;
+    if (extra != nullptr) {
+        freeActionList(extra);
+    }
+    *outAction = parsed;
+    return true;
+}
+
 bool AutomationStore::begin(bool persistToLittleFs) {
     persistEnabled = persistToLittleFs;
     if (!persistEnabled) {
@@ -1038,12 +1062,8 @@ bool AutomationStore::parseActions(const char *objectJson, AutomationAction **ou
         String targetText;
         extractJsonString(object.c_str(), "target", targetText);
         const bool isEmailTarget = targetText == "e-mail";
-        AutomationAction *action = nullptr;
-        if (isEmailTarget) {
-            action = (AutomationAction *)allocateEmailMemory(sizeof(AutomationAction));
-        } else if (heapAllowsAllocation(sizeof(AutomationAction))) {
-            action = (AutomationAction *)malloc(sizeof(AutomationAction));
-        }
+        // All action nodes + their strings live in PSRAM (rare-path). Listeners/conditions stay on heap.
+        AutomationAction *action = (AutomationAction *)allocateEmailMemory(sizeof(AutomationAction));
         if (action == nullptr) {
             freeActionList(*outActions);
             return false;
@@ -1084,7 +1104,7 @@ bool AutomationStore::parseActions(const char *objectJson, AutomationAction **ou
                     return false;
                 }
                 action->hasDeviceCustomCommand = true;
-                action->deviceCustomName = duplicateBoundedString(
+                action->deviceCustomName = duplicateEmailString(
                     deviceCmdName.c_str(),
                     kDeviceCustomCommandNameMaxChars
                 );
@@ -1094,7 +1114,7 @@ bool AutomationStore::parseActions(const char *objectJson, AutomationAction **ou
                     return false;
                 }
                 if (customValue.length() > 0) {
-                    action->customValue = duplicateBoundedString(
+                    action->customValue = duplicateEmailString(
                         customValue.c_str(),
                         AUTOMATION_VALUE_MAX - 1
                     );
@@ -1105,7 +1125,7 @@ bool AutomationStore::parseActions(const char *objectJson, AutomationAction **ou
                         return false;
                     }
                 }
-                action->payload = duplicateBoundedString(deviceCmdName.c_str(), AUTOMATION_VALUE_MAX - 1);
+                action->payload = duplicateEmailString(deviceCmdName.c_str(), AUTOMATION_VALUE_MAX - 1);
                 if (action->payload == nullptr) {
                     free(action->deviceCustomName);
                     free(action->customValue);
@@ -1122,7 +1142,7 @@ bool AutomationStore::parseActions(const char *objectJson, AutomationAction **ou
                 action->hasCustomCommand = true;
                 action->customCluster = (uint16_t)customCluster;
                 action->customCommand = (uint16_t)customCommand;
-                action->customValue = duplicateBoundedString(
+                action->customValue = duplicateEmailString(
                     customValue.c_str(),
                     AUTOMATION_VALUE_MAX - 1
                 );
@@ -1144,16 +1164,16 @@ bool AutomationStore::parseActions(const char *objectJson, AutomationAction **ou
                     freeActionList(*outActions);
                     return false;
                 }
-                action->payload = duplicateBoundedString(builtPayload, AUTOMATION_VALUE_MAX - 1);
+                action->payload = duplicateEmailString(builtPayload, AUTOMATION_VALUE_MAX - 1);
             } else {
                 if (!havePayload) {
                     free(action);
                     freeActionList(*outActions);
                     return false;
                 }
-                action->payload = duplicateBoundedString(payload.c_str(), AUTOMATION_VALUE_MAX - 1);
+                action->payload = duplicateEmailString(payload.c_str(), AUTOMATION_VALUE_MAX - 1);
             }
-            action->ieeeText = duplicateBoundedString(ieeeText.c_str(), IEEE_TEXT_MAX - 1);
+            action->ieeeText = duplicateEmailString(ieeeText.c_str(), IEEE_TEXT_MAX - 1);
             if (action->ieeeText == nullptr || action->payload == nullptr) {
                 free(action->ieeeText);
                 free(action->payload);
@@ -1164,7 +1184,7 @@ bool AutomationStore::parseActions(const char *objectJson, AutomationAction **ou
                 return false;
             }
             if (paramText.length() > 0) {
-                action->param = duplicateBoundedString(paramText.c_str(), AUTOMATION_PARAM_KEY_MAX - 1);
+                action->param = duplicateEmailString(paramText.c_str(), AUTOMATION_PARAM_KEY_MAX - 1);
                 if (action->param == nullptr) {
                     free(action->ieeeText);
                     free(action->payload);
@@ -1193,7 +1213,7 @@ bool AutomationStore::parseActions(const char *objectJson, AutomationAction **ou
                 freeActionList(*outActions);
                 return false;
             }
-            action->automationName = duplicateBoundedString(nameText.c_str(), AUTOMATION_NAME_MAX - 1);
+            action->automationName = duplicateEmailString(nameText.c_str(), AUTOMATION_NAME_MAX - 1);
             if (action->automationName == nullptr) {
                 free(action);
                 freeActionList(*outActions);

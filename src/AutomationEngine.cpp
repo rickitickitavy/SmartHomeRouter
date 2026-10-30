@@ -5,6 +5,10 @@
 #include "EmailSender.h"
 #include "Logger.h"
 #include "ZigbeeSpiProxy.h"
+#if defined(BOARD_ROLE_HOST)
+#include "ActionCommandQueue.h"
+extern ActionCommandQueue actionCommandQueue;
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -313,7 +317,24 @@ bool AutomationEngine::evaluateCondition(
 }
 
 void AutomationEngine::runAction(const AutomationAction *action) {
+    if (action == nullptr) {
+        return;
+    }
+#if defined(BOARD_ROLE_HOST)
+    const uint8_t enqueueDepth = actionDepth < 255 ? (uint8_t)(actionDepth + 1) : 255;
+    if (!actionCommandQueue.enqueueAction(store, action, enqueueDepth)) {
+        // Overflow or OOM: drop silently per action-command-queue spec.
+    }
+#else
     applyAction(action);
+#endif
+}
+
+void AutomationEngine::applyQueuedAction(const AutomationAction *action, uint8_t depth) {
+    const uint8_t previousDepth = actionDepth;
+    actionDepth = depth;
+    applyAction(action);
+    actionDepth = previousDepth;
 }
 
 void AutomationEngine::applyAction(const AutomationAction *action) {
@@ -460,9 +481,18 @@ void AutomationEngine::runActions(AutomationRecord *automation) {
         return;
     }
     actionDepth++;
+#if defined(BOARD_ROLE_HOST)
+    const uint8_t enqueueDepth = actionDepth;
+    for (const AutomationAction *action = automation->actions; action != nullptr; action = action->next) {
+        if (!actionCommandQueue.enqueueAction(store, action, enqueueDepth)) {
+            // Overflow or OOM: drop silently per action-command-queue spec.
+        }
+    }
+#else
     for (const AutomationAction *action = automation->actions; action != nullptr; action = action->next) {
         applyAction(action);
     }
+#endif
     const time_t wallClock = time(nullptr);
     automation->lastActivationMs = (wallClock > 1700000000) ? (unsigned long)wallClock : 0UL;
     actionDepth--;

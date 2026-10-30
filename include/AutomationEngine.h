@@ -30,6 +30,7 @@ public:
         bool valueChanged
     );
     void runAction(const AutomationAction *action);
+    void applyQueuedAction(const AutomationAction *action, uint8_t depth);
 
 private:
     AutomationStore *store;

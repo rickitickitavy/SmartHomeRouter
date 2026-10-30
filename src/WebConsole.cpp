@@ -412,10 +412,17 @@ void WebConsole::begin() {
         }
     );
 
-    server.on("/api/log", HTTP_GET, [this](AsyncWebServerRequest *request) { handleLogGet(request); });
-    server.on("/api/log/download", HTTP_GET, [this](AsyncWebServerRequest *request) {
-        handleLogDownloadGet(request);
-    });
+    // exact() so /api/log does not steal /api/log/download (BackwardCompatible matches prefix+/).
+    server.on(
+        AsyncURIMatcher::exact("/api/log/download"),
+        HTTP_GET,
+        [this](AsyncWebServerRequest *request) { handleLogDownloadGet(request); }
+    );
+    server.on(
+        AsyncURIMatcher::exact("/api/log"),
+        HTTP_GET,
+        [this](AsyncWebServerRequest *request) { handleLogGet(request); }
+    );
     server.on("/api/version", HTTP_GET, [this](AsyncWebServerRequest *request) { handleVersionGet(request); });
     server.on(
         "/api/update/status",
@@ -1768,12 +1775,15 @@ void WebConsole::handleHardwareGet(AsyncWebServerRequest *request) {
         "Hardware GET spiSpeedHz=" + String((unsigned long)speedHz)
         + " blue=" + String(bluePercent) + " green=" + String(greenPercent)
     );
+    const bool useQueueForBaseDeviceCommand = settingsManager->useQueueForBaseDeviceCommand();
     String json = "{\"spiSpeedHz\":";
     json += String((unsigned long)speedHz);
     json += ",\"blueLedBrightness\":";
     json += String(bluePercent);
     json += ",\"greenLedBrightness\":";
     json += String(greenPercent);
+    json += ",\"useQueueForBaseDeviceCommand\":";
+    json += useQueueForBaseDeviceCommand ? "true" : "false";
     json += "}";
     request->send(200, "application/json", json);
 }
@@ -1795,6 +1805,8 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
         request->send(400, "text/plain", "Need spiSpeedHz, blueLedBrightness, greenLedBrightness");
         return;
     }
+    bool useQueueForBaseDeviceCommand = false;
+    extractJsonBool(body.c_str(), "useQueueForBaseDeviceCommand", useQueueForBaseDeviceCommand);
     const uint32_t clamped = SettingsManager::clampSpiSpeedHz((uint32_t)spiSpeedHz);
     if (clamped != (uint32_t)spiSpeedHz) {
         request->send(400, "text/plain", "spiSpeedHz must be 100000-40000000");
@@ -1809,6 +1821,7 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
     const uint8_t greenPercent = (uint8_t)greenLedBrightness;
     settingsManager->setSpiSpeedHz(clamped);
     settingsManager->setLedBrightness(bluePercent, greenPercent);
+    settingsManager->setUseQueueForBaseDeviceCommand(useQueueForBaseDeviceCommand);
     settingsManager->saveMain(false);
     if (applyHardware != nullptr) {
         applyHardware(clamped, bluePercent, greenPercent);
@@ -2111,8 +2124,11 @@ bool WebConsole::applyHardwareJson(const char *json, String *errorText) {
         }
         greenPercent = (uint8_t)greenLedBrightness;
     }
+    bool useQueueForBaseDeviceCommand = false;
+    extractJsonBool(json, "useQueueForBaseDeviceCommand", useQueueForBaseDeviceCommand);
     settingsManager->setSpiSpeedHz(clamped);
     settingsManager->setLedBrightness(bluePercent, greenPercent);
+    settingsManager->setUseQueueForBaseDeviceCommand(useQueueForBaseDeviceCommand);
     if (applyHardware != nullptr) {
         applyHardware(clamped, bluePercent, greenPercent);
     }
@@ -2147,6 +2163,8 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
     response->print((unsigned)settingsManager->blueLedBrightness());
     response->print(",\"greenLedBrightness\":");
     response->print((unsigned)settingsManager->greenLedBrightness());
+    response->print(",\"useQueueForBaseDeviceCommand\":");
+    response->print(settingsManager->useQueueForBaseDeviceCommand() ? "true" : "false");
     response->print("},\"ui\":{\"theme\":\"");
     response->print(UserStore::themeJsonId(user->theme));
     response->print("\"},\"devices\":");
@@ -2578,26 +2596,6 @@ void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
             entry->manufacturer = DeviceManufacturerUnknown;
         }
     }
-    const char *storedModel = isEdit ? deviceTopicCStr(existing->model) : "";
-    if (isEdit && storedModel[0] != '\0') {
-        free(entry->model);
-        entry->model = DeviceTopicMap::duplicateBoundedString(storedModel, DEVICE_MODEL_MAX);
-    } else {
-        String modelText;
-        if (extractJsonString(body.c_str(), "model", modelText) && modelText.length() > 0) {
-            free(entry->model);
-            entry->model = DeviceTopicMap::duplicateBoundedString(modelText.c_str(), DEVICE_MODEL_MAX);
-        } else if (foundDevices != nullptr) {
-            free(entry->model);
-            entry->model = DeviceTopicMap::duplicateBoundedString(
-                foundDevices->modelForIeee(ieee),
-                DEVICE_MODEL_MAX
-            );
-        } else {
-            free(entry->model);
-            entry->model = DeviceTopicMap::duplicateBoundedString("", DEVICE_MODEL_MAX);
-        }
-    }
     userDataClearFieldDefs(&entry->userDataFields, &entry->userDataFieldCount);
     if (zigbeeDeviceTypeIsUserData(entry->zigbeeType)) {
         String fieldsSlice;
@@ -2738,8 +2736,7 @@ void WebConsole::handleDevicesConfigureGet(AsyncWebServerRequest *request) {
     if (!deviceHasConfigurableAttrs(
             entry->transport,
             entry->manufacturer,
-            entry->zigbeeType,
-            deviceTopicCStr(entry->model)
+            entry->zigbeeType
         )) {
         request->send(400, "text/plain", "No configurable attributes");
         return;
@@ -2748,7 +2745,7 @@ void WebConsole::handleDevicesConfigureGet(AsyncWebServerRequest *request) {
     const size_t attrCount = deviceConfigCollectFor(
         entry->manufacturer,
         entry->zigbeeType,
-        deviceTopicCStr(entry->model),
+        nullptr,
         matched,
         kDeviceConfigMatchMax
     );
@@ -2868,8 +2865,7 @@ void WebConsole::handleDevicesConfigurePost(AsyncWebServerRequest *request) {
     if (!deviceHasConfigurableAttrs(
             entry->transport,
             entry->manufacturer,
-            entry->zigbeeType,
-            deviceTopicCStr(entry->model)
+            entry->zigbeeType
         )) {
         request->send(400, "text/plain", "No configurable attributes");
         return;
@@ -2903,7 +2899,7 @@ void WebConsole::handleDevicesConfigurePost(AsyncWebServerRequest *request) {
         const DeviceConfigAttr *attr = deviceConfigFindAttr(
             entry->manufacturer,
             entry->zigbeeType,
-            deviceTopicCStr(entry->model),
+            nullptr,
             configId.c_str()
         );
         if (attr == nullptr) {
@@ -3113,8 +3109,8 @@ void WebConsole::handleLogDownloadGet(AsyncWebServerRequest *request) {
     }
     size_t start = 0;
     size_t length = 0;
-    // Full ring (not kWebViewMaxBytes). Fixed-length filler matches /api/log and avoids
-    // chunked-transfer truncation seen with large PSRAM rings.
+    // Full ring (not kWebViewMaxBytes). Route must use AsyncURIMatcher::exact so
+    // /api/log BackwardCompatible matching cannot steal this path.
     LOGGER.snapshotRing(&start, &length);
     AsyncWebServerResponse *response = request->beginResponse(
         "text/plain",
