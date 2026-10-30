@@ -3,7 +3,8 @@
 #include <Arduino.h>
 #include <string.h>
 
-inline void appendJsonEscaped(String &json, const char *value, size_t maxLength = 128) {
+template<typename JsonBuf>
+inline void appendJsonEscaped(JsonBuf &json, const char *value, size_t maxLength = 128) {
     if (value == nullptr) {
         return;
     }

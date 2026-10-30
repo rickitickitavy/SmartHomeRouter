@@ -301,9 +301,9 @@ bool AutomationStore::cloneSingleAction(const AutomationAction *source, Automati
         return false;
     }
     *outAction = nullptr;
-    String json;
+    PsramJsonBuffer json;
     appendActionJson(json, source);
-    if (json.length() == 0) {
+    if (!json.ok() || json.length() == 0) {
         return false;
     }
     AutomationAction *parsed = nullptr;
@@ -360,10 +360,20 @@ bool AutomationStore::saveToFile() const {
         LOGGER.error("Automations file write failed");
         return false;
     }
-    const String json = listFullJson();
-    const size_t written = file.print(json);
+    PsramJsonBuffer json;
+    json += "[";
+    bool first = true;
+    for (const AutomationRecord *automation = head; automation != nullptr; automation = automation->next) {
+        if (!first) {
+            json += ",";
+        }
+        first = false;
+        appendAutomationFull(json, automation, false);
+    }
+    json += "]";
+    const bool written = json.ok() && json.writeToFile(file);
     file.close();
-    return written == json.length();
+    return written;
 }
 
 bool AutomationStore::loadFromFile() {
@@ -371,14 +381,19 @@ bool AutomationStore::loadFromFile() {
     if (!file) {
         return false;
     }
-    String json = file.readString();
+    PsramJsonBuffer json;
+    const bool loaded = json.assignFromFile(file);
     file.close();
+    if (!loaded || !json.ok()) {
+        LOGGER.error("Automations file read failed (PSRAM/heap)");
+        return false;
+    }
     json.trim();
     if (json.length() == 0 || json.charAt(0) != '[') {
         LOGGER.error("Automations file invalid (empty or not a JSON array)");
         return false;
     }
-    if (!replaceAllFromJson(json)) {
+    if (!replaceAllFromJson(json.c_str())) {
         LOGGER.error("Automations file load/import rejected");
         return false;
     }
@@ -1490,10 +1505,18 @@ AutomationWriteResult AutomationStore::parseOneAutomation(
 }
 
 bool AutomationStore::replaceAllFromJson(const String &json) {
+    return replaceAllFromJson(json.c_str());
+}
+
+bool AutomationStore::replaceAllFromJson(const char *json) {
     AutomationRecord *newHead = nullptr;
     AutomationRecord *tail = nullptr;
     int count = 0;
-    const char *cursor = json.c_str();
+    if (json == nullptr) {
+        return false;
+    }
+    const char *cursor = json;
+    PsramJsonBuffer object;
     while (cursor != nullptr && *cursor != '\0' && count < AUTOMATION_STORE_MAX) {
         const char *objectStart = strchr(cursor, '{');
         if (objectStart == nullptr) {
@@ -1542,7 +1565,13 @@ bool AutomationStore::replaceAllFromJson(const String &json) {
             freeAutomationList(newHead);
             return false;
         }
-        String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
+        if (!object.assignSlice(objectStart, objectEnd)) {
+            LOGGER.error(
+                "Automation import failed: out of memory for object at index " + String(count)
+            );
+            freeAutomationList(newHead);
+            return false;
+        }
         AutomationRecord *automation = nullptr;
         const AutomationWriteResult parseResult = parseOneAutomation(object.c_str(), &automation, true);
         if (parseResult != AutomationWriteOk || automation == nullptr) {
@@ -1582,6 +1611,7 @@ bool AutomationStore::mergeAllFromJson(const String &json) {
     int count = 0;
     int newNameCount = 0;
     const char *cursor = json.c_str();
+    PsramJsonBuffer object;
     while (cursor != nullptr && *cursor != '\0') {
         const char *objectStart = strchr(cursor, '{');
         if (objectStart == nullptr) {
@@ -1629,7 +1659,12 @@ bool AutomationStore::mergeAllFromJson(const String &json) {
             );
             return false;
         }
-        String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
+        if (!object.assignSlice(objectStart, objectEnd)) {
+            LOGGER.error(
+                "Automation merge import failed: out of memory for object at index " + String(count)
+            );
+            return false;
+        }
         AutomationRecord *parsed = nullptr;
         const AutomationWriteResult parseResult = parseOneAutomation(object.c_str(), &parsed, false);
         if (parseResult != AutomationWriteOk || parsed == nullptr) {
@@ -1712,7 +1747,10 @@ bool AutomationStore::mergeAllFromJson(const String &json) {
             LOGGER.error("Automation merge import apply failed: truncated object");
             return false;
         }
-        String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
+        if (!object.assignSlice(objectStart, objectEnd)) {
+            LOGGER.error("Automation merge import apply failed: out of memory for object");
+            return false;
+        }
         String nameHint;
         if (!extractJsonString(object.c_str(), "name", nameHint) || nameHint.length() == 0) {
             LOGGER.error("Automation merge import apply failed: missing name");
@@ -1983,7 +2021,7 @@ void AutomationStore::restartTimer(AutomationRecord *automation, uint32_t second
     startTimer(automation, secondsOrZero);
 }
 
-void AutomationStore::appendConditionJson(String &json, const AutomationCondition *condition) {
+void AutomationStore::appendConditionJson(PsramJsonBuffer &json, const AutomationCondition *condition) {
     if (condition == nullptr) {
         json += "null";
         return;
@@ -2031,7 +2069,7 @@ void AutomationStore::appendConditionJson(String &json, const AutomationConditio
     json += "]}";
 }
 
-void AutomationStore::appendActionJson(String &json, const AutomationAction *action) {
+void AutomationStore::appendActionJson(PsramJsonBuffer &json, const AutomationAction *action) {
     if (action == nullptr) {
         return;
     }
@@ -2127,7 +2165,7 @@ void AutomationStore::appendActionJson(String &json, const AutomationAction *act
     json += "}";
 }
 
-void AutomationStore::appendAutomationFull(String &json, const AutomationRecord *automation, bool includeRuntime) {
+void AutomationStore::appendAutomationFull(PsramJsonBuffer &json, const AutomationRecord *automation, bool includeRuntime) {
     if (automation == nullptr) {
         return;
     }
@@ -2206,13 +2244,17 @@ void AutomationStore::appendAutomationFull(String &json, const AutomationRecord 
 }
 
 String AutomationStore::automationFullJson(const AutomationRecord *automation, bool includeRuntime) const {
-    String json;
+    PsramJsonBuffer json;
     appendAutomationFull(json, automation, includeRuntime);
-    return json;
+    if (!json.ok()) {
+        return String();
+    }
+    return json.toString();
 }
 
 String AutomationStore::listFullJson() const {
-    String json = "[";
+    PsramJsonBuffer json;
+    json += "[";
     bool first = true;
     for (const AutomationRecord *automation = head; automation != nullptr; automation = automation->next) {
         if (!first) {
@@ -2222,11 +2264,15 @@ String AutomationStore::listFullJson() const {
         appendAutomationFull(json, automation, false);
     }
     json += "]";
-    return json;
+    if (!json.ok()) {
+        return String();
+    }
+    return json.toString();
 }
 
 String AutomationStore::listSummaryJson() const {
-    String json = "[";
+    PsramJsonBuffer json;
+    json += "[";
     bool first = true;
     for (const AutomationRecord *automation = head; automation != nullptr; automation = automation->next) {
         if (!first) {
@@ -2285,5 +2331,8 @@ String AutomationStore::listSummaryJson() const {
         json += "}";
     }
     json += "]";
-    return json;
+    if (!json.ok()) {
+        return String();
+    }
+    return json.toString();
 }

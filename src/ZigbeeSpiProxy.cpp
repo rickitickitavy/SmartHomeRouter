@@ -1632,7 +1632,7 @@ void ZigbeeSpiProxy::noteMqttOffline(const uint8_t ieee[8]) {
     notifyDeviceLiveChanged(ieee);
 }
 
-void ZigbeeSpiProxy::appendListTelemetry(const uint8_t ieee[8], String &json) const {
+void ZigbeeSpiProxy::appendListTelemetry(const uint8_t ieee[8], PsramJsonBuffer &json) const {
     const CachedDevice *slot = findByIeee(ieee);
     if (slot == nullptr) {
         return;

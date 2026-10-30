@@ -1,5 +1,6 @@
 #include "DeviceTopicMap.h"
 #include "JsonField.h"
+#include "PsramJsonBuffer.h"
 #include "SpiProtocol.h"
 #include "Defines.h"
 #include "DeviceConfigCatalog.h"
@@ -18,6 +19,15 @@
 static_assert(
     DeviceTopicMap::kDeviceSyncEntryLenWithNwk <= SPI_MAX_PAYLOAD,
     "device sync with nwk must fit SPI payload"
+);
+
+static void appendDeviceListEntryJson(
+    DeviceTopicMap *deviceMap,
+    PsramJsonBuffer &json,
+    const DeviceTopicEntry *deviceEntry,
+    DeviceTopicMap::OnlineFn isOnline,
+    DeviceTopicMap::LastRssiFn lastRssi,
+    DeviceTopicMap::ListTelemetryFn telemetry
 );
 
 static size_t jsonEscapeCap(const char *value) {
@@ -1298,8 +1308,16 @@ static const char *findJsonObjectEnd(const char *objectStart) {
 }
 
 void DeviceTopicMap::replaceFromJson(const String &json) {
+    replaceFromJson(json.c_str());
+}
+
+void DeviceTopicMap::replaceFromJson(const char *json) {
     clearAll();
-    const char *cursor = json.c_str();
+    if (json == nullptr) {
+        return;
+    }
+    const char *cursor = json;
+    PsramJsonBuffer object;
     while (cursor != nullptr && *cursor != '\0') {
         const char *objectStart = strchr(cursor, '{');
         if (objectStart == nullptr) {
@@ -1309,7 +1327,9 @@ void DeviceTopicMap::replaceFromJson(const String &json) {
         if (objectEnd == nullptr) {
             break;
         }
-        String object = String(objectStart).substring(0, (unsigned int)(objectEnd - objectStart + 1));
+        if (!object.assignSlice(objectStart, objectEnd)) {
+            break;
+        }
         String ieeeText;
         String friendlyName;
         String stateTopic;
@@ -1449,13 +1469,17 @@ bool DeviceTopicMap::loadFromFile(const char *path) {
     if (!file) {
         return false;
     }
-    String json = file.readString();
+    PsramJsonBuffer json;
+    const bool loaded = json.assignFromFile(file);
     file.close();
+    if (!loaded || !json.ok()) {
+        return false;
+    }
     json.trim();
     if (json.length() == 0 || json.charAt(0) != '[') {
         return false;
     }
-    replaceFromJson(json);
+    replaceFromJson(json.c_str());
     return true;
 }
 
@@ -1467,10 +1491,23 @@ bool DeviceTopicMap::saveToFile(const char *path) {
     if (!file) {
         return false;
     }
-    const String json = listStoreJson();
-    const size_t written = file.print(json);
+    PsramJsonBuffer json;
+    json += "[";
+    bool first = true;
+    for (DeviceTopicEntry *deviceEntry = head; deviceEntry != nullptr; deviceEntry = deviceEntry->next) {
+        if (!deviceEntry->used) {
+            continue;
+        }
+        if (!first) {
+            json += ',';
+        }
+        first = false;
+        appendDeviceListEntryJson(this, json, deviceEntry, nullptr, nullptr, nullptr);
+    }
+    json += "]";
+    const bool written = json.ok() && json.writeToFile(file);
     file.close();
-    return written == json.length();
+    return written;
 }
 
 size_t DeviceTopicMap::packSyncPayload(
@@ -1636,7 +1673,7 @@ String DeviceTopicMap::listJson() {
 
 static void appendDeviceListEntryJson(
     DeviceTopicMap *deviceMap,
-    String &json,
+    PsramJsonBuffer &json,
     const DeviceTopicEntry *deviceEntry,
     DeviceTopicMap::OnlineFn isOnline,
     DeviceTopicMap::LastRssiFn lastRssi,
@@ -1720,7 +1757,8 @@ String DeviceTopicMap::listJson(OnlineFn isOnline, LastRssiFn lastRssi) {
 }
 
 String DeviceTopicMap::listJson(OnlineFn isOnline, LastRssiFn lastRssi, ListTelemetryFn telemetry) {
-    String json = "[";
+    PsramJsonBuffer json;
+    json += "[";
     bool first = true;
     size_t usedCount = 0;
     for (DeviceTopicEntry *deviceEntry = head; deviceEntry != nullptr; deviceEntry = deviceEntry->next) {
@@ -1740,7 +1778,10 @@ String DeviceTopicMap::listJson(OnlineFn isOnline, LastRssiFn lastRssi, ListTele
         appendDeviceListEntryJson(this, json, deviceEntry, isOnline, lastRssi, telemetry);
     }
     json += "]";
-    return json;
+    if (!json.ok()) {
+        return String();
+    }
+    return json.toString();
 }
 
 String DeviceTopicMap::entryJson(
@@ -1753,9 +1794,12 @@ String DeviceTopicMap::entryJson(
     if (deviceEntry == nullptr || !deviceEntry->used) {
         return String();
     }
-    String json;
+    PsramJsonBuffer json;
     appendDeviceListEntryJson(this, json, deviceEntry, isOnline, lastRssi, telemetry);
-    return json;
+    if (!json.ok()) {
+        return String();
+    }
+    return json.toString();
 }
 
 String DeviceTopicMap::listStoreJson() {

@@ -6,6 +6,7 @@
 #include "ReportableData.h"
 #include "DeviceCustomCommand.h"
 #include "ZigbeeDeviceType.h"
+#include "PsramJsonBuffer.h"
 #include <Arduino.h>
 #include <stddef.h>
 
@@ -145,7 +146,7 @@ public:
     bool parseIeee(const char *text, uint8_t ieee[8]);
     using OnlineFn = bool (*)(const uint8_t ieee[8]);
     using LastRssiFn = bool (*)(const uint8_t ieee[8], int8_t *rssiDbm);
-    using ListTelemetryFn = void (*)(const uint8_t ieee[8], String &json);
+    using ListTelemetryFn = void (*)(const uint8_t ieee[8], PsramJsonBuffer &json);
 
     String listJson();
     String listJson(OnlineFn isOnline);
@@ -154,6 +155,7 @@ public:
     String entryJson(const uint8_t ieee[8], OnlineFn isOnline, LastRssiFn lastRssi, ListTelemetryFn telemetry);
     String listStoreJson();
     void replaceFromJson(const String &json);
+    void replaceFromJson(const char *json);
     bool loadFromFile(const char *path);
     bool saveToFile(const char *path);
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Defines.h"
+#include "PsramJsonBuffer.h"
 #include <Arduino.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -125,6 +126,7 @@ public:
     ConsoleWriteResult replaceConsoleFromJson(const char *consoleId, const char *json, bool keepId);
     ConsoleWriteResult deleteConsole(const char *consoleId);
     bool replaceAllFromJson(const String &json);
+    bool replaceAllFromJson(const char *json);
     String listSummaryJson(class UserStore *userStore) const;
     String listFullJson() const;
     String consoleFullJson(const ConsoleRecord *console) const;
@@ -161,10 +163,10 @@ private:
     static bool parseOneBindingObject(const char *bindingObjectJson, ConsoleBinding **outBinding);
     static bool parseCompositeRows(const char *widgetJson, ConsoleCompositeRow **outRows);
     static bool parseGaugeConfig(const char *bindingJson, ConsoleBinding *binding);
-    static void appendConsoleFull(String &json, const ConsoleRecord *console);
-    static void appendOneBindingJson(String &json, const ConsoleBinding *binding);
-    static void appendCompositeRowsJson(String &json, const ConsoleCompositeRow *rows);
-    static void appendGaugeJson(String &json, const ConsoleBinding *binding);
+    static void appendConsoleFull(PsramJsonBuffer &json, const ConsoleRecord *console);
+    static void appendOneBindingJson(PsramJsonBuffer &json, const ConsoleBinding *binding);
+    static void appendCompositeRowsJson(PsramJsonBuffer &json, const ConsoleCompositeRow *rows);
+    static void appendGaugeJson(PsramJsonBuffer &json, const ConsoleBinding *binding);
     static void makeConsoleId(char *outId);
     static const char *findJsonObjectEnd(const char *objectStart);
     static uint8_t parseViewportId(const char *text);
@@ -185,5 +187,5 @@ private:
     static const char *gaugeTypeJsonId(uint8_t gaugeType);
     static uint8_t parseLinearStyleId(const char *text);
     static const char *linearStyleJsonId(uint8_t linearStyle);
-    static void appendBindingLayoutJson(String &json, const ConsoleBinding *binding);
+    static void appendBindingLayoutJson(PsramJsonBuffer &json, const ConsoleBinding *binding);
 };

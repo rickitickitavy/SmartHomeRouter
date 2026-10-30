@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include "SpiProtocol.h"
 #include "DeviceTopicMap.h"
+#include "PsramJsonBuffer.h"
 #include "UserDataPayload.h"
 #include "UserStore.h"
 
@@ -54,7 +55,7 @@ public:
     bool registryHydrated() const;
     bool isOnline(const uint8_t ieee[8]) const;
     bool lastRssiDbm(const uint8_t ieee[8], int8_t *rssiDbm) const;
-    void appendListTelemetry(const uint8_t ieee[8], String &json) const;
+    void appendListTelemetry(const uint8_t ieee[8], PsramJsonBuffer &json) const;
     void noteMqttState(const uint8_t ieee[8], uint8_t endpoint, const char *message);
     void retainRegisteredTelemetry(DeviceTopicMap *topicMap);
     void noteSeen(const uint8_t ieee[8]);
