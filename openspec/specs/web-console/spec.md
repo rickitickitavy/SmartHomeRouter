@@ -472,7 +472,7 @@ The WiFi section SHALL scroll when its fields do not fit the main panel. Save an
 
 ### Requirement: Log tab shows recent firmware logs
 
-The Log tab MUST display recent firmware log lines that are also emitted on USB when console logging is enabled. The page MUST be able to refresh that list without leaving the Log tab. Older lines MAY drop when the in-memory buffer is full. The Refresh control MUST stay visible without a second page scroller hiding it, MUST be left-aligned, and MUST use a compact content width (not a full-width bar). The Log card MUST NOT repeat a second “Log” title under the Log tab. The on-screen list MAY show only a bounded tail (on the order of 64 KiB) for UI performance. A **Download full log** control MUST download the entire current ring used length (up to ring capacity, typically the PSRAM ring), not only that on-screen tail.
+The Log tab MUST display recent firmware log lines that are also emitted on USB when console logging is enabled. The page MUST be able to refresh that list without leaving the Log tab. Older lines MAY drop when the in-memory buffer is full. The Refresh control MUST stay visible without a second page scroller hiding it, MUST be left-aligned, and MUST use a compact content width (not a full-width bar). The Log card MUST NOT repeat a second “Log” title under the Log tab. The on-screen list MAY show only a bounded tail (on the order of 64 KiB) for UI performance. A **Download full log** control MUST download the entire current ring used length (up to ring capacity, typically the PSRAM ring), not only that on-screen tail. The download MUST use a dedicated full-ring HTTP path that MUST NOT be handled by the bounded view-tail endpoint (including when that view path is a prefix of the download path).
 
 #### Scenario: New log line appears
 
@@ -500,6 +500,10 @@ The Log tab MUST display recent firmware log lines that are also emitted on USB 
 #### Scenario: Download equals ring when small
 - **WHEN** the ring holds less than 64 KiB and the operator activates Download full log
 - **THEN** the downloaded file contains the full current ring text
+
+#### Scenario: Download path is not the view-tail response
+- **WHEN** the operator activates Download full log while the ring holds more than the on-screen view cap
+- **THEN** the response is the full-ring download (attachment of used length), not the bounded view-tail body capped near 64 KiB
 
 ### Requirement: Escape dismisses overlay dialogs
 
