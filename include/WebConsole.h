@@ -7,6 +7,7 @@
 #include "UserStore.h"
 #include "ConsoleStore.h"
 #include "AutomationStore.h"
+#include "PsramJsonBuffer.h"
 
 class WebConsole {
 public:
@@ -19,7 +20,7 @@ public:
     using DeviceRssiFn = bool (*)(const uint8_t ieee[8], int8_t *rssiDbm);
     using DevicesFileFn = String (*)();
     using GatewayStatusFn = String (*)();
-    using DeviceTelemetryFn = void (*)(const uint8_t ieee[8], String &json);
+    using DeviceTelemetryFn = void (*)(const uint8_t ieee[8], PsramJsonBuffer &json);
     using DeviceCommandFn = int (*)(const char *ieeeText, const char *payload, int channel);
     using DevicesRestoredFn = bool (*)(const uint8_t (*removedIeees)[8], int removedCount);
     using UsersRestoredFn = bool (*)(const char (*removedNames)[USER_NAME_MAX], int removedCount);

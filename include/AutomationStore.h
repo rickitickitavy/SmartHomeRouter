@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Defines.h"
+#include "PsramJsonBuffer.h"
 
 class DeviceTopicMap;
 #include <Arduino.h>
@@ -167,6 +168,7 @@ public:
     AutomationWriteResult replaceFromJson(const char *name, const char *json, bool keepName);
     AutomationWriteResult deleteAutomation(const char *name);
     bool replaceAllFromJson(const String &json);
+    bool replaceAllFromJson(const char *json);
     bool mergeAllFromJson(const String &json);
     String listSummaryJson() const;
     String listFullJson() const;
@@ -210,9 +212,9 @@ private:
     static bool parseCondition(const char *conditionJson, AutomationCondition **outCondition, int depth);
     static bool parseActions(const char *objectJson, AutomationAction **outActions);
     bool validateAutomation(const AutomationRecord *automation) const;
-    static void appendAutomationFull(String &json, const AutomationRecord *automation, bool includeRuntime);
-    static void appendConditionJson(String &json, const AutomationCondition *condition);
-    static void appendActionJson(String &json, const AutomationAction *action);
+    static void appendAutomationFull(PsramJsonBuffer &json, const AutomationRecord *automation, bool includeRuntime);
+    static void appendConditionJson(PsramJsonBuffer &json, const AutomationCondition *condition);
+    static void appendActionJson(PsramJsonBuffer &json, const AutomationAction *action);
     static bool compareOpFromText(const char *text, AutomationCompareOp &op);
     static const char *containerOpToText(AutomationContainerOp op);
     static bool containerOpFromText(const char *text, AutomationContainerOp &op);

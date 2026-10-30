@@ -306,7 +306,7 @@ const char *ConsoleStore::alignVJsonId(uint8_t alignV) {
     return "center";
 }
 
-void ConsoleStore::appendBindingLayoutJson(String &json, const ConsoleBinding *binding) {
+void ConsoleStore::appendBindingLayoutJson(PsramJsonBuffer &json, const ConsoleBinding *binding) {
     if (binding == nullptr) {
         return;
     }
@@ -520,10 +520,20 @@ bool ConsoleStore::saveToFile() const {
         LOGGER.error("Consoles file write failed");
         return false;
     }
-    const String json = listFullJson();
-    const size_t written = file.print(json);
+    PsramJsonBuffer json;
+    json += "[";
+    bool first = true;
+    for (const ConsoleRecord *console = head; console != nullptr; console = console->next) {
+        if (!first) {
+            json += ",";
+        }
+        first = false;
+        appendConsoleFull(json, console);
+    }
+    json += "]";
+    const bool written = json.ok() && json.writeToFile(file);
     file.close();
-    return written == json.length();
+    return written;
 }
 
 bool ConsoleStore::persistNow() {
@@ -1454,20 +1464,32 @@ bool ConsoleStore::loadFromFile() {
     if (!file) {
         return false;
     }
-    String json = file.readString();
+    PsramJsonBuffer json;
+    const bool loaded = json.assignFromFile(file);
     file.close();
+    if (!loaded || !json.ok()) {
+        return false;
+    }
     json.trim();
     if (json.length() == 0 || json.charAt(0) != '[') {
         return false;
     }
-    return replaceAllFromJson(json);
+    return replaceAllFromJson(json.c_str());
 }
 
 bool ConsoleStore::replaceAllFromJson(const String &json) {
+    return replaceAllFromJson(json.c_str());
+}
+
+bool ConsoleStore::replaceAllFromJson(const char *json) {
     ConsoleRecord *newHead = nullptr;
     ConsoleRecord *tail = nullptr;
     int count = 0;
-    const char *cursor = json.c_str();
+    if (json == nullptr) {
+        return false;
+    }
+    const char *cursor = json;
+    PsramJsonBuffer object;
     while (cursor != nullptr && *cursor != '\0' && count < CONSOLE_STORE_MAX) {
         const char *objectStart = strchr(cursor, '{');
         if (objectStart == nullptr) {
@@ -1513,8 +1535,7 @@ bool ConsoleStore::replaceAllFromJson(const String &json) {
             freeConsoleList(newHead);
             return false;
         }
-        String object;
-        if (!assignJsonSlice(objectStart, objectEnd, object)) {
+        if (!object.assignSlice(objectStart, objectEnd)) {
             freeConsoleList(newHead);
             return false;
         }
@@ -1674,7 +1695,7 @@ ConsoleWriteResult ConsoleStore::deleteConsole(const char *consoleId) {
     return ConsoleWriteNotFound;
 }
 
-void ConsoleStore::appendOneBindingJson(String &json, const ConsoleBinding *binding) {
+void ConsoleStore::appendOneBindingJson(PsramJsonBuffer &json, const ConsoleBinding *binding) {
     if (binding == nullptr) {
         return;
     }
@@ -1779,7 +1800,7 @@ void ConsoleStore::appendOneBindingJson(String &json, const ConsoleBinding *bind
     json += "}";
 }
 
-void ConsoleStore::appendCompositeRowsJson(String &json, const ConsoleCompositeRow *rows) {
+void ConsoleStore::appendCompositeRowsJson(PsramJsonBuffer &json, const ConsoleCompositeRow *rows) {
     json += ",\"compositeRows\":[";
     bool firstRow = true;
     for (const ConsoleCompositeRow *row = rows; row != nullptr; row = row->next) {
@@ -1826,7 +1847,7 @@ void ConsoleStore::appendCompositeRowsJson(String &json, const ConsoleCompositeR
     json += "]";
 }
 
-void ConsoleStore::appendConsoleFull(String &json, const ConsoleRecord *console) {
+void ConsoleStore::appendConsoleFull(PsramJsonBuffer &json, const ConsoleRecord *console) {
     json += "{\"id\":\"";
     appendJsonEscaped(json, console->id, sizeof(console->id));
     json += "\",\"name\":\"";
@@ -1883,7 +1904,7 @@ void ConsoleStore::appendConsoleFull(String &json, const ConsoleRecord *console)
     json += "]}";
 }
 
-void ConsoleStore::appendGaugeJson(String &json, const ConsoleBinding *binding) {
+void ConsoleStore::appendGaugeJson(PsramJsonBuffer &json, const ConsoleBinding *binding) {
     if (binding == nullptr || binding->gauge == nullptr) {
         return;
     }
@@ -1916,16 +1937,20 @@ void ConsoleStore::appendGaugeJson(String &json, const ConsoleBinding *binding) 
 }
 
 String ConsoleStore::consoleFullJson(const ConsoleRecord *console) const {
-    String json;
     if (console == nullptr) {
         return String("null");
     }
+    PsramJsonBuffer json;
     appendConsoleFull(json, console);
-    return json;
+    if (!json.ok()) {
+        return String();
+    }
+    return json.toString();
 }
 
 String ConsoleStore::listFullJson() const {
-    String json = "[";
+    PsramJsonBuffer json;
+    json += "[";
     bool first = true;
     for (const ConsoleRecord *console = head; console != nullptr; console = console->next) {
         if (!first) {
@@ -1935,11 +1960,15 @@ String ConsoleStore::listFullJson() const {
         appendConsoleFull(json, console);
     }
     json += "]";
-    return json;
+    if (!json.ok()) {
+        return String();
+    }
+    return json.toString();
 }
 
 String ConsoleStore::listSummaryJson(UserStore *userStore) const {
-    String json = "[";
+    PsramJsonBuffer json;
+    json += "[";
     bool first = true;
     for (const ConsoleRecord *console = head; console != nullptr; console = console->next) {
         if (!first) {
@@ -1972,11 +2001,15 @@ String ConsoleStore::listSummaryJson(UserStore *userStore) const {
         json += "]}";
     }
     json += "]";
-    return json;
+    if (!json.ok()) {
+        return String();
+    }
+    return json.toString();
 }
 
 String ConsoleStore::mineJson(const UserRecord *user) const {
-    String json = "[";
+    PsramJsonBuffer json;
+    json += "[";
     bool first = true;
     if (user != nullptr) {
         for (const UserConsoleIdNode *node = user->consoleIds; node != nullptr; node = node->next) {
@@ -1992,5 +2025,8 @@ String ConsoleStore::mineJson(const UserRecord *user) const {
         }
     }
     json += "]";
-    return json;
+    if (!json.ok()) {
+        return String();
+    }
+    return json.toString();
 }

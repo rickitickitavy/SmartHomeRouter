@@ -2035,7 +2035,7 @@ static void setupHost() {
         return ZIGBEE_SPI_PROXY.isOnline(ieee);
     });
     webConsole->setDeviceRssiHandler(hostLastDeviceRssi);
-    webConsole->setDeviceTelemetryHandler([](const uint8_t ieee[8], String &json) {
+    webConsole->setDeviceTelemetryHandler([](const uint8_t ieee[8], PsramJsonBuffer &json) {
         ZIGBEE_SPI_PROXY.appendListTelemetry(ieee, json);
     });
     webConsole->setDeviceCommandHandler(applyManualDeviceCommand);
