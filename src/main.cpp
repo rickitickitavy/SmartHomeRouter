@@ -798,6 +798,16 @@ static void onHostSpiEvent(const SpiFrame &frame) {
         if (foundDevices->noteJoin(frame, topicMap)) {
             requestHostDeviceListPersist();
         }
+        if (frame.length >= SPI_DEVICE_JOIN_MIN_LEN) {
+            uint8_t joinIeee[8];
+            memcpy(joinIeee, frame.payload, 8);
+            const uint16_t joinShort =
+                (uint16_t)frame.payload[SPI_DEVICE_JOIN_NWK_OFFSET]
+                | ((uint16_t)frame.payload[SPI_DEVICE_JOIN_NWK_OFFSET + 1] << 8);
+            if (topicMap->applyLastKnownShort(joinIeee, joinShort)) {
+                requestHostDeviceListPersist();
+            }
+        }
     }
     if (frame.cmd == SpiEvtAttrReport && frame.length >= SPI_ATTR_REPORT_MESSAGE_OFFSET + 1
         && foundDevices != nullptr && topicMap != nullptr) {
@@ -815,6 +825,9 @@ static void onHostSpiEvent(const SpiFrame &frame) {
             topicMap,
             zigbeeDeviceTypeFromAttrMessage(reportMessage)
         );
+        if (topicMap->applyLastKnownShort(ieee, shortAddr)) {
+            requestHostDeviceListPersist();
+        }
     }
     if (frame.cmd == SpiEvtSettingsOk && topicMap != nullptr) {
         ZIGBEE_SPI_PROXY.publishHostStores(topicMap, userStore);
@@ -1515,7 +1528,10 @@ static void runDeviceRegistryFixtures() {
     if (syncSource != nullptr) {
         syncSource->zigbeeType = ZigbeeDeviceTypeIasZone;
     }
-    uint8_t syncPacked[SPI_DEVICE_SYNC_ENTRY_LEN];
+    if (syncSource != nullptr) {
+        syncSource->shortAddr = 0xA369;
+    }
+    uint8_t syncPacked[DeviceTopicMap::kDeviceSyncEntryLenWithNwk];
     const size_t syncPackedLen = DeviceTopicMap::packSyncPayload(
         syncPacked,
         sizeof(syncPacked),
@@ -1524,14 +1540,33 @@ static void runDeviceRegistryFixtures() {
     );
     DeviceTopicEntry syncUnpacked{};
     uint8_t syncFlags = 0;
+    uint8_t syncLegacy[SPI_DEVICE_SYNC_ENTRY_LEN];
+    const size_t syncLegacyLen = DeviceTopicMap::packSyncPayload(
+        syncLegacy,
+        sizeof(syncLegacy),
+        SPI_DEVICE_SYNC_ENTRY,
+        syncSource
+    );
+    DeviceTopicEntry syncLegacyUnpacked{};
+    uint8_t syncLegacyFlags = 0;
     if (syncSource == nullptr
-        || syncPackedLen != SPI_DEVICE_SYNC_ENTRY_LEN
+        || syncPackedLen != DeviceTopicMap::kDeviceSyncEntryLenWithNwk
         || !DeviceTopicMap::unpackSyncPayload(syncPacked, (uint16_t)syncPackedLen, &syncFlags, &syncUnpacked)
-        || syncUnpacked.zigbeeType != ZigbeeDeviceTypeIasZone) {
+        || syncUnpacked.zigbeeType != ZigbeeDeviceTypeIasZone
+        || syncUnpacked.shortAddr != 0xA369
+        || syncLegacyLen != SPI_DEVICE_SYNC_ENTRY_LEN
+        || !DeviceTopicMap::unpackSyncPayload(
+               syncLegacy,
+               (uint16_t)syncLegacyLen,
+               &syncLegacyFlags,
+               &syncLegacyUnpacked
+           )
+        || syncLegacyUnpacked.shortAddr != 0) {
         LOGGER.error("Device type SPI sync fixture failed");
     } else {
         LOGGER.info("Device type SPI sync fixture ok");
     }
+    DeviceTopicMap::clearEntryStrings(&syncLegacyUnpacked);
     DeviceTopicMap::clearEntryStrings(&syncUnpacked);
     if (syncSource != nullptr) {
         topicMap->removeByIeee(syncSource->ieee);

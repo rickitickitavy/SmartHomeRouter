@@ -21,6 +21,7 @@ struct DeviceTopicEntry {
     uint8_t customCommandCount;
     ReportableDataDef *reportableData;
     uint8_t reportableDataCount;
+    uint16_t shortAddr;
     uint8_t channelCount;
     uint8_t fullControl;
     uint8_t debug;
@@ -157,6 +158,10 @@ public:
     bool saveToFile(const char *path);
 
     static bool ieeeEqual(const uint8_t left[8], const uint8_t right[8]);
+    static bool isUsableShortAddr(uint16_t shortAddr);
+    /** Set last-known NWK short for ieee; clear the same short from other Zigbee rows. */
+    bool applyLastKnownShort(const uint8_t ieee[8], uint16_t shortAddr);
+    static constexpr size_t kDeviceSyncEntryLenWithNwk = SPI_DEVICE_SYNC_ENTRY_LEN + 2;
     static size_t packSyncPayload(uint8_t *out, size_t outMax, uint8_t flags, const DeviceTopicEntry *entry);
     static bool unpackSyncPayload(
         const uint8_t *in,

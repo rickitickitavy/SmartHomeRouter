@@ -219,7 +219,7 @@ void InterChipSlave::pumpDeviceDump() {
     if (!deviceDumpPending || deviceMapSource == nullptr) {
         return;
     }
-    uint8_t payload[SPI_DEVICE_SYNC_ENTRY_LEN];
+    uint8_t payload[DeviceTopicMap::kDeviceSyncEntryLenWithNwk];
     if (!deviceDumpHeaderSent) {
         payload[0] = SPI_DEVICE_SYNC_RESET;
         payload[1] = (uint8_t)deviceMapSource->usedCount();

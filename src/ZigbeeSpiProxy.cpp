@@ -1201,7 +1201,7 @@ bool ZigbeeSpiProxy::enqueueRegistryFrame(uint8_t flags, const DeviceTopicEntry 
         LOGGER.warning("Host device change must be one create/update or one delete");
         return false;
     }
-    uint8_t payload[SPI_DEVICE_SYNC_ENTRY_LEN];
+    uint8_t payload[DeviceTopicMap::kDeviceSyncEntryLenWithNwk];
     const size_t length = DeviceTopicMap::packSyncPayload(payload, sizeof(payload), flags, entry);
     if (length == 0) {
         return false;
