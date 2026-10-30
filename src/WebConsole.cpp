@@ -412,10 +412,17 @@ void WebConsole::begin() {
         }
     );
 
-    server.on("/api/log", HTTP_GET, [this](AsyncWebServerRequest *request) { handleLogGet(request); });
-    server.on("/api/log/download", HTTP_GET, [this](AsyncWebServerRequest *request) {
-        handleLogDownloadGet(request);
-    });
+    // exact() so /api/log does not steal /api/log/download (BackwardCompatible matches prefix+/).
+    server.on(
+        AsyncURIMatcher::exact("/api/log/download"),
+        HTTP_GET,
+        [this](AsyncWebServerRequest *request) { handleLogDownloadGet(request); }
+    );
+    server.on(
+        AsyncURIMatcher::exact("/api/log"),
+        HTTP_GET,
+        [this](AsyncWebServerRequest *request) { handleLogGet(request); }
+    );
     server.on("/api/version", HTTP_GET, [this](AsyncWebServerRequest *request) { handleVersionGet(request); });
     server.on(
         "/api/update/status",
@@ -3113,8 +3120,8 @@ void WebConsole::handleLogDownloadGet(AsyncWebServerRequest *request) {
     }
     size_t start = 0;
     size_t length = 0;
-    // Full ring (not kWebViewMaxBytes). Fixed-length filler matches /api/log and avoids
-    // chunked-transfer truncation seen with large PSRAM rings.
+    // Full ring (not kWebViewMaxBytes). Route must use AsyncURIMatcher::exact so
+    // /api/log BackwardCompatible matching cannot steal this path.
     LOGGER.snapshotRing(&start, &length);
     AsyncWebServerResponse *response = request->beginResponse(
         "text/plain",
