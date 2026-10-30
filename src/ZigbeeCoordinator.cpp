@@ -1,6 +1,5 @@
 #include "ZigbeeCoordinator.h"
 #include "BoundDeviceJson.h"
-#include "DeviceModelType.h"
 #include "Logger.h"
 #include "Defines.h"
 #include "StatusRgb.h"
@@ -819,25 +818,6 @@ bool ZigbeeCoordinator::applyBasicIdentityAttribute(
     }
     if (!copyZclCharStringAttr(destination, attribute, 31)) {
         return false;
-    }
-    // Model + manufacturer define the device class; override cluster-race types.
-    if (!applySavedDeviceClass(slot)) {
-        const char *manufacturer = deviceTopicCStr(slot->manufacturer);
-        const char *model = deviceTopicCStr(slot->model);
-        const uint8_t fromIdentity = zigbeeDeviceTypeFromIdentity(manufacturer, model);
-        if (fromIdentity != ZigbeeDeviceTypeUnknown && slot->zigbeeType != fromIdentity) {
-            slot->zigbeeType = fromIdentity;
-            LOGGER.info(
-                String("Identity type=")
-                + zigbeeDeviceTypeJsonId(fromIdentity)
-                + " manufacturer="
-                + manufacturer
-                + " model="
-                + model
-                + " ieee="
-                + formatIeeeText(slot->ieee)
-            );
-        }
     }
     emitDeviceJoinIdentity(slot);
     return true;

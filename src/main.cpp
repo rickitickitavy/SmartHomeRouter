@@ -34,7 +34,6 @@
 #include "DeviceStore.h"
 #include "DeviceConfigCatalog.h"
 #include "DeviceManufacturer.h"
-#include "DeviceModelType.h"
 #include "ZigbeeDeviceType.h"
 #include "ZigbeeCluster.h"
 #include "UserDataPayload.h"
@@ -1273,13 +1272,7 @@ static void runDeviceRegistryFixtures() {
         }()
         || !zigbeeJoinShouldEmit(kZigbeeDeviceTypeNeverEmitted, ZigbeeDeviceTypeUnknown)
         || !zigbeeJoinShouldEmit(ZigbeeDeviceTypeUnknown, ZigbeeDeviceTypeOnOff)
-        || zigbeeJoinShouldEmit(ZigbeeDeviceTypeOnOff, ZigbeeDeviceTypeOnOff)
-        || zigbeeDeviceTypeFromIdentity("Zbeacon", "TH01")
-            != zigbeeDeviceTypeFromCluster(kZigbeeClusterTemperature)
-        || zigbeeDeviceTypeFromIdentity("zbeacon", "TS0201")
-            != zigbeeDeviceTypeFromCluster(kZigbeeClusterTemperature)
-        || zigbeeDeviceTypeFromIdentity("Zbeacon", "") != ZigbeeDeviceTypeUnknown
-        || zigbeeDeviceTypeFromIdentity("", "TH01") != ZigbeeDeviceTypeUnknown) {
+        || zigbeeJoinShouldEmit(ZigbeeDeviceTypeOnOff, ZigbeeDeviceTypeOnOff)) {
         LOGGER.error("Device type classifier fixture failed");
     } else {
         LOGGER.info("Device type classifier fixture ok");
