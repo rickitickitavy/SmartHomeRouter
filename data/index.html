@@ -4853,12 +4853,24 @@
             });
         }
 
+        function formatDeviceNwkDisplay(rawNwk) {
+            var nwkValue = Number(rawNwk);
+            if (!Number.isFinite(nwkValue) || nwkValue <= 0 || nwkValue >= 0xffff) {
+                return "nwk —";
+            }
+            return "nwk 0x" + Math.floor(nwkValue).toString(16);
+        }
+
         function fillParameterDialog(device, title) {
             var heading = document.getElementById("parameterDialogTitle");
             if (heading) {
                 heading.textContent = title;
             }
             document.getElementById("deviceIeee").value = device.ieee || "";
+            var nwkInput = document.getElementById("deviceNwk");
+            if (nwkInput) {
+                nwkInput.value = formatDeviceNwkDisplay(device.nwk);
+            }
             parameterDialogTypeId = device.type || "unknown";
             parameterDialogTransport = device.transport == "mqtt" ? "mqtt" : "zigbee";
             parameterDialogManufacturerId = deviceManufacturerJsonId(device.manufacturer);
@@ -15897,7 +15909,10 @@
                     <div id="parameter-tab-settings" class="parameter-tab-panel tab-panel active" role="tabpanel">
                         <div class="field" id="deviceIeeeField">
                             <label for="deviceIeee">IEEE</label>
-                            <input id="deviceIeee" type="text" readonly autocomplete="off">
+                            <div class="field-inline device-ieee-nwk-row">
+                                <input id="deviceIeee" type="text" readonly autocomplete="off">
+                                <input id="deviceNwk" type="text" readonly autocomplete="off" aria-label="NWK">
+                            </div>
                         </div>
                         <div class="field">
                             <label for="deviceTransport">DEVICE SOURCE</label>

@@ -1203,6 +1203,14 @@ void ZigbeeCoordinator::rememberShortIeee(uint16_t shortAddr, const uint8_t ieee
     if (ieee == nullptr || isZeroIeee(ieee) || shortAddr == 0 || shortAddr == 0xFFFF) {
         return;
     }
+    for (BoundZigbeeDevice *other = boundDeviceHead; other != nullptr; other = other->next) {
+        if (!other->occupied || other->shortAddr != shortAddr) {
+            continue;
+        }
+        if (!DeviceTopicMap::ieeeEqual(other->ieee, ieee)) {
+            other->shortAddr = 0;
+        }
+    }
     BoundZigbeeDevice *slot = findByIeee(ieee);
     if (slot == nullptr) {
         slot = findByShortAddr(shortAddr);
@@ -1382,6 +1390,9 @@ void ZigbeeCoordinator::upsertRegisteredDevice(const DeviceTopicEntry *entry) {
     if (registeredMap->upsertFromEntry(entry, false) == nullptr) {
         LOGGER.warning("Registered device table full");
         return;
+    }
+    if (DeviceTopicMap::isUsableShortAddr(entry->shortAddr)) {
+        rememberShortIeee(entry->shortAddr, entry->ieee, 0);
     }
     applySavedDeviceClass(findByIeee(entry->ieee));
     queueDeviceStatusReads(entry);

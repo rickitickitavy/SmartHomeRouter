@@ -15,6 +15,11 @@
 #include <string.h>
 #include <strings.h>
 
+static_assert(
+    DeviceTopicMap::kDeviceSyncEntryLenWithNwk <= SPI_MAX_PAYLOAD,
+    "device sync with nwk must fit SPI payload"
+);
+
 static size_t jsonEscapeCap(const char *value) {
     if (value == nullptr) {
         return 0;
@@ -108,6 +113,7 @@ bool DeviceTopicMap::cloneEntry(DeviceTopicEntry *destination, const DeviceTopic
         clearEntryStrings(destination);
         return false;
     }
+    destination->shortAddr = source->shortAddr;
     destination->channelCount = source->channelCount;
     destination->fullControl = source->fullControl;
     destination->debug = source->debug;
@@ -202,6 +208,38 @@ void DeviceTopicMap::unlinkEntry(DeviceTopicEntry *entry) {
 
 bool DeviceTopicMap::ieeeEqual(const uint8_t left[8], const uint8_t right[8]) {
     return memcmp(left, right, 8) == 0;
+}
+
+bool DeviceTopicMap::isUsableShortAddr(uint16_t shortAddr) {
+    return shortAddr != 0 && shortAddr != 0xFFFF;
+}
+
+bool DeviceTopicMap::applyLastKnownShort(const uint8_t ieee[8], uint16_t shortAddr) {
+    if (ieee == nullptr || !isUsableShortAddr(shortAddr)) {
+        return false;
+    }
+    DeviceTopicEntry *target = findByIeee(ieee);
+    if (target == nullptr || !target->used) {
+        return false;
+    }
+    if (clampDeviceTransport(target->transport) != DeviceTransportZigbee) {
+        return false;
+    }
+    bool changed = target->shortAddr != shortAddr;
+    target->shortAddr = shortAddr;
+    for (DeviceTopicEntry *entry = head; entry != nullptr; entry = entry->next) {
+        if (!entry->used || entry == target) {
+            continue;
+        }
+        if (clampDeviceTransport(entry->transport) != DeviceTransportZigbee) {
+            continue;
+        }
+        if (entry->shortAddr == shortAddr) {
+            entry->shortAddr = 0;
+            changed = true;
+        }
+    }
+    return changed;
 }
 
 DeviceTopicEntry *DeviceTopicMap::slotAt(int index) {
@@ -1020,6 +1058,7 @@ DeviceTopicEntry *DeviceTopicMap::upsert(
     uint8_t preservedZigbeeType = ZigbeeDeviceTypeUnknown;
     uint8_t preservedManufacturer = DeviceManufacturerUnknown;
     uint8_t preservedTransport = DeviceTransportZigbee;
+    uint16_t preservedShortAddr = 0;
     if (entry != nullptr && entry->used) {
         preservedFullControl = entry->fullControl;
         preservedDebug = entry->debug;
@@ -1028,6 +1067,7 @@ DeviceTopicEntry *DeviceTopicMap::upsert(
         preservedZigbeeType = entry->zigbeeType;
         preservedManufacturer = entry->manufacturer;
         preservedTransport = clampDeviceTransport(entry->transport);
+        preservedShortAddr = entry->shortAddr;
     }
     if (entry == nullptr) {
         entry = allocateEntry();
@@ -1047,6 +1087,7 @@ DeviceTopicEntry *DeviceTopicMap::upsert(
     entry->zigbeeType = preservedZigbeeType;
     entry->manufacturer = preservedManufacturer;
     entry->transport = preservedTransport;
+    entry->shortAddr = preservedShortAddr;
     return entry;
 }
 
@@ -1079,6 +1120,9 @@ DeviceTopicEntry *DeviceTopicMap::upsertFromEntry(const DeviceTopicEntry *source
         entry->manufacturer = source->manufacturer;
     }
     entry->transport = clampDeviceTransport(source->transport);
+    if (isUsableShortAddr(source->shortAddr)) {
+        applyLastKnownShort(entry->ieee, source->shortAddr);
+    }
     // Schema lives on the host only. Do not wipe it when the source has no fields
     // (e.g. SPI sync payloads never carry userDataFields).
     if (source->userDataFieldCount > 0) {
@@ -1337,6 +1381,23 @@ void DeviceTopicMap::replaceFromJson(const String &json) {
                         entry->publishToMqtt = 1;
                     }
                 }
+                int parsedNwk = 0;
+                if (extractJsonInt(object.c_str(), "nwk", parsedNwk)
+                    && parsedNwk > 0
+                    && parsedNwk <= 0xFFFF) {
+                    applyLastKnownShort(entry->ieee, (uint16_t)parsedNwk);
+                } else {
+                    String nwkText;
+                    if (extractJsonString(object.c_str(), "nwk", nwkText) && nwkText.length() > 0) {
+                        char *endPtr = nullptr;
+                        const unsigned long parsedHex = strtoul(nwkText.c_str(), &endPtr, 0);
+                        if (endPtr != nwkText.c_str()
+                            && parsedHex > 0
+                            && parsedHex <= 0xFFFFUL) {
+                            applyLastKnownShort(entry->ieee, (uint16_t)parsedHex);
+                        }
+                    }
+                }
                 userDataClearFieldDefs(&entry->userDataFields, &entry->userDataFieldCount);
                 if (zigbeeDeviceTypeIsUserData(entry->zigbeeType)) {
                     String fieldsSlice;
@@ -1423,7 +1484,10 @@ size_t DeviceTopicMap::packSyncPayload(
     }
     const bool hasEntry = entry != nullptr
         && ((flags & SPI_DEVICE_SYNC_ENTRY) != 0 || (flags & SPI_DEVICE_SYNC_DELETE) != 0);
-    const size_t length = hasEntry ? SPI_DEVICE_SYNC_ENTRY_LEN : 1;
+    const bool includeNwk = hasEntry && outMax >= kDeviceSyncEntryLenWithNwk;
+    const size_t length = !hasEntry
+        ? 1
+        : (includeNwk ? kDeviceSyncEntryLenWithNwk : SPI_DEVICE_SYNC_ENTRY_LEN);
     if (outMax < length) {
         return 0;
     }
@@ -1440,6 +1504,11 @@ size_t DeviceTopicMap::packSyncPayload(
         out[SPI_DEVICE_SYNC_ENTRY_LEN_WITH_CHANNELS] =
             (entry->fullControl ? 0x01 : 0x00) | (entry->debug ? 0x02 : 0x00);
         out[SPI_DEVICE_SYNC_ENTRY_LEN_WITH_FULL_CONTROL] = entry->zigbeeType;
+        if (includeNwk) {
+            const uint16_t shortAddr = isUsableShortAddr(entry->shortAddr) ? entry->shortAddr : 0;
+            out[SPI_DEVICE_SYNC_ENTRY_LEN] = (uint8_t)(shortAddr & 0xFF);
+            out[SPI_DEVICE_SYNC_ENTRY_LEN + 1] = (uint8_t)((shortAddr >> 8) & 0xFF);
+        }
     }
     return length;
 }
@@ -1481,6 +1550,15 @@ bool DeviceTopicMap::unpackSyncPayload(
     }
     if (length >= SPI_DEVICE_SYNC_ENTRY_LEN) {
         entry->zigbeeType = in[SPI_DEVICE_SYNC_ENTRY_LEN_WITH_FULL_CONTROL];
+    }
+    if (length >= kDeviceSyncEntryLenWithNwk) {
+        entry->shortAddr = (uint16_t)in[SPI_DEVICE_SYNC_ENTRY_LEN]
+            | ((uint16_t)in[SPI_DEVICE_SYNC_ENTRY_LEN + 1] << 8);
+        if (!isUsableShortAddr(entry->shortAddr)) {
+            entry->shortAddr = 0;
+        }
+    } else {
+        entry->shortAddr = 0;
     }
     entry->transport = DeviceTransportZigbee;
     entry->used = 1;
@@ -1580,6 +1658,8 @@ static void appendDeviceListEntryJson(
     appendJsonEscaped(json, deviceEntry->availabilityTopic, jsonEscapeCap(deviceEntry->availabilityTopic));
     json += "\",\"channels\":";
     json += String(deviceEntry->channelCount);
+    json += ",\"nwk\":";
+    json += String((unsigned)deviceEntry->shortAddr);
     json += ",\"fullControl\":";
     json += deviceEntry->fullControl ? "true" : "false";
     json += ",\"debug\":";
