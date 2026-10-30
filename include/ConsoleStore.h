@@ -13,6 +13,7 @@ struct ConsoleGaugeRange {
 
 struct ConsoleGaugeConfig {
     uint8_t gaugeType;
+    uint8_t linearStyle;
     float gaugeMin;
     float gaugeMax;
     ConsoleGaugeRange *ranges;
@@ -182,5 +183,7 @@ private:
     static const char *alignVJsonId(uint8_t alignV);
     static uint8_t parseGaugeTypeId(const char *text);
     static const char *gaugeTypeJsonId(uint8_t gaugeType);
+    static uint8_t parseLinearStyleId(const char *text);
+    static const char *linearStyleJsonId(uint8_t linearStyle);
     static void appendBindingLayoutJson(String &json, const ConsoleBinding *binding);
 };

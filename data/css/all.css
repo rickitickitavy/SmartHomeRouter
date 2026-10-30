@@ -2630,11 +2630,142 @@ html, body {
     background: var(--chrome-idle);
     border: 1px solid var(--border);
     overflow: hidden;
+    position: relative;
 }
 
 .console-gauge-linear-fill {
     height: 100%;
     border-radius: inherit;
+}
+
+.console-gauge--linear.console-gauge--vertical {
+    flex: 1 1 auto;
+    align-self: stretch;
+    height: 100%;
+    min-height: 0;
+    width: auto;
+    max-width: none;
+}
+
+.console-gauge--linear.console-gauge--vertical .console-gauge-linear-track {
+    width: 0.75rem;
+    height: 100%;
+    min-height: 4rem;
+    flex: 1 1 auto;
+}
+
+.console-gauge--linear.console-gauge--vertical .console-gauge-linear-fill {
+    width: 100%;
+    height: auto;
+}
+
+.console-gauge-linear-svg {
+    width: 100%;
+    height: 1.25rem;
+    display: block;
+    overflow: visible;
+    color: var(--text);
+}
+
+.console-gauge--linear.console-gauge--vertical .console-gauge-linear-svg {
+    width: 1.25rem;
+    height: 100%;
+    min-height: 4rem;
+    flex: 1 1 auto;
+}
+
+.console-device-row--gauge.console-device-row--vertical-gauge {
+    height: 100%;
+    min-height: 0;
+    align-self: stretch;
+}
+
+.console-device-row--gauge.console-device-row--vertical-gauge .console-device-row-controls {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+    align-items: stretch;
+}
+
+.console-device-row--gauge.console-device-row--vertical-gauge.console-device-row--title-left,
+.console-device-row--gauge.console-device-row--vertical-gauge.console-device-row--title-right {
+    flex-direction: row;
+    align-items: stretch;
+}
+
+.console-device-row--gauge.console-device-row--vertical-gauge.console-device-row--title-left .console-device-row-title,
+.console-device-row--gauge.console-device-row--vertical-gauge.console-device-row--title-right .console-device-row-title {
+    width: auto;
+    flex: 0 0 auto;
+    align-self: center;
+}
+
+.console-device-row--gauge.console-device-row--vertical-gauge.console-device-row--title-top,
+.console-device-row--gauge.console-device-row--vertical-gauge.console-device-row--title-bottom,
+.console-device-row--gauge.console-device-row--vertical-gauge.console-device-row--no-title {
+    flex-direction: column;
+}
+
+.connection-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    z-index: 45;
+}
+
+.connection-overlay[hidden] {
+    display: none !important;
+}
+
+.connection-overlay-panel {
+    width: min(22rem, 100%);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    text-align: center;
+}
+
+.connection-overlay-icon {
+    width: 4.5rem;
+    height: 4.5rem;
+    color: var(--text);
+}
+
+.connection-overlay-icon svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.connection-overlay-icon--reconnect svg {
+    animation: connection-reconnect-spin 1.2s linear infinite;
+}
+
+@keyframes connection-reconnect-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.connection-overlay-title {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.connection-overlay-text {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.9375rem;
 }
 
 .console-gauge-value {

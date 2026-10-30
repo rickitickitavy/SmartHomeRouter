@@ -385,6 +385,26 @@
         var sessionWatchTimer = null;
         var sessionIdleTouchMs = 0;
         var firmwareRebootWaitActive = false;
+        var connectionHttpOk = true;
+        var connectionOverlayGraceTimer = null;
+        var connectionOverlayMode = "";
+        var CONNECTION_OVERLAY_GRACE_MS = 400;
+        var CONNECTION_DISCONNECTED_ICON_SVG = ""
+            + "<svg viewBox=\"0 0 64 64\" xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\">"
+            + "<path fill=\"none\" stroke=\"currentColor\" stroke-width=\"4\" stroke-linecap=\"round\" "
+            + "d=\"M18 28c6-8 22-8 28 0M24 34c4-5 12-5 16 0M30 40c2-2 4-2 6 0\"/>"
+            + "<path fill=\"none\" stroke=\"currentColor\" stroke-width=\"4\" stroke-linecap=\"round\" "
+            + "d=\"M20 44 L44 20\"/>"
+            + "</svg>";
+        var CONNECTION_RECONNECT_ICON_SVG = ""
+            + "<svg viewBox=\"0 0 64 64\" xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\">"
+            + "<path fill=\"none\" stroke=\"currentColor\" stroke-width=\"4\" stroke-linecap=\"round\" "
+            + "stroke-linejoin=\"round\" d=\"M14 32a18 18 0 0 1 30-12\"/>"
+            + "<path fill=\"currentColor\" d=\"M44 12 L52 20 L40 22 Z\"/>"
+            + "<path fill=\"none\" stroke=\"currentColor\" stroke-width=\"4\" stroke-linecap=\"round\" "
+            + "stroke-linejoin=\"round\" d=\"M50 32a18 18 0 0 1-30 12\"/>"
+            + "<path fill=\"currentColor\" d=\"M20 52 L12 44 L24 42 Z\"/>"
+            + "</svg>";
         var nativeFetch = window.fetch.bind(window);
         window.fetch = function (input, init) {
             return nativeFetch(input, init).then(function (response) {
@@ -394,6 +414,112 @@
                 return response;
             });
         };
+
+        function hideConnectionOverlay() {
+            if (connectionOverlayGraceTimer != null) {
+                window.clearTimeout(connectionOverlayGraceTimer);
+                connectionOverlayGraceTimer = null;
+            }
+            connectionOverlayMode = "";
+            var overlay = document.getElementById("connectionOverlay");
+            if (overlay) {
+                overlay.hidden = true;
+            }
+        }
+
+        function renderConnectionOverlay(mode) {
+            var overlay = document.getElementById("connectionOverlay");
+            var icon = document.getElementById("connectionOverlayIcon");
+            var title = document.getElementById("connectionOverlayTitle");
+            var text = document.getElementById("connectionOverlayText");
+            if (!overlay || !icon || !title || !text) {
+                return;
+            }
+            connectionOverlayMode = mode;
+            overlay.hidden = false;
+            if (mode === "reconnecting") {
+                icon.className = "connection-overlay-icon connection-overlay-icon--reconnect";
+                icon.innerHTML = CONNECTION_RECONNECT_ICON_SVG;
+                title.textContent = "Disconnected";
+                text.textContent = "Reconnecting to router…";
+            } else {
+                icon.className = "connection-overlay-icon";
+                icon.innerHTML = CONNECTION_DISCONNECTED_ICON_SVG;
+                title.textContent = "Disconnected";
+                text.textContent = "Connection to the router was lost.";
+            }
+        }
+
+        function wantedLiveSocketState(wanted, socket, reconnectTimer) {
+            if (!wanted) {
+                return "idle";
+            }
+            if (socket != null && socket.readyState === WebSocket.OPEN) {
+                return "open";
+            }
+            if ((socket != null && socket.readyState === WebSocket.CONNECTING)
+                || reconnectTimer != null) {
+                return "connecting";
+            }
+            return "down";
+        }
+
+        function refreshConnectionOverlay() {
+            if (!signedInUser || firmwareRebootWaitActive) {
+                hideConnectionOverlay();
+                return;
+            }
+            var httpDown = !connectionHttpOk || navigator.onLine === false;
+            var devicesState = wantedLiveSocketState(
+                typeof devicesLiveWanted !== "undefined" && devicesLiveWanted,
+                typeof devicesLiveSocket !== "undefined" ? devicesLiveSocket : null,
+                typeof devicesLiveReconnectTimer !== "undefined" ? devicesLiveReconnectTimer : null
+            );
+            var consolesState = wantedLiveSocketState(
+                typeof consolesLiveWanted !== "undefined" && consolesLiveWanted,
+                typeof consolesLiveSocket !== "undefined" ? consolesLiveSocket : null,
+                typeof consolesLiveReconnectTimer !== "undefined" ? consolesLiveReconnectTimer : null
+            );
+            var anyConnecting = devicesState === "connecting"
+                || consolesState === "connecting";
+            var anyDown = httpDown
+                || devicesState === "down"
+                || consolesState === "down";
+            if (!anyDown && !anyConnecting) {
+                hideConnectionOverlay();
+                return;
+            }
+            if (anyConnecting || (httpDown && navigator.onLine !== false && devicesState !== "down"
+                && consolesState !== "down")) {
+                if (connectionOverlayGraceTimer != null) {
+                    window.clearTimeout(connectionOverlayGraceTimer);
+                    connectionOverlayGraceTimer = null;
+                }
+                renderConnectionOverlay("reconnecting");
+                return;
+            }
+            if (connectionOverlayMode === "disconnected"
+                || connectionOverlayMode === "reconnecting") {
+                renderConnectionOverlay("disconnected");
+                return;
+            }
+            if (connectionOverlayGraceTimer != null) {
+                return;
+            }
+            connectionOverlayGraceTimer = window.setTimeout(function () {
+                connectionOverlayGraceTimer = null;
+                if (!signedInUser || firmwareRebootWaitActive) {
+                    hideConnectionOverlay();
+                    return;
+                }
+                renderConnectionOverlay("disconnected");
+            }, CONNECTION_OVERLAY_GRACE_MS);
+        }
+
+        function noteConnectionHttpOk(ok) {
+            connectionHttpOk = !!ok;
+            refreshConnectionOverlay();
+        }
 
         function isAdminUser() {
             return !!(signedInUser && signedInUser.isAdmin);
@@ -526,7 +652,10 @@
                 if (!signedInUser || firmwareRebootWaitActive) {
                     return;
                 }
-                fetch("/api/auth/me", { cache: "no-store" }).catch(function () {
+                fetch("/api/auth/me", { cache: "no-store" }).then(function () {
+                    noteConnectionHttpOk(true);
+                }).catch(function () {
+                    noteConnectionHttpOk(false);
                 });
             }, 10000);
         }
@@ -547,6 +676,8 @@
         function showLoginForm() {
             signedInUser = null;
             sessionIdleTouchMs = 0;
+            connectionHttpOk = true;
+            hideConnectionOverlay();
             stopSessionWatch();
             applyThemeToDocument("dark");
             setHidden(document.getElementById("appShell"), true);
@@ -579,6 +710,8 @@
             }
             signedInUser = user;
             sessionIdleTouchMs = 0;
+            connectionHttpOk = true;
+            hideConnectionOverlay();
             setHidden(document.getElementById("loginOverlay"), true);
             setHidden(document.getElementById("appShell"), false);
             applyChromeForRoles();
@@ -2359,6 +2492,7 @@
                 return;
             }
             firmwareRebootWaitActive = true;
+            hideConnectionOverlay();
             firmwareRebootSettled = false;
             firmwareRebootSawOffline = false;
             firmwareRebootPingOk = false;
@@ -4236,10 +4370,12 @@
             var protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
             var socket = new WebSocket(protocol + "//" + window.location.host + "/ws/devices");
             devicesLiveSocket = socket;
+            refreshConnectionOverlay();
             socket.onopen = function () {
                 if (devicesLiveSocket === socket) {
                     devicesLiveLiveness.bind(socket);
                 }
+                refreshConnectionOverlay();
             };
             socket.onmessage = function (event) {
                 applyDevicesLiveMessage(event.data);
@@ -4248,9 +4384,14 @@
                 devicesLiveLiveness.stop();
                 devicesLiveSocket = null;
                 if (!devicesLiveWanted || firmwareRebootWaitActive) {
+                    refreshConnectionOverlay();
                     return;
                 }
-                devicesLiveReconnectTimer = window.setTimeout(openDevicesLiveSocket, 2000);
+                devicesLiveReconnectTimer = window.setTimeout(function () {
+                    devicesLiveReconnectTimer = null;
+                    openDevicesLiveSocket();
+                }, 2000);
+                refreshConnectionOverlay();
             };
         }
 
@@ -4258,6 +4399,7 @@
             devicesLiveWanted = true;
             loadDevices();
             openDevicesLiveSocket();
+            refreshConnectionOverlay();
         }
 
         var consolesLiveWanted = false;
@@ -4324,10 +4466,12 @@
             var protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
             var socket = new WebSocket(protocol + "//" + window.location.host + "/ws/consoles");
             consolesLiveSocket = socket;
+            refreshConnectionOverlay();
             socket.onopen = function () {
                 if (consolesLiveSocket === socket) {
                     consolesLiveLiveness.bind(socket);
                 }
+                refreshConnectionOverlay();
             };
             socket.onmessage = function (event) {
                 applyConsolesLiveMessage(event.data);
@@ -4336,15 +4480,21 @@
                 consolesLiveLiveness.stop();
                 consolesLiveSocket = null;
                 if (!consolesLiveWanted || firmwareRebootWaitActive) {
+                    refreshConnectionOverlay();
                     return;
                 }
-                consolesLiveReconnectTimer = window.setTimeout(openConsolesLiveSocket, 2000);
+                consolesLiveReconnectTimer = window.setTimeout(function () {
+                    consolesLiveReconnectTimer = null;
+                    openConsolesLiveSocket();
+                }, 2000);
+                refreshConnectionOverlay();
             };
         }
 
         function startConsolesLive() {
             consolesLiveWanted = true;
             openConsolesLiveSocket();
+            refreshConnectionOverlay();
         }
 
         function recoverWantedLiveSocket(wanted, socket, setSocket, liveness, reconnectTimer, setReconnectTimer, openFn) {
@@ -6519,6 +6669,15 @@
             return !!(check && check.checked);
         }
 
+
+        function normalizeLinearStyle(value) {
+            var text = String(value || "");
+            if (text === "filled" || text === "vertical" || text === "verticalFilled") {
+                return text;
+            }
+            return "bar";
+        }
+
         function buildConsoleGaugeElement(binding, numericValue, displayText) {
             var gauge = binding && binding.gauge ? binding.gauge : {};
             var minValue = gauge.min != null ? Number(gauge.min) : 0;
@@ -6540,26 +6699,133 @@
                 return Number(left.top) - Number(right.top);
             });
             var wrap = document.createElement("div");
-            wrap.className = "console-gauge console-gauge--" + (gauge.type === "linear" ? "linear" : "arc");
+            var linearStyle = normalizeLinearStyle(gauge.linearStyle);
+            var isVertical = linearStyle === "vertical" || linearStyle === "verticalFilled";
+            var isFilled = linearStyle === "filled" || linearStyle === "verticalFilled";
+            wrap.className = "console-gauge console-gauge--" + (gauge.type === "linear" ? "linear" : "arc")
+                + (isVertical ? " console-gauge--vertical" : "")
+                + (isFilled ? " console-gauge--filled" : "");
             if (gauge.type === "linear") {
-                var track = document.createElement("div");
-                track.className = "console-gauge-linear-track";
-                var fill = document.createElement("div");
-                fill.className = "console-gauge-linear-fill";
-                fill.style.width = String(Math.round(ratio * 1000) / 10) + "%";
-                var fillColor = "#3b82f6";
-                var previousTop = minValue;
-                var rangeIndex;
-                for (rangeIndex = 0; rangeIndex < ranges.length; rangeIndex++) {
-                    if (clamped <= Number(ranges[rangeIndex].top)) {
-                        fillColor = ranges[rangeIndex].color || fillColor;
-                        break;
+                if (isFilled) {
+                    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                    svg.setAttribute("class", "console-gauge-linear-svg");
+                    var stroke = 14;
+                    var trackLen = 100;
+                    if (isVertical) {
+                        svg.setAttribute("viewBox", "-12 0 24 104");
+                        svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+                        function appendLinearSeg(fromPct, toPct, color) {
+                            if (!(toPct > fromPct + 0.001)) {
+                                return;
+                            }
+                            var y1 = trackLen - fromPct * trackLen;
+                            var y2 = trackLen - toPct * trackLen;
+                            var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                            path.setAttribute("d", "M 0 " + y1 + " L 0 " + y2);
+                            path.setAttribute("fill", "none");
+                            path.setAttribute("stroke", color);
+                            path.setAttribute("stroke-width", String(stroke));
+                            path.setAttribute("stroke-linecap", "butt");
+                            svg.appendChild(path);
+                        }
+                        appendLinearSeg(0, 1, "#334155");
+                        var previous = minValue;
+                        var colorIndex;
+                        for (colorIndex = 0; colorIndex < ranges.length; colorIndex++) {
+                            var top = Number(ranges[colorIndex].top);
+                            if (!(top > previous)) {
+                                continue;
+                            }
+                            appendLinearSeg(
+                                (previous - minValue) / (maxValue - minValue),
+                                (Math.min(top, maxValue) - minValue) / (maxValue - minValue),
+                                ranges[colorIndex].color || "#3b82f6"
+                            );
+                            previous = top;
+                        }
+                        if (!ranges.length) {
+                            appendLinearSeg(0, ratio, "#3b82f6");
+                        }
+                        var arrowY = trackLen - ratio * trackLen;
+                        var arrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                        arrow.setAttribute(
+                            "d",
+                            "M -11," + (arrowY - 3.2) + " L 11," + arrowY
+                                + " L -11," + (arrowY + 3.2) + " Z"
+                        );
+                        arrow.setAttribute("fill", "currentColor");
+                        svg.appendChild(arrow);
+                    } else {
+                        svg.setAttribute("viewBox", "0 -12 104 24");
+                        svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+                        function appendLinearSegH(fromPct, toPct, color) {
+                            if (!(toPct > fromPct + 0.001)) {
+                                return;
+                            }
+                            var x1 = fromPct * trackLen;
+                            var x2 = toPct * trackLen;
+                            var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                            path.setAttribute("d", "M " + x1 + " 0 L " + x2 + " 0");
+                            path.setAttribute("fill", "none");
+                            path.setAttribute("stroke", color);
+                            path.setAttribute("stroke-width", String(stroke));
+                            path.setAttribute("stroke-linecap", "butt");
+                            svg.appendChild(path);
+                        }
+                        appendLinearSegH(0, 1, "#334155");
+                        var previousH = minValue;
+                        var colorIndexH;
+                        for (colorIndexH = 0; colorIndexH < ranges.length; colorIndexH++) {
+                            var topH = Number(ranges[colorIndexH].top);
+                            if (!(topH > previousH)) {
+                                continue;
+                            }
+                            appendLinearSegH(
+                                (previousH - minValue) / (maxValue - minValue),
+                                (Math.min(topH, maxValue) - minValue) / (maxValue - minValue),
+                                ranges[colorIndexH].color || "#3b82f6"
+                            );
+                            previousH = topH;
+                        }
+                        if (!ranges.length) {
+                            appendLinearSegH(0, ratio, "#3b82f6");
+                        }
+                        var arrowX = ratio * trackLen;
+                        var arrowH = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                        arrowH.setAttribute(
+                            "d",
+                            "M " + (arrowX - 3.2) + ",-11 L " + arrowX + ",11 L "
+                                + (arrowX + 3.2) + ",-11 Z"
+                        );
+                        arrowH.setAttribute("fill", "currentColor");
+                        svg.appendChild(arrowH);
                     }
-                    previousTop = Number(ranges[rangeIndex].top);
+                    wrap.appendChild(svg);
+                } else {
+                    var track = document.createElement("div");
+                    track.className = "console-gauge-linear-track";
+                    var fill = document.createElement("div");
+                    fill.className = "console-gauge-linear-fill";
+                    if (isVertical) {
+                        fill.style.height = String(Math.round(ratio * 1000) / 10) + "%";
+                        fill.style.width = "100%";
+                        track.style.display = "flex";
+                        track.style.flexDirection = "column-reverse";
+                    } else {
+                        fill.style.width = String(Math.round(ratio * 1000) / 10) + "%";
+                    }
+                    var fillColor = "#3b82f6";
+                    var rangeIndex;
+                    for (rangeIndex = 0; rangeIndex < ranges.length; rangeIndex++) {
+                        if (clamped <= Number(ranges[rangeIndex].top)) {
+                            fillColor = ranges[rangeIndex].color || fillColor;
+                            break;
+                        }
+                    }
+                    fill.style.background = fillColor;
+                    track.appendChild(fill);
+                    wrap.appendChild(track);
                 }
-                fill.style.background = fillColor;
-                track.appendChild(fill);
-                wrap.appendChild(track);
             } else {
                 // Home Assistant ha-gauge geometry: origin center, upper semicircle, sweep=1.
                 var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -7032,6 +7298,13 @@
                 ));
             } else if (binding.viewStyle === "gauge") {
                 row.classList.add("console-device-row--gauge");
+                var rowLinearStyle = normalizeLinearStyle(
+                    binding.gauge && binding.gauge.linearStyle
+                );
+                if (binding.gauge && binding.gauge.type === "linear"
+                    && (rowLinearStyle === "vertical" || rowLinearStyle === "verticalFilled")) {
+                    row.classList.add("console-device-row--vertical-gauge");
+                }
                 var rawState = placeBindingResolvedState(device, binding);
                 var gaugeNumeric;
                 var gaugeDisplay;
@@ -12878,6 +13151,9 @@
         }
 
         function measurementUnitOptions(typeId) {
+            if (typeId == "battery") {
+                return [{ id: "%", label: "%" }];
+            }
             if (typeId == "temperatureMeasurement") {
                 return [{ id: "C", label: "°C" }, { id: "F", label: "°F" }, { id: "K", label: "K" }];
             }
@@ -12900,6 +13176,24 @@
                 return [{ id: "m3/h", label: "m³/h" }, { id: "l/min", label: "L/min" }];
             }
             return [{ id: "", label: "—" }];
+        }
+
+        function bindingUnitMeasureKind(device, paramValue) {
+            var param = String(paramValue || "");
+            if (param === "battery") {
+                return "battery";
+            }
+            var reportableType = reportableFormatTypeId(param);
+            if (reportableType) {
+                return reportableType;
+            }
+            if (param === "sensorValue" || param === "status" || param === "") {
+                var typeId = device && device.type ? String(device.type) : "";
+                if (isMeasurementDeviceType(typeId)) {
+                    return typeId;
+                }
+            }
+            return "";
         }
 
         function deviceChannelCount(device) {
@@ -13523,11 +13817,19 @@
             setHidden(iconGroup, !displayAsIcon);
             if (displayAsGauge) {
                 ensureConsoleDeviceGaugeAddColorControl();
+                refreshConsoleDeviceLinearStyleField();
             }
             if (displayAsIcon) {
                 renderConsoleDeviceIconGrid();
             }
             refreshConsoleDeviceTitleLayoutFields();
+        }
+
+        function refreshConsoleDeviceLinearStyleField() {
+            var gaugeType = document.getElementById("consoleDeviceGaugeType");
+            var styleField = document.getElementById("consoleDeviceGaugeLinearStyleField");
+            var isLinear = !!(gaugeType && gaugeType.value === "linear");
+            setHidden(styleField, !isLinear);
         }
 
         function refreshConsoleDeviceParamFields() {
@@ -14071,6 +14373,13 @@
                 if (gaugeType) {
                     gaugeType.value = binding.gauge && binding.gauge.type === "linear" ? "linear" : "arc";
                 }
+                var linearStyleSelect = document.getElementById("consoleDeviceGaugeLinearStyle");
+                if (linearStyleSelect) {
+                    linearStyleSelect.value = normalizeLinearStyle(
+                        binding.gauge && binding.gauge.linearStyle
+                    );
+                }
+                refreshConsoleDeviceLinearStyleField();
                 if (gaugeMin) {
                     gaugeMin.value = binding.gauge && binding.gauge.min != null ? String(binding.gauge.min) : "0";
                 }
@@ -14195,6 +14504,9 @@
         }
 
         function defaultMeasurementDecimals(typeId) {
+            if (typeId == "battery") {
+                return 0;
+            }
             if (typeId == "temperatureMeasurement") {
                 return 1;
             }
@@ -14210,22 +14522,27 @@
         }
 
         function updateConsoleDeviceUnitField() {
-            var select = document.getElementById("consoleDeviceSelect");
             var unitField = document.getElementById("consoleDeviceUnitField");
             var unitSelect = document.getElementById("consoleDeviceUnit");
-            if (!select || !select.options.length) {
-                unitField.hidden = true;
+            var device = consoleDialogSelectedDevice();
+            var paramSelect = document.getElementById("consoleDeviceParam");
+            var paramValue = paramSelect ? paramSelect.value : "";
+            var measureKind = bindingUnitMeasureKind(device, paramValue);
+            var previous = unitSelect ? unitSelect.value : "";
+            if (!measureKind || !unitSelect || !unitField) {
+                if (unitField) {
+                    unitField.hidden = true;
+                }
                 updateConsoleDeviceDecimalsField();
                 return;
             }
-            var typeId = select.options[select.selectedIndex].getAttribute("data-type") || "";
-            if (!isMeasurementDeviceType(typeId)) {
+            var options = measurementUnitOptions(measureKind);
+            if (!options.length || (options.length === 1 && options[0].id === "")) {
                 unitField.hidden = true;
                 updateConsoleDeviceDecimalsField();
                 return;
             }
             unitField.hidden = false;
-            var options = measurementUnitOptions(typeId);
             unitSelect.innerHTML = "";
             var index;
             for (index = 0; index < options.length; index++) {
@@ -14234,22 +14551,23 @@
                 unitOption.textContent = options[index].label;
                 unitSelect.appendChild(unitOption);
             }
+            if (previous && unitSelect.querySelector('option[value="' + previous + '"]')) {
+                unitSelect.value = previous;
+            }
             updateConsoleDeviceDecimalsField();
         }
 
         function updateConsoleDeviceDecimalsField() {
-            var select = document.getElementById("consoleDeviceSelect");
             var decimalsField = document.getElementById("consoleDeviceDecimalsField");
             var decimalsSelect = document.getElementById("consoleDeviceDecimals");
             if (!decimalsField || !decimalsSelect) {
                 return;
             }
-            if (!select || !select.options.length) {
-                decimalsField.hidden = true;
-                return;
-            }
-            var typeId = select.options[select.selectedIndex].getAttribute("data-type") || "";
-            if (!isMeasurementDeviceType(typeId)) {
+            var device = consoleDialogSelectedDevice();
+            var paramSelect = document.getElementById("consoleDeviceParam");
+            var paramValue = paramSelect ? paramSelect.value : "";
+            var measureKind = bindingUnitMeasureKind(device, paramValue);
+            if (!measureKind) {
                 decimalsField.hidden = true;
                 return;
             }
@@ -14266,7 +14584,7 @@
             if (previous !== "" && decimalsSelect.querySelector('option[value="' + previous + '"]')) {
                 decimalsSelect.value = previous;
             } else {
-                decimalsSelect.value = String(defaultMeasurementDecimals(typeId));
+                decimalsSelect.value = String(defaultMeasurementDecimals(measureKind));
             }
         }
 
@@ -14388,6 +14706,7 @@
                 var gaugeType = document.getElementById("consoleDeviceGaugeType");
                 var gaugeMin = document.getElementById("consoleDeviceGaugeMin");
                 var gaugeMax = document.getElementById("consoleDeviceGaugeMax");
+                var linearStyleSelect = document.getElementById("consoleDeviceGaugeLinearStyle");
                 body.gauge = {
                     type: gaugeType && gaugeType.value === "linear" ? "linear" : "arc",
                     min: gaugeMin ? parseFloat(gaugeMin.value) || 0 : 0,
@@ -14396,6 +14715,11 @@
                         return left.top - right.top;
                     })
                 };
+                if (body.gauge.type === "linear") {
+                    body.gauge.linearStyle = normalizeLinearStyle(
+                        linearStyleSelect && linearStyleSelect.value
+                    );
+                }
             } else {
                 body.viewStyle = "default";
             }
@@ -14781,6 +15105,12 @@
             window.addEventListener("pageshow", function () {
                 recoverConsoleLiveLinks();
             });
+            window.addEventListener("online", function () {
+                noteConnectionHttpOk(true);
+            });
+            window.addEventListener("offline", function () {
+                noteConnectionHttpOk(false);
+            });
             checkSession();
         };
     </script>
@@ -14804,6 +15134,13 @@
         </div>
         <button type="submit" class="btn btn-primary">Sign in</button>
     </form>
+</div>
+<div id="connectionOverlay" class="connection-overlay" hidden>
+    <div class="connection-overlay-panel" role="dialog" aria-modal="true" aria-labelledby="connectionOverlayTitle">
+        <div id="connectionOverlayIcon" class="connection-overlay-icon" aria-hidden="true"></div>
+        <h2 id="connectionOverlayTitle" class="connection-overlay-title">Disconnected</h2>
+        <p id="connectionOverlayText" class="connection-overlay-text"></p>
+    </div>
 </div>
 <div id="appShell" class="app-shell" hidden>
     <nav class="sidebar-nav" role="navigation" aria-label="Main sections">
@@ -16028,7 +16365,7 @@
                 </div>
                 <div id="consoleDeviceParamField" class="console-binding-general-row" hidden>
                     <label for="consoleDeviceParam">Parameter</label>
-                    <select id="consoleDeviceParam" onchange="refreshConsoleDeviceCustomAndGaugeFields();"></select>
+                    <select id="consoleDeviceParam" onchange="refreshConsoleDeviceCustomAndGaugeFields(); updateConsoleDeviceUnitField();"></select>
                 </div>
                 <div id="consoleDeviceClusterField" class="console-binding-general-row" hidden>
                     <label for="consoleDeviceCluster">Cluster (hex)</label>
@@ -16110,9 +16447,18 @@
                 <p class="field-hint">Gauge</p>
                 <div class="console-binding-general-row">
                     <label for="consoleDeviceGaugeType">Type</label>
-                    <select id="consoleDeviceGaugeType">
+                    <select id="consoleDeviceGaugeType" onchange="refreshConsoleDeviceLinearStyleField();">
                         <option value="arc">Arc</option>
                         <option value="linear">Linear</option>
+                    </select>
+                </div>
+                <div id="consoleDeviceGaugeLinearStyleField" class="console-binding-general-row" hidden>
+                    <label for="consoleDeviceGaugeLinearStyle">Style</label>
+                    <select id="consoleDeviceGaugeLinearStyle">
+                        <option value="bar">Bar</option>
+                        <option value="filled">Filled</option>
+                        <option value="vertical">Vertical</option>
+                        <option value="verticalFilled">Vertical filled</option>
                     </select>
                 </div>
                 <div class="console-binding-general-row">
