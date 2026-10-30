@@ -117,6 +117,7 @@ void SettingsManager::applyDefaults() {
     settings.zigbee.permitJoinOnBootSec = DEFAULT_PERMIT_JOIN_SEC;
     applyEmailDefaults();
     setSpiSpeedHz(DEFAULT_SPI_SPEED_HZ);
+    setRfUpdateSpiSpeedHz(DEFAULT_RF_UPDATE_SPI_SPEED_HZ);
     setLedBrightness(DEFAULT_LED_BRIGHTNESS_PERCENT, DEFAULT_LED_BRIGHTNESS_PERCENT);
 }
 
@@ -383,6 +384,17 @@ uint32_t SettingsManager::clampSpiSpeedHz(uint32_t speedHz) {
     return speedHz;
 }
 
+uint32_t SettingsManager::clampRfUpdateSpiSpeedHz(uint32_t speedHz) {
+    if (speedHz == SPI_SPEED_HZ_100K
+        || speedHz == SPI_SPEED_HZ_200K
+        || speedHz == SPI_SPEED_HZ_500K
+        || speedHz == SPI_SPEED_HZ_1M
+        || speedHz == SPI_SPEED_HZ_2M) {
+        return speedHz;
+    }
+    return DEFAULT_RF_UPDATE_SPI_SPEED_HZ;
+}
+
 uint8_t SettingsManager::clampLedBrightnessPercent(uint8_t percent) {
     if (percent < LED_BRIGHTNESS_PERCENT_MIN || percent > LED_BRIGHTNESS_PERCENT_MAX) {
         return DEFAULT_LED_BRIGHTNESS_PERCENT;
@@ -399,6 +411,28 @@ uint32_t SettingsManager::spiSpeedHz() const {
 void SettingsManager::setSpiSpeedHz(uint32_t speedHz) {
     const uint32_t clamped = clampSpiSpeedHz(speedHz);
     memcpy(settings.reserved, &clamped, sizeof(clamped));
+}
+
+uint32_t SettingsManager::rfUpdateSpiSpeedHz() const {
+    uint32_t speedHz = 0;
+    memcpy(
+        &speedHz,
+        settings.reserved + RF_UPDATE_SPI_SPEED_HZ_RESERVED_OFFSET,
+        sizeof(speedHz)
+    );
+    if (speedHz == 0) {
+        return DEFAULT_RF_UPDATE_SPI_SPEED_HZ;
+    }
+    return clampRfUpdateSpiSpeedHz(speedHz);
+}
+
+void SettingsManager::setRfUpdateSpiSpeedHz(uint32_t speedHz) {
+    const uint32_t clamped = clampRfUpdateSpiSpeedHz(speedHz);
+    memcpy(
+        settings.reserved + RF_UPDATE_SPI_SPEED_HZ_RESERVED_OFFSET,
+        &clamped,
+        sizeof(clamped)
+    );
 }
 
 bool SettingsManager::useQueueForBaseDeviceCommand() const {
@@ -586,6 +620,7 @@ void SettingsManager::logSettings() {
     );
     LOGGER.info("  devices used: " + String(topicMap.usedCount()) + "/" + String(DEVICE_MAP_SLOTS));
     LOGGER.info("  spi speed Hz: " + String((unsigned long)spiSpeedHz()));
+    LOGGER.info("  rf update spi speed Hz: " + String((unsigned long)rfUpdateSpiSpeedHz()));
     LOGGER.info(
         "  led brightness blue/green: " + String(blueLedBrightness()) + "/" + String(greenLedBrightness())
     );

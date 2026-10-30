@@ -34,6 +34,7 @@
 #include "DeviceStore.h"
 #include "DeviceConfigCatalog.h"
 #include "DeviceManufacturer.h"
+#include "DeviceModelType.h"
 #include "ZigbeeDeviceType.h"
 #include "ZigbeeCluster.h"
 #include "UserDataPayload.h"
@@ -1223,12 +1224,19 @@ static void runDeviceRegistryFixtures() {
     };
     const uint16_t batteryOnlyClusters[] = { kZigbeeClusterPowerConfig };
     const uint16_t coveringOutClusters[] = { kZigbeeClusterWindowCovering };
+    const uint16_t pollThenTempClusters[] = {
+        kZigbeeClusterPollControl,
+        kZigbeeClusterTemperature
+    };
     if (classifyZigbeeDeviceTypeFromInClusters(onOffOnlyClusters, 1) != ZigbeeDeviceTypeOnOff
         || classifyZigbeeDeviceTypeFromInClusters(iasWithOnOffClusters, 2) != ZigbeeDeviceTypeIasZone
         || classifyZigbeeDeviceTypeFromInClusters(leakDetectorClusters, 2) != ZigbeeDeviceTypeIasZone
         || classifyZigbeeDeviceTypeFromInClusters(batteryOnlyClusters, 1) != ZigbeeDeviceTypeUnknown
         || classifyZigbeeDeviceTypeFromInClusters(tempOnlyClusters, 1)
             != zigbeeDeviceTypeFromCluster(kZigbeeClusterTemperature)
+        || classifyZigbeeDeviceTypeFromInClusters(pollThenTempClusters, 2)
+            != zigbeeDeviceTypeFromCluster(kZigbeeClusterTemperature)
+        || zigbeeDeviceTypeFromCluster(kZigbeeClusterPollControl) != ZigbeeDeviceTypeUnknown
         || classifyZigbeeDeviceTypeFromInClusters(coveringClusters, 1) != ZigbeeDeviceTypeWindowCovering
         || classifyZigbeeDeviceTypeFromClusterList(coveringOutClusters, 0, 1) != ZigbeeDeviceTypeWindowCovering
         || zigbeeDeviceTypeFromCluster(kZigbeeClusterWindowCovering) != ZigbeeDeviceTypeWindowCovering
@@ -1265,7 +1273,13 @@ static void runDeviceRegistryFixtures() {
         }()
         || !zigbeeJoinShouldEmit(kZigbeeDeviceTypeNeverEmitted, ZigbeeDeviceTypeUnknown)
         || !zigbeeJoinShouldEmit(ZigbeeDeviceTypeUnknown, ZigbeeDeviceTypeOnOff)
-        || zigbeeJoinShouldEmit(ZigbeeDeviceTypeOnOff, ZigbeeDeviceTypeOnOff)) {
+        || zigbeeJoinShouldEmit(ZigbeeDeviceTypeOnOff, ZigbeeDeviceTypeOnOff)
+        || zigbeeDeviceTypeFromIdentity("Zbeacon", "TH01")
+            != zigbeeDeviceTypeFromCluster(kZigbeeClusterTemperature)
+        || zigbeeDeviceTypeFromIdentity("zbeacon", "TS0201")
+            != zigbeeDeviceTypeFromCluster(kZigbeeClusterTemperature)
+        || zigbeeDeviceTypeFromIdentity("Zbeacon", "") != ZigbeeDeviceTypeUnknown
+        || zigbeeDeviceTypeFromIdentity("", "TH01") != ZigbeeDeviceTypeUnknown) {
         LOGGER.error("Device type classifier fixture failed");
     } else {
         LOGGER.info("Device type classifier fixture ok");
@@ -2124,6 +2138,11 @@ static void setupHost() {
     INTER_CHIP_HOST.setClockHz(settingsManager->spiSpeedHz());
     FIRMWARE_OTA.setSpiClockRestoreHandler([]() {
         return settingsManager != nullptr ? settingsManager->spiSpeedHz() : DEFAULT_SPI_SPEED_HZ;
+    });
+    FIRMWARE_OTA.setSpiClockOverrideHandler([]() {
+        return settingsManager != nullptr
+            ? settingsManager->rfUpdateSpiSpeedHz()
+            : DEFAULT_RF_UPDATE_SPI_SPEED_HZ;
     });
     STATUS_RGB.setColorBrightness(
         settingsManager->blueLedBrightness(),

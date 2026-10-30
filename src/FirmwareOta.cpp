@@ -223,13 +223,24 @@ void FirmwareOta::setSpiClockRestoreHandler(SpiClockHzFn handler) {
     spiClockRestoreFn = handler;
 }
 
+void FirmwareOta::setSpiClockOverrideHandler(SpiClockHzFn handler) {
+    spiClockOverrideFn = handler;
+}
+
 void FirmwareOta::beginSlaveSpiClockOverride() {
     if (spiClockOverrideActive) {
         return;
     }
     spiClockOverrideActive = true;
-    INTER_CHIP_HOST.setClockHz(SPI_SPEED_HZ_1M);
-    LOGGER.info("SPI clock temporarily 1 MHz for slave firmware OTA");
+    uint32_t overrideHz = DEFAULT_RF_UPDATE_SPI_SPEED_HZ;
+    if (spiClockOverrideFn != nullptr) {
+        overrideHz = spiClockOverrideFn();
+    }
+    INTER_CHIP_HOST.setClockHz(overrideHz);
+    LOGGER.info(
+        "SPI clock temporarily " + String((unsigned long)overrideHz)
+        + " Hz for slave firmware OTA"
+    );
 }
 
 void FirmwareOta::endSlaveSpiClockOverride() {

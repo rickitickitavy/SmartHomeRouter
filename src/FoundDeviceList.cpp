@@ -1,5 +1,6 @@
 #include "FoundDeviceList.h"
 #include "DeviceManufacturer.h"
+#include "DeviceModelType.h"
 #include "JsonField.h"
 #include "ZigbeeDeviceType.h"
 
@@ -102,6 +103,14 @@ const char *FoundDeviceList::modelForIeee(const uint8_t ieee[8]) const {
     return device->model;
 }
 
+uint16_t FoundDeviceList::shortAddrForIeee(const uint8_t ieee[8]) const {
+    const FoundDevice *device = findByIeee(ieee);
+    if (device == nullptr) {
+        return 0;
+    }
+    return device->shortAddr;
+}
+
 bool FoundDeviceList::noteJoin(const SpiFrame &frame, DeviceTopicMap *registered) {
     if (frame.cmd != SpiEvtDeviceJoin || frame.length < SPI_DEVICE_JOIN_MIN_LEN) {
         return false;
@@ -117,14 +126,21 @@ bool FoundDeviceList::noteJoin(const SpiFrame &frame, DeviceTopicMap *registered
         DeviceTopicEntry *entry = registered->findByIeee(ieee);
         if (entry != nullptr && entry->used) {
             bool changed = false;
-            if (entry->zigbeeType == ZigbeeDeviceTypeUnknown && joinType != ZigbeeDeviceTypeUnknown) {
+            const char *joinManufacturer =
+                (const char *)frame.payload + SPI_DEVICE_JOIN_MANUFACTURER_OFFSET;
+            const char *joinModel =
+                (const char *)frame.payload + SPI_DEVICE_JOIN_MODEL_OFFSET;
+            const uint8_t fromIdentity = zigbeeDeviceTypeFromIdentity(joinManufacturer, joinModel);
+            if (fromIdentity != ZigbeeDeviceTypeUnknown && entry->zigbeeType != fromIdentity) {
+                entry->zigbeeType = fromIdentity;
+                changed = true;
+            } else if (entry->zigbeeType == ZigbeeDeviceTypeUnknown
+                && joinType != ZigbeeDeviceTypeUnknown) {
                 entry->zigbeeType = joinType;
                 changed = true;
             }
             if (entry->manufacturer == DeviceManufacturerUnknown) {
-                const uint8_t mapped = deviceManufacturerFromJoinString(
-                    (const char *)frame.payload + SPI_DEVICE_JOIN_MANUFACTURER_OFFSET
-                );
+                const uint8_t mapped = deviceManufacturerFromJoinString(joinManufacturer);
                 if (mapped != DeviceManufacturerUnknown) {
                     entry->manufacturer = mapped;
                     changed = true;
@@ -216,7 +232,13 @@ void FoundDeviceList::noteIdentity(
     memcpy(slot->ieee, ieee, 8);
     slot->shortAddr = shortAddr;
     slot->endpoint = endpoint;
-    slot->zigbeeType = mergeZigbeeDeviceType(preservedType, zigbeeType);
+    const uint8_t fromIdentity = zigbeeDeviceTypeFromIdentity(slot->manufacturer, slot->model);
+    if (fromIdentity != ZigbeeDeviceTypeUnknown) {
+        // Manufacturer+model win over cluster-raced join type.
+        slot->zigbeeType = fromIdentity;
+    } else {
+        slot->zigbeeType = mergeZigbeeDeviceType(preservedType, zigbeeType);
+    }
     slot->used = true;
 }
 

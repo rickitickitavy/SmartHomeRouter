@@ -52,6 +52,7 @@ public:
 
     using SpiClockHzFn = uint32_t (*)();
     void setSpiClockRestoreHandler(SpiClockHzFn handler);
+    void setSpiClockOverrideHandler(SpiClockHzFn handler);
 
 private:
     Phase currentPhase = Phase::Idle;
@@ -96,6 +97,7 @@ private:
     uint8_t slaveFrameFails = 0;
     volatile bool slavePackClaimed = false;
     SpiClockHzFn spiClockRestoreFn = nullptr;
+    SpiClockHzFn spiClockOverrideFn = nullptr;
     bool spiClockOverrideActive = false;
     char expectedSlaveVersion[SPI_STATUS_VERSION_MAX + 1]{};
     char preOtaSlaveVersion[SPI_STATUS_VERSION_MAX + 1]{};

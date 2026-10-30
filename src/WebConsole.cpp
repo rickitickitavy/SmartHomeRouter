@@ -1769,15 +1769,19 @@ void WebConsole::handleHardwareGet(AsyncWebServerRequest *request) {
         return;
     }
     const uint32_t speedHz = settingsManager->spiSpeedHz();
+    const uint32_t rfUpdateSpeedHz = settingsManager->rfUpdateSpiSpeedHz();
     const uint8_t bluePercent = settingsManager->blueLedBrightness();
     const uint8_t greenPercent = settingsManager->greenLedBrightness();
     LOGGER.info(
         "Hardware GET spiSpeedHz=" + String((unsigned long)speedHz)
+        + " rfUpdateSpiSpeedHz=" + String((unsigned long)rfUpdateSpeedHz)
         + " blue=" + String(bluePercent) + " green=" + String(greenPercent)
     );
     const bool useQueueForBaseDeviceCommand = settingsManager->useQueueForBaseDeviceCommand();
     String json = "{\"spiSpeedHz\":";
     json += String((unsigned long)speedHz);
+    json += ",\"rfUpdateSpiSpeedHz\":";
+    json += String((unsigned long)rfUpdateSpeedHz);
     json += ",\"blueLedBrightness\":";
     json += String(bluePercent);
     json += ",\"greenLedBrightness\":";
@@ -1797,6 +1801,7 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
         return;
     }
     int spiSpeedHz = DEFAULT_SPI_SPEED_HZ;
+    int rfUpdateSpiSpeedHz = DEFAULT_RF_UPDATE_SPI_SPEED_HZ;
     int blueLedBrightness = DEFAULT_LED_BRIGHTNESS_PERCENT;
     int greenLedBrightness = DEFAULT_LED_BRIGHTNESS_PERCENT;
     if (!extractJsonInt(body.c_str(), "spiSpeedHz", spiSpeedHz)
@@ -1805,11 +1810,18 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
         request->send(400, "text/plain", "Need spiSpeedHz, blueLedBrightness, greenLedBrightness");
         return;
     }
+    extractJsonInt(body.c_str(), "rfUpdateSpiSpeedHz", rfUpdateSpiSpeedHz);
     bool useQueueForBaseDeviceCommand = false;
     extractJsonBool(body.c_str(), "useQueueForBaseDeviceCommand", useQueueForBaseDeviceCommand);
     const uint32_t clamped = SettingsManager::clampSpiSpeedHz((uint32_t)spiSpeedHz);
     if (clamped != (uint32_t)spiSpeedHz) {
         request->send(400, "text/plain", "spiSpeedHz must be 100000-40000000");
+        return;
+    }
+    const uint32_t rfUpdateClamped =
+        SettingsManager::clampRfUpdateSpiSpeedHz((uint32_t)rfUpdateSpiSpeedHz);
+    if (rfUpdateClamped != (uint32_t)rfUpdateSpiSpeedHz) {
+        request->send(400, "text/plain", "rfUpdateSpiSpeedHz must be 100k/200k/500k/1M/2M");
         return;
     }
     if (blueLedBrightness < LED_BRIGHTNESS_PERCENT_MIN || blueLedBrightness > LED_BRIGHTNESS_PERCENT_MAX
@@ -1820,6 +1832,7 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
     const uint8_t bluePercent = (uint8_t)blueLedBrightness;
     const uint8_t greenPercent = (uint8_t)greenLedBrightness;
     settingsManager->setSpiSpeedHz(clamped);
+    settingsManager->setRfUpdateSpiSpeedHz(rfUpdateClamped);
     settingsManager->setLedBrightness(bluePercent, greenPercent);
     settingsManager->setUseQueueForBaseDeviceCommand(useQueueForBaseDeviceCommand);
     settingsManager->saveMain(false);
@@ -2100,6 +2113,18 @@ bool WebConsole::applyHardwareJson(const char *json, String *errorText) {
         }
         return false;
     }
+    int rfUpdateSpiSpeedHz = (int)settingsManager->rfUpdateSpiSpeedHz();
+    if (extractJsonInt(json, "rfUpdateSpiSpeedHz", rfUpdateSpiSpeedHz)) {
+        const uint32_t rfUpdateClamped =
+            SettingsManager::clampRfUpdateSpiSpeedHz((uint32_t)rfUpdateSpiSpeedHz);
+        if (rfUpdateClamped != (uint32_t)rfUpdateSpiSpeedHz) {
+            if (errorText != nullptr) {
+                *errorText = "rfUpdateSpiSpeedHz must be 100k/200k/500k/1M/2M";
+            }
+            return false;
+        }
+        settingsManager->setRfUpdateSpiSpeedHz(rfUpdateClamped);
+    }
     uint8_t bluePercent = settingsManager->blueLedBrightness();
     uint8_t greenPercent = settingsManager->greenLedBrightness();
     int blueLedBrightness = bluePercent;
@@ -2159,6 +2184,8 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
     response->print((unsigned)settings->zigbee.permitJoinOnBootSec);
     response->print("},\"hardware\":{\"spiSpeedHz\":");
     response->print((unsigned long)settingsManager->spiSpeedHz());
+    response->print(",\"rfUpdateSpiSpeedHz\":");
+    response->print((unsigned long)settingsManager->rfUpdateSpiSpeedHz());
     response->print(",\"blueLedBrightness\":");
     response->print((unsigned)settingsManager->blueLedBrightness());
     response->print(",\"greenLedBrightness\":");
@@ -2651,6 +2678,20 @@ void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
             existing->reportableData,
             existing->reportableDataCount
         );
+    }
+    if (transport != DeviceTransportMqtt) {
+        int parsedNwk = 0;
+        uint16_t shortAddr = 0;
+        if (extractJsonInt(body.c_str(), "nwk", parsedNwk)
+            && parsedNwk > 0
+            && parsedNwk <= 0xFFFF) {
+            shortAddr = (uint16_t)parsedNwk;
+        } else if (!isEdit && foundDevices != nullptr) {
+            shortAddr = foundDevices->shortAddrForIeee(ieee);
+        }
+        if (DeviceTopicMap::isUsableShortAddr(shortAddr)) {
+            deviceMap->applyLastKnownShort(ieee, shortAddr);
+        }
     }
     if (foundDevices != nullptr) {
         foundDevices->removeIeee(ieee);
