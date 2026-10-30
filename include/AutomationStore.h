@@ -155,6 +155,7 @@ public:
     bool begin(bool persistToLittleFs);
     void setDeviceMap(DeviceTopicMap *devices);
     bool parseSingleActionJson(const char *actionObjectJson, AutomationAction **outActions);
+    bool cloneSingleAction(const AutomationAction *source, AutomationAction **outAction);
     void requestPersist();
     void persistIfDue();
     int automationCount() const;

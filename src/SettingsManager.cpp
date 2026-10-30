@@ -401,6 +401,14 @@ void SettingsManager::setSpiSpeedHz(uint32_t speedHz) {
     memcpy(settings.reserved, &clamped, sizeof(clamped));
 }
 
+bool SettingsManager::useQueueForBaseDeviceCommand() const {
+    return settings.reserved[USE_QUEUE_FOR_BASE_DEVICE_COMMAND_RESERVED_OFFSET] != 0;
+}
+
+void SettingsManager::setUseQueueForBaseDeviceCommand(bool enabled) {
+    settings.reserved[USE_QUEUE_FOR_BASE_DEVICE_COMMAND_RESERVED_OFFSET] = enabled ? 1 : 0;
+}
+
 uint8_t SettingsManager::blueLedBrightness() const {
     const uint8_t stored = settings.reserved[LED_BLUE_BRIGHTNESS_RESERVED_OFFSET];
     if (stored == 0) {

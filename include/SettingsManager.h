@@ -28,6 +28,8 @@ public:
     uint8_t blueLedBrightness() const;
     uint8_t greenLedBrightness() const;
     void setLedBrightness(uint8_t bluePercent, uint8_t greenPercent);
+    bool useQueueForBaseDeviceCommand() const;
+    void setUseQueueForBaseDeviceCommand(bool enabled);
     uint8_t uiTheme() const;
     void setUiTheme(uint8_t themeId);
     static const char *uiThemeJsonId(uint8_t themeId);

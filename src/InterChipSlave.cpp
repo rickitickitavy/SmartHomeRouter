@@ -351,12 +351,33 @@ void InterChipSlave::removeOutboundAt(int index) {
 void InterChipSlave::clearOutbound() {
     outboundCount = 0;
     deviceDumpPending = false;
+    userDumpPending = false;
     fileDumpPending = false;
     fileDumpText = "";
     updateIrq();
 }
 
+bool InterChipSlave::isFirmwareTransferQuiet() const {
+    return FIRMWARE_OTA.isApplyingImage();
+}
+
+void InterChipSlave::clearDeferredRadioCommands() {
+    DeferredDeviceCommand *slot = deferredDeviceCommandHead;
+    while (slot != nullptr) {
+        DeferredDeviceCommand *next = slot->next;
+        free(slot);
+        slot = next;
+    }
+    deferredDeviceCommandHead = nullptr;
+    deferredDeviceCommandCount = 0;
+    permitJoinPending = false;
+    deferredPermitSeconds = 0;
+}
+
 bool InterChipSlave::tryEnqueue(uint8_t cmd, uint8_t seq, const uint8_t *payload, uint16_t length) {
+    if (isFirmwareTransferQuiet() && cmd != SpiEvtCmdResult) {
+        return false;
+    }
     if (length > SPI_MAX_PAYLOAD || outboundCount >= kQueue) {
         return false;
     }
@@ -570,7 +591,13 @@ void InterChipSlave::stashDeferredOnOff(
     const char *command,
     size_t commandLength
 ) {
+    if (isFirmwareTransferQuiet()) {
+        return;
+    }
     DeferredDeviceCommand *slot = allocDeferredDeviceCommand(ieee, endpoint);
+    if (slot == nullptr) {
+        return;
+    }
     slot->kind = DeferredDeviceKind::OnOff;
     memset(slot->onOffCommand, 0, sizeof(slot->onOffCommand));
     const size_t bounded =
@@ -588,7 +615,13 @@ void InterChipSlave::stashDeferredWriteAttr(
     uint8_t dataType,
     uint32_t attributeValue
 ) {
+    if (isFirmwareTransferQuiet()) {
+        return;
+    }
     DeferredDeviceCommand *slot = allocDeferredDeviceCommand(ieee, endpoint);
+    if (slot == nullptr) {
+        return;
+    }
     slot->kind = DeferredDeviceKind::WriteAttr;
     slot->clusterId = clusterId;
     slot->attributeId = attributeId;
@@ -602,7 +635,13 @@ void InterChipSlave::stashDeferredReadAttr(
     uint16_t clusterId,
     uint16_t attributeId
 ) {
+    if (isFirmwareTransferQuiet()) {
+        return;
+    }
     DeferredDeviceCommand *slot = allocDeferredDeviceCommand(ieee, endpoint);
+    if (slot == nullptr) {
+        return;
+    }
     slot->kind = DeferredDeviceKind::ReadAttr;
     slot->clusterId = clusterId;
     slot->attributeId = attributeId;
@@ -618,7 +657,13 @@ void InterChipSlave::stashDeferredZclCommand(
     const uint8_t *payload,
     uint8_t payloadLength
 ) {
+    if (isFirmwareTransferQuiet()) {
+        return;
+    }
     DeferredDeviceCommand *slot = allocDeferredDeviceCommand(ieee, endpoint);
+    if (slot == nullptr) {
+        return;
+    }
     slot->kind = DeferredDeviceKind::ClusterCmd;
     slot->clusterId = clusterId;
     slot->dataType = commandId;
@@ -640,6 +685,7 @@ void InterChipSlave::handleHostFrame(const SpiFrame &frame) {
         }
         if (frame.length >= 1 && (frame.payload[0] & SPI_OTA_BEGIN) != 0) {
             clearOutbound();
+            clearDeferredRadioCommands();
             firmwareOtaResultValid = false;
             if (!FIRMWARE_OTA.queueSlaveBegin(frame)) {
                 completeCommandResult(frame.seq, false);
@@ -648,6 +694,9 @@ void InterChipSlave::handleHostFrame(const SpiFrame &frame) {
         }
         const bool ok = FIRMWARE_OTA.handleSlaveFrame(frame);
         completeCommandResult(frame.seq, ok);
+        return;
+    }
+    if (isFirmwareTransferQuiet()) {
         return;
     }
     if (frame.cmd == SpiCmdPing) {
@@ -869,6 +918,9 @@ void InterChipSlave::applyDeferredSettings() {
 }
 
 void InterChipSlave::applyDeferredRadioCommands() {
+    if (isFirmwareTransferQuiet()) {
+        return;
+    }
     if (permitJoinPending && permitJoinHandler != nullptr) {
         if (permitJoinHandler(deferredPermitSeconds)) {
             permitJoinPending = false;

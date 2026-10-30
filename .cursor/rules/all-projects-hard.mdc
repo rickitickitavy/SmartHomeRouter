@@ -13,6 +13,7 @@ Keep in sync with `~/.cursor/rules/all-projects-questions.mdc` when that file ch
 - If the human asks any question, you MUST only answer — no edits, no tool side effects, no restores, no git mutations.
 - NEVER change behavior the human has described without asking: propose options, describe trade-offs, wait for an explicit choice (see `no-unilateral-behavior-change` rule + hooks).
 - NEVER propose or implement a device-command / Zigbee delivery fix for only one device kind (e.g. On/Off only) unless the human explicitly scopes it that way; default is ALL device kinds (see `all-device-kinds` rule).
+- NEVER leave a console UI / live-value / widget fix on only the operator page (`data/index.html`) or only the simple-user page (`data/user.html`); keep both synchronized unless the human explicitly scopes to one page (see `sync-operator-simple-user-ui` rule).
 - NEVER commit or push on `master`, `develop`, or `main` — even if the human asks to commit on the current branch. Use a feature branch only.
 - Every new `/opsx-propose` MUST increase the firmware version build number (third `MAJOR.MINOR.BUILD` component) in `FIRMWARE_VERSION` during propose.
 - EACH TIME you update project source code because the human asked you to (implement, fix, change behavior), increase that project's `FIRMWARE_VERSION` **build** by 1 in the same request (`0.2.22` → `0.2.23`). Do not bump major or minor. Skip only when the repo has no firmware version, or when the request edits only rules, skills, docs, or OpenSpec planning with no source change.

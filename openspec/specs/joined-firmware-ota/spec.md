@@ -39,48 +39,47 @@ The System → Update tab SHALL continue to accept a **single** file upload. Tha
 - **WHEN** the joined ZIP is accepted but slave programming fails
 - **THEN** the host does not apply `host.bin` and reports failure
 
+### Requirement: Slave SPI transfer is exclusive (Zigbee and log quiet)
+
+During each joined-update slave SPI image transfer, the slave SHALL keep SPI exclusive for firmware begin/chunk/end and OTA command results: clear outbound and deferred Zigbee queues on begin, drop log and Zigbee event packets toward the host while applying, and skip Zigbee dispatch/deferred radio apply in the main loop for that window. The begin/chunk/end SPI protocol itself SHALL remain intact.
+
+#### Scenario: Quiet while streaming slave.bin
+
+- **WHEN** the host is streaming `slave.bin` over SPI OTA frames
+- **THEN** the slave does not interleave log or Zigbee event packets on SPI and does not apply deferred Zigbee radio work until the apply window ends
+
 ### Requirement: Host verifies slave version after SPI transfer before host apply
 
-After the host finishes transferring `slave.bin` over SPI and the slave commits that image, the host SHALL wait until it learns the slave’s running firmware version and that version matches the expected package version when `version.txt` is present (or differs from the pre-transfer version when `version.txt` is absent). Only after that verification succeeds MAY the host apply `host.bin` or report slave-only success. Each wait for a version sample SHALL be at most 20 seconds.
+After the host finishes transferring `slave.bin` over SPI and the slave commits that image, the host SHALL wait until it learns the slave’s running firmware version and that version matches the expected package version when `version.txt` is present (or differs from the pre-transfer version when `version.txt` is absent). Only after that verification succeeds MAY the host apply `host.bin` or report slave-only success. Each wait for a version sample SHALL be at most 20 seconds. The host MAY run at most **3** full SPI transfer + verify cycles for one joined update.
 
 #### Scenario: Expected version observed after first transfer
 
 - **WHEN** slave SPI transfer and commit succeed and the host later reads the expected slave firmware version within the wait window
 - **THEN** the host proceeds to host apply (or slave-only success) without sending the slave image again
 
-#### Scenario: No version response after allowed resets
+#### Scenario: Three full cycles exhaust
 
-- **WHEN** the host cannot obtain a slave firmware version sample within 20 seconds after each of 5 no-response resets
+- **WHEN** after each of 3 SPI transfers the host waits 20 seconds and never reads the expected slave firmware version
 - **THEN** the joined update fails and the host does not apply `host.bin`
 
-### Requirement: Version sample required before SPI resend; silence triggers reset
+### Requirement: Failed version verify reboots then full SPI resend
 
-The host MUST NOT start another SPI transfer of `slave.bin` until it has obtained a non-empty firmware version sample from the slave after the previous transfer. If the slave does not respond with a version within 20 seconds, the host SHALL reset the slave and wait again (up to 5 such resets). If a version sample is present and does not match, the host MAY re-transfer `slave.bin` over SPI. If all 5 no-response resets fail to produce a version sample, the update SHALL fail.
+If 20 seconds pass after a SPI transfer without the expected slave firmware version (including no sample, still the pre-transfer version, or any other mismatch), and fewer than 3 SPI cycles have completed, the host SHALL reset the slave, wait until the slave is ready (`Normal`), then start a **full** SPI re-transfer of `slave.bin` from the beginning. The host MUST NOT return to another version-only wait without that SPI re-transfer. The SPI begin/chunk/end protocol itself is unchanged.
 
-#### Scenario: Pre-OTA version during wait is not a resend
+#### Scenario: Wrong or stuck version after wait triggers full cycle
 
-- **WHEN** after SPI transfer the host still reads the same firmware version the slave had before the transfer
-- **THEN** the host keeps waiting for the expected post-reboot version and does not start SPI re-upload for that sample
+- **WHEN** 20 seconds pass after a transfer without the expected version and at least one SPI cycle remains
+- **THEN** the host resets the slave, waits until ready, and re-transfers `slave.bin` over SPI from the start
 
-#### Scenario: Wrong post-reboot version after wait
+#### Scenario: Match during wait skips resend
 
-- **WHEN** 20 seconds pass and the host has a non-empty version that is neither the expected version nor the pre-transfer version
-- **THEN** the host re-transfers `slave.bin` over SPI
+- **WHEN** within the 20 second wait the host reads the expected slave firmware version
+- **THEN** the host proceeds without reboot or SPI re-upload
 
-#### Scenario: No response or stuck pre-OTA leads to reset not resend
+#### Scenario: Must not resend on ready alone before verify deadline
 
-- **WHEN** 20 seconds pass after a transfer (or after a verify reset) without a non-empty version sample, or only with the pre-transfer version
-- **THEN** the host resets the slave and does not start SPI re-upload for that timeout
-
-#### Scenario: Five no-response resets exhaust
-
-- **WHEN** the host has already performed 5 no-response resets in the current post-transfer verify cycle and another 20 second wait yields no version sample
-- **THEN** the update fails without another SPI upload
-
-#### Scenario: Must not resend on ready alone
-
-- **WHEN** the slave becomes ready but the host has not yet obtained a non-empty version sample
-- **THEN** the host does not start SPI re-upload solely because the link is Normal
+- **WHEN** the slave is ready during the 20 second post-transfer wait but the version is not yet the expected value
+- **THEN** the host keeps waiting for the version (or the deadline) and does not start SPI re-upload solely because the link is Normal
 
 ### Requirement: Successful slave commit MUST NOT trigger redundant re-upload
 

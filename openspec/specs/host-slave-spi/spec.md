@@ -196,6 +196,25 @@ The SPI protocol SHALL carry a host-to-slave firmware-update sequence: begin, da
 - **WHEN** a firmware chunk is corrupted or the slave times out during an in-progress firmware update
 - **THEN** the slave does not commit a new application and the host treats the firmware update as failed
 
+### Requirement: Slave keeps SPI exclusive during OTA image transfer
+
+While the slave is applying a host firmware-OTA image (from SPI begin through apply/commit until restart), the slave SHALL treat the SPI link as exclusive for that transfer. On OTA begin the slave SHALL clear its outbound SPI event queue and any deferred Zigbee radio command queue. For the rest of the applying window the slave SHALL NOT enqueue log records, attribute reports, join/leave, device/user map dumps, or other non-result slave-to-host events onto SPI, SHALL NOT stash or apply new deferred Zigbee radio commands from host frames, and SHALL NOT run Zigbee dispatch work from the main loop. The slave MAY still send OTA command-result frames required by the begin/chunk/end protocol. The SPI begin/chunk/end framing and integrity check SHALL remain unchanged.
+
+#### Scenario: Begin clears pending traffic
+
+- **WHEN** the host sends a firmware-OTA begin frame
+- **THEN** the slave drops queued outbound SPI events and clears deferred Zigbee radio commands before accepting the image transfer
+
+#### Scenario: No log or Zigbee events during transfer
+
+- **WHEN** the slave is applying a firmware-OTA image and a log line or Zigbee attribute report would otherwise be sent to the host
+- **THEN** that event is dropped and does not appear on SPI until after the transfer window ends
+
+#### Scenario: OTA results still flow
+
+- **WHEN** the host sends firmware-OTA chunk or end frames during the exclusive transfer
+- **THEN** the slave still replies with command-result frames for those OTA commands
+
 ### Requirement: Attribute reports update last status and battery
 A slave-to-host attribute or zone report SHALL continue to include IEEE, source endpoint, short address, RSSI, and message text. The host SHALL cache the message against that IEEE and `ep` as last status, except when the message is a battery report (`BATTERY <percent>` from cluster `0x0001` attribute Battery Percentage Remaining). A battery report SHALL update last battery percent for that IEEE and SHALL NOT replace per-endpoint on/off or zone status. The slave SHALL NOT persist last status or battery.
 

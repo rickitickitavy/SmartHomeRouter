@@ -319,6 +319,10 @@
             } else {
                 setStatusText("statusPsramUsage", "—");
             }
+            setStatusText(
+                "statusActionQueue",
+                payload && payload.actionQueue != null ? String(payload.actionQueue) : "—"
+            );
             if (payload && payload.wifiRssiDbm != null) {
                 setStatusText("statusWifiSignal", String(payload.wifiRssiDbm) + " dBm");
             } else {
@@ -1264,6 +1268,7 @@
             var speedSelect = document.getElementById("spiSpeedHz");
             var blueInput = document.getElementById("blueLedBrightness");
             var greenInput = document.getElementById("greenLedBrightness");
+            var queueInput = document.getElementById("useQueueForBaseDeviceCommand");
             fetch("/api/hardware", { cache: "no-store" }).then(function (response) {
                 return response.text().then(function (text) {
                     if (!response.ok) {
@@ -1287,6 +1292,9 @@
                 if (greenInput) {
                     greenInput.value = String(hardwareSettings.greenLedBrightness || 100);
                 }
+                if (queueInput) {
+                    queueInput.checked = !!hardwareSettings.useQueueForBaseDeviceCommand;
+                }
             }).catch(function (error) {
                 if (speedSelect && !speedSelect.value) {
                     speedSelect.value = "500000";
@@ -1296,6 +1304,9 @@
                 }
                 if (greenInput && !greenInput.value) {
                     greenInput.value = "100";
+                }
+                if (queueInput) {
+                    queueInput.checked = false;
                 }
                 if (saveError) {
                     saveError.hidden = false;
@@ -1311,10 +1322,12 @@
             var saveSuccess = document.getElementById("hardwareSaveSuccess");
             saveError.hidden = true;
             saveSuccess.hidden = true;
+            var queueInput = document.getElementById("useQueueForBaseDeviceCommand");
             var body = {
                 spiSpeedHz: parseInt(document.getElementById("spiSpeedHz").value, 10),
                 blueLedBrightness: parseInt(document.getElementById("blueLedBrightness").value, 10),
-                greenLedBrightness: parseInt(document.getElementById("greenLedBrightness").value, 10)
+                greenLedBrightness: parseInt(document.getElementById("greenLedBrightness").value, 10),
+                useQueueForBaseDeviceCommand: !!(queueInput && queueInput.checked)
             };
             fetch("/api/hardware", {
                 method: "POST",
@@ -2675,7 +2688,6 @@
         var searchAwaitingClose = false;
         var parameterDialogTypeId = "unknown";
         var parameterDialogTransport = "zigbee";
-        var parameterDialogModel = "";
         var parameterDialogManufacturerId = "unknown";
         var parameterDialogBaseline = null;
         var parameterDialogIsEdit = false;
@@ -4849,7 +4861,6 @@
             document.getElementById("deviceIeee").value = device.ieee || "";
             parameterDialogTypeId = device.type || "unknown";
             parameterDialogTransport = device.transport == "mqtt" ? "mqtt" : "zigbee";
-            parameterDialogModel = device.model || "";
             parameterDialogManufacturerId = deviceManufacturerJsonId(device.manufacturer);
             applyParameterTypeControls();
             var manufacturerInput = document.getElementById("deviceManufacturer");
@@ -5797,7 +5808,6 @@
                     ieee: selectedFoundIeee,
                     type: found && found.type,
                     manufacturer: found && found.manufacturer,
-                    model: found && found.model,
                     transport: "zigbee"
                 },
                 "Device parameters"
@@ -6020,7 +6030,6 @@
                 body.publishToMqtt = !!(document.getElementById("devicePublishToMqtt")
                     && document.getElementById("devicePublishToMqtt").checked);
                 body.manufacturer = parameterDialogManufacturerId || "unknown";
-                body.model = parameterDialogModel || "";
             }
             if ((typeId || "unknown") === "userData") {
                 var fields = normalizeUserDataFields(parameterDialogUserDataFields);
@@ -15186,6 +15195,10 @@
                                 <span class="status-row-label">Free PSRAM</span>
                                 <p id="statusPsramUsage" class="status-value">—</p>
                             </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Action queue</span>
+                                <p id="statusActionQueue" class="status-value">—</p>
+                            </div>
                         </div>
                         <div class="status-group">
                             <h3 class="group-title">Devices</h3>
@@ -15744,6 +15757,11 @@
                             <input id="greenLedBrightness" type="number" min="1" max="100" step="1" value="100">
                             <p class="field-hint">PWM brightness for green status LEDs on host and slave (1–100%). Default 100. Red LEDs stay digital full on/off.</p>
                         </div>
+                        <div class="field-check">
+                            <input type="checkbox" id="useQueueForBaseDeviceCommand">
+                            <span>use queue for base device command</span>
+                        </div>
+                        <p class="field-hint">When on, Place/Devices/Manual live commands use the paced action queue (all device kinds). When off, only automation actions use the queue. Configure dialog writes stay immediate. Default off.</p>
                     </div>
                     <div class="dialog-actions hardware-tab-actions">
                         <button type="button" class="btn btn-primary" onclick="saveHardware()">Save</button>

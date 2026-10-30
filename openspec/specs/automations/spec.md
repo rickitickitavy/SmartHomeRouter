@@ -187,22 +187,22 @@ A device-target action MUST identify device, channel when multichannel, and eith
 
 ### Requirement: True condition runs actions
 
-When a status-change or TIMER-finish trigger finds an active automation’s root condition true, the host MUST run its actions in order. When the status-path evaluation was started because a matching listener with event type `any` accepted the report, the host MUST run actions even if the condition was already true on the previous evaluation (subject to `minTriggerIntervalSec`). When evaluation was started only under event type `change` (a real value change), existing condition evaluation applies; current-time condition polling MAY continue to require a false→true edge. Inactive automations MUST NOT run. A false condition MUST NOT run actions.
+When a status-change or TIMER-finish trigger finds an active automation’s root condition true, the host MUST enqueue its actions in order on the action/command FIFO (see capability `action-command-queue`) rather than applying them inline on the trigger path. When the status-path evaluation was started because a matching listener with event type `any` accepted the report, the host MUST enqueue actions even if the condition was already true on the previous evaluation (subject to `minTriggerIntervalSec`). When evaluation was started only under event type `change` (a real value change), existing condition evaluation applies; current-time condition polling MAY continue to require a false→true edge. Inactive automations MUST NOT enqueue. A false condition MUST NOT enqueue actions. FIFO drain later applies each action (device, automation-control, or e-mail) with the existing semantics for that action type.
 
 #### Scenario: Actions fire in order
 
 - **WHEN** a listening change makes the condition true and the automation has two actions
-- **THEN** the host performs the first action then the second
+- **THEN** the host enqueues the first action then the second, and the main-loop drain applies them in that FIFO order
 
 #### Scenario: Any value re-report runs while condition stays true
 
 - **WHEN** a listener with event type `any` matches a status report, the root condition evaluates true, and the previous evaluation also left the condition true
-- **THEN** the host still runs the automation’s actions (subject to `minTriggerIntervalSec`)
+- **THEN** the host still enqueues the automation’s actions (subject to `minTriggerIntervalSec`)
 
 #### Scenario: Inactive skipped
 
 - **WHEN** a listening device status changes for an inactive automation whose condition would be true
-- **THEN** no actions run for that automation
+- **THEN** no actions are enqueued for that automation
 
 ### Requirement: Automation-target actions
 An action that targets an automation MUST support `ENABLE` and `DISABLE`. When the target automation has TIMER `use` true, that action MUST also support `STOP TIMER`, `START TIMER`, and `RESTART TIMER`. `START TIMER` MAY include a countdown time in seconds; when the target has no `defaultTime`, that optional time MUST be usable to start the countdown. Timer ops against a target with TIMER `use` false MUST NOT be accepted.
@@ -290,11 +290,11 @@ When actions run a device-target action bound to a registered custom command, th
 - **THEN** the host issues body `cmd=identify` on that device’s command path
 
 ### Requirement: Operator-initiated Run from console widget
-The host MUST accept an authenticated request that runs a named automation’s action list once without requiring that automation’s condition to be true, subject to the existing nested-action depth limit. Place and simple-user console pages MUST be able to invoke this when a widget automation binding control mode is Run.
+The host MUST accept an authenticated request that enqueues a named automation’s action list once on the action/command FIFO without requiring that automation’s condition to be true, subject to the existing nested-action depth limit. The HTTP handler MUST NOT apply those actions inline. Place and simple-user console pages MUST be able to invoke this when a widget automation binding control mode is Run.
 
 #### Scenario: Run executes actions once
 - **WHEN** an authenticated operator requests Run for automation B from a console widget
-- **THEN** the host runs B’s actions once without requiring B’s condition to be true
+- **THEN** the host enqueues B’s actions once without requiring B’s condition to be true, and FIFO drain later applies them
 
 ### Requirement: Operator-initiated timer ops from console widget
 When a console widget automation binding control mode is a timer op, the host MUST apply the same TIMER rules as automation-target timer actions: `START TIMER`, `STOP TIMER`, and `RESTART TIMER` only when the named automation has TIMER `use` true; otherwise the host MUST reject or no-op without changing countdown state.
@@ -336,16 +336,20 @@ When an email action runs, the host MUST build the outbound body as the stored m
 - **WHEN** a parameter’s device is missing at send time and its title is `Temp`
 - **THEN** the body still includes a `Temp:` line and later parameters are still processed
 
-### Requirement: Email action uses PSRAM for its config
-While an automation is loaded in memory, the entire `e-mail` action configuration (action node, receivers, theme, message, parameter structures, and their strings) MUST be allocated from PSRAM (SPIRAM), not from the internal heap used for ordinary automation device/automation actions. If PSRAM is unavailable at allocation time, the host MUST fail that email action parse/load with an out-of-memory style error rather than silently placing that email-action config on internal heap.
+### Requirement: Automation actions use PSRAM for their config
+While an automation is loaded in memory, every action (device, automation-control, and `e-mail`) — the action node and all of its owned strings / email parameter structures — MUST be allocated from PSRAM (SPIRAM). Listening entries and condition trees MUST remain on internal heap. If PSRAM is unavailable at allocation time, the host MUST fail that action parse/load with an out-of-memory style error rather than silently placing that action config on internal heap.
+
+#### Scenario: Device action config not on internal heap
+- **WHEN** an automation with a device action loads successfully on a host with PSRAM
+- **THEN** that action’s node and its ieee/payload (and related action strings) reside in PSRAM while listeners and conditions for that automation remain on internal heap
 
 #### Scenario: Email action config not on internal heap
 - **WHEN** an automation with an email action loads successfully on a host with PSRAM
 - **THEN** that action’s node, receivers, theme, message, and parameter title/device/attribute strings reside in PSRAM
 
-#### Scenario: No PSRAM rejects email action load
-- **WHEN** PSRAM cannot satisfy an email-action allocation during parse
-- **THEN** that automation load/save for the email action fails without keeping those email fields on internal RAM
+#### Scenario: No PSRAM rejects action load
+- **WHEN** PSRAM cannot satisfy an action allocation during parse
+- **THEN** that automation load/save for the action fails without keeping those action fields on internal RAM
 
 ### Requirement: Unconfigured email skips action with warning
 When an email action runs and the outbound email account is not configured, the host MUST NOT start SMTP send for that action, MUST log a warning on the firmware log path, and MUST continue with any following actions in the same automation.
