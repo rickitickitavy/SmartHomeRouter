@@ -10,6 +10,26 @@
         var signedInUser = null;
         var sessionWatchTimer = null;
         var firmwareRebootWaitActive = false;
+        var connectionHttpOk = true;
+        var connectionOverlayGraceTimer = null;
+        var connectionOverlayMode = "";
+        var CONNECTION_OVERLAY_GRACE_MS = 400;
+        var CONNECTION_DISCONNECTED_ICON_SVG = ""
+            + "<svg viewBox=\"0 0 64 64\" xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\">"
+            + "<path fill=\"none\" stroke=\"currentColor\" stroke-width=\"4\" stroke-linecap=\"round\" "
+            + "d=\"M18 28c6-8 22-8 28 0M24 34c4-5 12-5 16 0M30 40c2-2 4-2 6 0\"/>"
+            + "<path fill=\"none\" stroke=\"currentColor\" stroke-width=\"4\" stroke-linecap=\"round\" "
+            + "d=\"M20 44 L44 20\"/>"
+            + "</svg>";
+        var CONNECTION_RECONNECT_ICON_SVG = ""
+            + "<svg viewBox=\"0 0 64 64\" xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\">"
+            + "<path fill=\"none\" stroke=\"currentColor\" stroke-width=\"4\" stroke-linecap=\"round\" "
+            + "stroke-linejoin=\"round\" d=\"M14 32a18 18 0 0 1 30-12\"/>"
+            + "<path fill=\"currentColor\" d=\"M44 12 L52 20 L40 22 Z\"/>"
+            + "<path fill=\"none\" stroke=\"currentColor\" stroke-width=\"4\" stroke-linecap=\"round\" "
+            + "stroke-linejoin=\"round\" d=\"M50 32a18 18 0 0 1-30 12\"/>"
+            + "<path fill=\"currentColor\" d=\"M20 52 L12 44 L24 42 Z\"/>"
+            + "</svg>";
         var nativeFetch = window.fetch.bind(window);
         window.fetch = function (input, init) {
             return nativeFetch(input, init).then(function (response) {
@@ -19,6 +39,111 @@
                 return response;
             });
         };
+
+        function hideConnectionOverlay() {
+            if (connectionOverlayGraceTimer != null) {
+                window.clearTimeout(connectionOverlayGraceTimer);
+                connectionOverlayGraceTimer = null;
+            }
+            connectionOverlayMode = "";
+            var overlay = document.getElementById("connectionOverlay");
+            if (overlay) {
+                overlay.hidden = true;
+            }
+        }
+
+        function renderConnectionOverlay(mode) {
+            var overlay = document.getElementById("connectionOverlay");
+            var icon = document.getElementById("connectionOverlayIcon");
+            var title = document.getElementById("connectionOverlayTitle");
+            var text = document.getElementById("connectionOverlayText");
+            if (!overlay || !icon || !title || !text) {
+                return;
+            }
+            connectionOverlayMode = mode;
+            overlay.hidden = false;
+            if (mode === "reconnecting") {
+                icon.className = "connection-overlay-icon connection-overlay-icon--reconnect";
+                icon.innerHTML = CONNECTION_RECONNECT_ICON_SVG;
+                title.textContent = "Disconnected";
+                text.textContent = "Reconnecting to router…";
+            } else {
+                icon.className = "connection-overlay-icon";
+                icon.innerHTML = CONNECTION_DISCONNECTED_ICON_SVG;
+                title.textContent = "Disconnected";
+                text.textContent = "Connection to the router was lost.";
+            }
+        }
+
+        function wantedLiveSocketState(wanted, socket, reconnectTimer) {
+            if (!wanted) {
+                return "idle";
+            }
+            if (socket != null && socket.readyState === WebSocket.OPEN) {
+                return "open";
+            }
+            if ((socket != null && socket.readyState === WebSocket.CONNECTING)
+                || reconnectTimer != null) {
+                return "connecting";
+            }
+            return "down";
+        }
+
+        function refreshConnectionOverlay() {
+            if (!signedInUser || firmwareRebootWaitActive) {
+                hideConnectionOverlay();
+                return;
+            }
+            var httpDown = !connectionHttpOk || navigator.onLine === false;
+            var devicesState = wantedLiveSocketState(
+                devicesLiveWanted,
+                devicesLiveSocket,
+                devicesLiveReconnectTimer
+            );
+            var consolesState = wantedLiveSocketState(
+                consolesLiveWanted,
+                consolesLiveSocket,
+                consolesLiveReconnectTimer
+            );
+            var anyConnecting = devicesState === "connecting"
+                || consolesState === "connecting";
+            var anyDown = httpDown
+                || devicesState === "down"
+                || consolesState === "down";
+            if (!anyDown && !anyConnecting) {
+                hideConnectionOverlay();
+                return;
+            }
+            if (anyConnecting) {
+                if (connectionOverlayGraceTimer != null) {
+                    window.clearTimeout(connectionOverlayGraceTimer);
+                    connectionOverlayGraceTimer = null;
+                }
+                renderConnectionOverlay("reconnecting");
+                return;
+            }
+            if (connectionOverlayMode === "disconnected"
+                || connectionOverlayMode === "reconnecting") {
+                renderConnectionOverlay("disconnected");
+                return;
+            }
+            if (connectionOverlayGraceTimer != null) {
+                return;
+            }
+            connectionOverlayGraceTimer = window.setTimeout(function () {
+                connectionOverlayGraceTimer = null;
+                if (!signedInUser || firmwareRebootWaitActive) {
+                    hideConnectionOverlay();
+                    return;
+                }
+                renderConnectionOverlay("disconnected");
+            }, CONNECTION_OVERLAY_GRACE_MS);
+        }
+
+        function noteConnectionHttpOk(ok) {
+            connectionHttpOk = !!ok;
+            refreshConnectionOverlay();
+        }
 
         var assignedConsoles = [];
         var activeConsoleIndex = 0;
@@ -140,6 +265,8 @@
         function showLoginForm() {
             signedInUser = null;
             showingAccountTab = false;
+            connectionHttpOk = true;
+            hideConnectionOverlay();
             stopSessionWatch();
             stopDevicesLive();
             stopConsolesLive();
@@ -179,7 +306,10 @@
                 if (!signedInUser || firmwareRebootWaitActive) {
                     return;
                 }
-                fetch("/api/auth/me", { cache: "no-store" }).catch(function () {
+                fetch("/api/auth/me", { cache: "no-store" }).then(function () {
+                    noteConnectionHttpOk(true);
+                }).catch(function () {
+                    noteConnectionHttpOk(false);
                 });
             }, 10000);
         }
@@ -190,6 +320,8 @@
                 return;
             }
             signedInUser = user;
+            connectionHttpOk = true;
+            hideConnectionOverlay();
             document.getElementById("loginOverlay").hidden = true;
             document.getElementById("userShell").hidden = false;
             applyThemeToDocument(user && user.theme);
@@ -2347,11 +2479,11 @@
             if (!device || !binding) {
                 return NaN;
             }
-            var typeId = device.type || "";
             var param = bindingParamId(binding);
             var rawState = bindingResolvedState(device, binding);
-            if (isMeasurementDeviceType(typeId) && param !== "battery") {
-                return measurementNumericValue(typeId, rawState, binding.unit);
+            var measureKind = bindingMeasureKind(device, binding);
+            if (measureKind && measureKind !== "battery") {
+                return measurementNumericValue(measureKind, rawState, binding.unit);
             }
             return parseBindingNumericValue(rawState);
         }
@@ -2361,6 +2493,60 @@
                 return false;
             }
             return bindingParamIsNumeric(device, bindingParamId(binding));
+        }
+
+
+        function normalizeLinearStyle(value) {
+            var text = String(value || "");
+            if (text === "filled" || text === "vertical" || text === "verticalFilled") {
+                return text;
+            }
+            return "bar";
+        }
+
+        function reportableFormatTypeId(paramId) {
+            var text = String(paramId || "");
+            if (text.indexOf("reportable:") !== 0) {
+                return "";
+            }
+            var key = text.substring("reportable:".length);
+            var parts = key.split("/");
+            if (parts.length < 1) {
+                return "";
+            }
+            var cluster = parseInt(parts[0], 0);
+            if (cluster === 0x0402) {
+                return "temperatureMeasurement";
+            }
+            if (cluster === 0x0405) {
+                return "relativeHumidity";
+            }
+            if (cluster === 0x0403) {
+                return "pressureMeasurement";
+            }
+            if (cluster === 0x0400 || cluster === 0x0401) {
+                return "illuminanceMeasurement";
+            }
+            if (cluster === 0x0404) {
+                return "flowMeasurement";
+            }
+            return "";
+        }
+
+        function bindingMeasureKind(device, binding) {
+            var param = bindingParamId(binding);
+            if (param === "battery") {
+                return "battery";
+            }
+            var reportableType = reportableFormatTypeId(param);
+            if (reportableType) {
+                return reportableType;
+            }
+            var typeId = device && device.type ? String(device.type) : "";
+            if (isMeasurementDeviceType(typeId) && param !== "battery") {
+                return typeId;
+            }
+            return "";
         }
 
         function buildConsoleGaugeElement(binding, numericValue, displayText) {
@@ -2384,24 +2570,133 @@
                 return Number(left.top) - Number(right.top);
             });
             var wrap = document.createElement("div");
-            wrap.className = "console-gauge console-gauge--" + (gauge.type === "linear" ? "linear" : "arc");
+            var linearStyle = normalizeLinearStyle(gauge.linearStyle);
+            var isVertical = linearStyle === "vertical" || linearStyle === "verticalFilled";
+            var isFilled = linearStyle === "filled" || linearStyle === "verticalFilled";
+            wrap.className = "console-gauge console-gauge--" + (gauge.type === "linear" ? "linear" : "arc")
+                + (isVertical ? " console-gauge--vertical" : "")
+                + (isFilled ? " console-gauge--filled" : "");
             if (gauge.type === "linear") {
-                var track = document.createElement("div");
-                track.className = "console-gauge-linear-track";
-                var fill = document.createElement("div");
-                fill.className = "console-gauge-linear-fill";
-                fill.style.width = String(Math.round(ratio * 1000) / 10) + "%";
-                var fillColor = "#3b82f6";
-                var rangeIndex;
-                for (rangeIndex = 0; rangeIndex < ranges.length; rangeIndex++) {
-                    if (clamped <= Number(ranges[rangeIndex].top)) {
-                        fillColor = ranges[rangeIndex].color || fillColor;
-                        break;
+                if (isFilled) {
+                    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                    svg.setAttribute("class", "console-gauge-linear-svg");
+                    var stroke = 14;
+                    var trackLen = 100;
+                    if (isVertical) {
+                        svg.setAttribute("viewBox", "-12 0 24 104");
+                        svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+                        function appendLinearSeg(fromPct, toPct, color) {
+                            if (!(toPct > fromPct + 0.001)) {
+                                return;
+                            }
+                            var y1 = trackLen - fromPct * trackLen;
+                            var y2 = trackLen - toPct * trackLen;
+                            var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                            path.setAttribute("d", "M 0 " + y1 + " L 0 " + y2);
+                            path.setAttribute("fill", "none");
+                            path.setAttribute("stroke", color);
+                            path.setAttribute("stroke-width", String(stroke));
+                            path.setAttribute("stroke-linecap", "butt");
+                            svg.appendChild(path);
+                        }
+                        appendLinearSeg(0, 1, "#334155");
+                        var previous = minValue;
+                        var colorIndex;
+                        for (colorIndex = 0; colorIndex < ranges.length; colorIndex++) {
+                            var top = Number(ranges[colorIndex].top);
+                            if (!(top > previous)) {
+                                continue;
+                            }
+                            appendLinearSeg(
+                                (previous - minValue) / (maxValue - minValue),
+                                (Math.min(top, maxValue) - minValue) / (maxValue - minValue),
+                                ranges[colorIndex].color || "#3b82f6"
+                            );
+                            previous = top;
+                        }
+                        if (!ranges.length) {
+                            appendLinearSeg(0, ratio, "#3b82f6");
+                        }
+                        var arrowY = trackLen - ratio * trackLen;
+                        var arrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                        arrow.setAttribute(
+                            "d",
+                            "M -11," + (arrowY - 3.2) + " L 11," + arrowY
+                                + " L -11," + (arrowY + 3.2) + " Z"
+                        );
+                        arrow.setAttribute("fill", "currentColor");
+                        svg.appendChild(arrow);
+                    } else {
+                        svg.setAttribute("viewBox", "0 -12 104 24");
+                        svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+                        function appendLinearSegH(fromPct, toPct, color) {
+                            if (!(toPct > fromPct + 0.001)) {
+                                return;
+                            }
+                            var x1 = fromPct * trackLen;
+                            var x2 = toPct * trackLen;
+                            var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                            path.setAttribute("d", "M " + x1 + " 0 L " + x2 + " 0");
+                            path.setAttribute("fill", "none");
+                            path.setAttribute("stroke", color);
+                            path.setAttribute("stroke-width", String(stroke));
+                            path.setAttribute("stroke-linecap", "butt");
+                            svg.appendChild(path);
+                        }
+                        appendLinearSegH(0, 1, "#334155");
+                        var previousH = minValue;
+                        var colorIndexH;
+                        for (colorIndexH = 0; colorIndexH < ranges.length; colorIndexH++) {
+                            var topH = Number(ranges[colorIndexH].top);
+                            if (!(topH > previousH)) {
+                                continue;
+                            }
+                            appendLinearSegH(
+                                (previousH - minValue) / (maxValue - minValue),
+                                (Math.min(topH, maxValue) - minValue) / (maxValue - minValue),
+                                ranges[colorIndexH].color || "#3b82f6"
+                            );
+                            previousH = topH;
+                        }
+                        if (!ranges.length) {
+                            appendLinearSegH(0, ratio, "#3b82f6");
+                        }
+                        var arrowX = ratio * trackLen;
+                        var arrowH = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                        arrowH.setAttribute(
+                            "d",
+                            "M " + (arrowX - 3.2) + ",-11 L " + arrowX + ",11 L "
+                                + (arrowX + 3.2) + ",-11 Z"
+                        );
+                        arrowH.setAttribute("fill", "currentColor");
+                        svg.appendChild(arrowH);
                     }
+                    wrap.appendChild(svg);
+                } else {
+                    var track = document.createElement("div");
+                    track.className = "console-gauge-linear-track";
+                    var fill = document.createElement("div");
+                    fill.className = "console-gauge-linear-fill";
+                    if (isVertical) {
+                        fill.style.height = String(Math.round(ratio * 1000) / 10) + "%";
+                        fill.style.width = "100%";
+                        track.style.display = "flex";
+                        track.style.flexDirection = "column-reverse";
+                    } else {
+                        fill.style.width = String(Math.round(ratio * 1000) / 10) + "%";
+                    }
+                    var fillColor = "#3b82f6";
+                    var rangeIndex;
+                    for (rangeIndex = 0; rangeIndex < ranges.length; rangeIndex++) {
+                        if (clamped <= Number(ranges[rangeIndex].top)) {
+                            fillColor = ranges[rangeIndex].color || fillColor;
+                            break;
+                        }
+                    }
+                    fill.style.background = fillColor;
+                    track.appendChild(fill);
+                    wrap.appendChild(track);
                 }
-                fill.style.background = fillColor;
-                track.appendChild(fill);
-                wrap.appendChild(track);
             } else {
                 // Home Assistant ha-gauge geometry: origin center, upper semicircle, sweep=1.
                 var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -2790,16 +3085,24 @@
                 ));
             } else if (binding.viewStyle === "gauge") {
                 row.classList.add("console-device-row--gauge");
+                var rowLinearStyle = normalizeLinearStyle(
+                    binding.gauge && binding.gauge.linearStyle
+                );
+                if (binding.gauge && binding.gauge.type === "linear"
+                    && (rowLinearStyle === "vertical" || rowLinearStyle === "verticalFilled")) {
+                    row.classList.add("console-device-row--vertical-gauge");
+                }
                 var rawState = bindingResolvedState(device, binding);
                 var gaugeNumeric;
                 var gaugeDisplay;
-                if (isMeasurementDeviceType(typeId) && param !== "battery") {
-                    gaugeNumeric = measurementNumericValue(typeId, rawState, binding.unit);
+                var measureKind = bindingMeasureKind(device, binding);
+                if (measureKind && measureKind !== "battery") {
+                    gaugeNumeric = measurementNumericValue(measureKind, rawState, binding.unit);
                     gaugeDisplay = measurementGaugeDisplay(
-                        typeId,
+                        measureKind,
                         rawState,
                         binding.unit,
-                        bindingDecimals(binding, typeId)
+                        bindingDecimals(binding, measureKind)
                     );
                 } else {
                     gaugeNumeric = parseBindingNumericValue(rawState);
@@ -2810,14 +3113,16 @@
                     gaugeNumeric,
                     gaugeDisplay
                 ));
-            } else if (isMeasurementDeviceType(typeId) && param !== "battery") {
+            } else if (bindingMeasureKind(device, binding)
+                && bindingMeasureKind(device, binding) !== "battery") {
+                var valueMeasureKind = bindingMeasureKind(device, binding);
                 var valueLabel = document.createElement("span");
                 valueLabel.className = "console-sensor-value";
                 valueLabel.textContent = formatMeasurementDisplay(
-                    typeId,
+                    valueMeasureKind,
                     measurementStateForBinding(device, binding),
                     binding.unit,
-                    bindingDecimals(binding, typeId)
+                    bindingDecimals(binding, valueMeasureKind)
                 );
                 controls.appendChild(valueLabel);
             } else {
@@ -2905,10 +3210,12 @@
             var protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
             var socket = new WebSocket(protocol + "//" + window.location.host + "/ws/devices");
             devicesLiveSocket = socket;
+            refreshConnectionOverlay();
             socket.onopen = function () {
                 if (devicesLiveSocket === socket) {
                     devicesLiveLiveness.bind(socket);
                 }
+                refreshConnectionOverlay();
             };
             socket.onmessage = function (event) {
                 applyDevicesLiveMessage(event.data);
@@ -2917,9 +3224,14 @@
                 devicesLiveLiveness.stop();
                 devicesLiveSocket = null;
                 if (!devicesLiveWanted || firmwareRebootWaitActive) {
+                    refreshConnectionOverlay();
                     return;
                 }
-                devicesLiveReconnectTimer = window.setTimeout(openDevicesLiveSocket, 2000);
+                devicesLiveReconnectTimer = window.setTimeout(function () {
+                    devicesLiveReconnectTimer = null;
+                    openDevicesLiveSocket();
+                }, 2000);
+                refreshConnectionOverlay();
             };
         }
 
@@ -2927,6 +3239,7 @@
             devicesLiveWanted = true;
             loadDevices();
             openDevicesLiveSocket();
+            refreshConnectionOverlay();
         }
 
         function applyConsolesLiveMessage(text) {
@@ -2975,10 +3288,12 @@
             var protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
             var socket = new WebSocket(protocol + "//" + window.location.host + "/ws/consoles");
             consolesLiveSocket = socket;
+            refreshConnectionOverlay();
             socket.onopen = function () {
                 if (consolesLiveSocket === socket) {
                     consolesLiveLiveness.bind(socket);
                 }
+                refreshConnectionOverlay();
             };
             socket.onmessage = function (event) {
                 applyConsolesLiveMessage(event.data);
@@ -2987,15 +3302,21 @@
                 consolesLiveLiveness.stop();
                 consolesLiveSocket = null;
                 if (!consolesLiveWanted || firmwareRebootWaitActive) {
+                    refreshConnectionOverlay();
                     return;
                 }
-                consolesLiveReconnectTimer = window.setTimeout(openConsolesLiveSocket, 2000);
+                consolesLiveReconnectTimer = window.setTimeout(function () {
+                    consolesLiveReconnectTimer = null;
+                    openConsolesLiveSocket();
+                }, 2000);
+                refreshConnectionOverlay();
             };
         }
 
         function startConsolesLive() {
             consolesLiveWanted = true;
             openConsolesLiveSocket();
+            refreshConnectionOverlay();
         }
 
         function recoverWantedLiveSocket(wanted, socket, setSocket, liveness, reconnectTimer, setReconnectTimer, openFn) {
@@ -3109,6 +3430,12 @@
             window.addEventListener("pageshow", function () {
                 recoverConsoleLiveLinks();
             });
+            window.addEventListener("online", function () {
+                noteConnectionHttpOk(true);
+            });
+            window.addEventListener("offline", function () {
+                noteConnectionHttpOk(false);
+            });
             checkSession();
         };
     </script>
@@ -3132,6 +3459,13 @@
         </label>
         <button type="submit" class="btn btn-primary">Sign in</button>
     </form>
+</div>
+<div id="connectionOverlay" class="connection-overlay" hidden>
+    <div class="connection-overlay-panel" role="dialog" aria-modal="true" aria-labelledby="connectionOverlayTitle">
+        <div id="connectionOverlayIcon" class="connection-overlay-icon" aria-hidden="true"></div>
+        <h2 id="connectionOverlayTitle" class="connection-overlay-title">Disconnected</h2>
+        <p id="connectionOverlayText" class="connection-overlay-text"></p>
+    </div>
 </div>
 <div id="userShell" class="user-console-shell" hidden>
     <div class="user-console-toolbar">
