@@ -102,6 +102,14 @@ const char *FoundDeviceList::modelForIeee(const uint8_t ieee[8]) const {
     return device->model;
 }
 
+uint16_t FoundDeviceList::shortAddrForIeee(const uint8_t ieee[8]) const {
+    const FoundDevice *device = findByIeee(ieee);
+    if (device == nullptr) {
+        return 0;
+    }
+    return device->shortAddr;
+}
+
 bool FoundDeviceList::noteJoin(const SpiFrame &frame, DeviceTopicMap *registered) {
     if (frame.cmd != SpiEvtDeviceJoin || frame.length < SPI_DEVICE_JOIN_MIN_LEN) {
         return false;

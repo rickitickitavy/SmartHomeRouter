@@ -1266,6 +1266,7 @@
             var saveError = document.getElementById("hardwareSaveError");
             var saveSuccess = document.getElementById("hardwareSaveSuccess");
             var speedSelect = document.getElementById("spiSpeedHz");
+            var rfUpdateSpeedSelect = document.getElementById("rfUpdateSpiSpeedHz");
             var blueInput = document.getElementById("blueLedBrightness");
             var greenInput = document.getElementById("greenLedBrightness");
             var queueInput = document.getElementById("useQueueForBaseDeviceCommand");
@@ -1286,6 +1287,9 @@
                 if (speedSelect) {
                     speedSelect.value = String(hardwareSettings.spiSpeedHz || 500000);
                 }
+                if (rfUpdateSpeedSelect) {
+                    rfUpdateSpeedSelect.value = String(hardwareSettings.rfUpdateSpiSpeedHz || 1000000);
+                }
                 if (blueInput) {
                     blueInput.value = String(hardwareSettings.blueLedBrightness || 100);
                 }
@@ -1298,6 +1302,9 @@
             }).catch(function (error) {
                 if (speedSelect && !speedSelect.value) {
                     speedSelect.value = "500000";
+                }
+                if (rfUpdateSpeedSelect && !rfUpdateSpeedSelect.value) {
+                    rfUpdateSpeedSelect.value = "1000000";
                 }
                 if (blueInput && !blueInput.value) {
                     blueInput.value = "100";
@@ -1325,6 +1332,7 @@
             var queueInput = document.getElementById("useQueueForBaseDeviceCommand");
             var body = {
                 spiSpeedHz: parseInt(document.getElementById("spiSpeedHz").value, 10),
+                rfUpdateSpiSpeedHz: parseInt(document.getElementById("rfUpdateSpiSpeedHz").value, 10),
                 blueLedBrightness: parseInt(document.getElementById("blueLedBrightness").value, 10),
                 greenLedBrightness: parseInt(document.getElementById("greenLedBrightness").value, 10),
                 useQueueForBaseDeviceCommand: !!(queueInput && queueInput.checked)
@@ -2689,6 +2697,7 @@
         var parameterDialogTypeId = "unknown";
         var parameterDialogTransport = "zigbee";
         var parameterDialogManufacturerId = "unknown";
+        var parameterDialogNwk = 0;
         var parameterDialogBaseline = null;
         var parameterDialogIsEdit = false;
         var proposedWifiTopics = null;
@@ -4867,9 +4876,12 @@
                 heading.textContent = title;
             }
             document.getElementById("deviceIeee").value = device.ieee || "";
+            var nwkRaw = Number(device.nwk);
+            parameterDialogNwk =
+                Number.isFinite(nwkRaw) && nwkRaw > 0 && nwkRaw < 0xffff ? Math.floor(nwkRaw) : 0;
             var nwkInput = document.getElementById("deviceNwk");
             if (nwkInput) {
-                nwkInput.value = formatDeviceNwkDisplay(device.nwk);
+                nwkInput.value = formatDeviceNwkDisplay(parameterDialogNwk);
             }
             parameterDialogTypeId = device.type || "unknown";
             parameterDialogTransport = device.transport == "mqtt" ? "mqtt" : "zigbee";
@@ -5818,6 +5830,7 @@
             fillParameterDialog(
                 {
                     ieee: selectedFoundIeee,
+                    nwk: found && found.nwk,
                     type: found && found.type,
                     manufacturer: found && found.manufacturer,
                     transport: "zigbee"
@@ -6092,6 +6105,11 @@
             body.reportableData = normalizeReportableData(parameterDialogReportableData);
             if (ieeeText) {
                 body.ieee = ieeeText;
+            }
+            if (parameterDialogTransport != "mqtt"
+                && parameterDialogNwk > 0
+                && parameterDialogNwk < 0xffff) {
+                body.nwk = parameterDialogNwk;
             }
             fetch("/api/devices", {
                 method: "POST",
@@ -15758,6 +15776,17 @@
                                 <option value="40000000">40 MHz</option>
                             </select>
                             <p class="field-hint">Host SPI clock to the Zigbee slave. Maximum 40 MHz. Applied on Save without restart. Default 500 kHz.</p>
+                        </div>
+                        <div class="field">
+                            <label for="rfUpdateSpiSpeedHz">RF update SPI speed</label>
+                            <select id="rfUpdateSpiSpeedHz">
+                                <option value="100000">100 kHz</option>
+                                <option value="200000">200 kHz</option>
+                                <option value="500000">500 kHz</option>
+                                <option value="1000000" selected>1 MHz</option>
+                                <option value="2000000">2 MHz</option>
+                            </select>
+                            <p class="field-hint">Host SPI clock used only while updating the Zigbee slave firmware. Default 1 MHz.</p>
                         </div>
                         <div class="field">
                             <label for="blueLedBrightness">BLUE LED brightness</label>

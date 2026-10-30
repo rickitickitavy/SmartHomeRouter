@@ -13,6 +13,7 @@ constexpr uint16_t kZigbeeClusterOnOff = 0x0006;
 constexpr uint16_t kZigbeeClusterLevelControl = 0x0008;
 constexpr uint16_t kZigbeeClusterTime = 0x000A;
 constexpr uint16_t kZigbeeClusterOta = 0x0019;
+constexpr uint16_t kZigbeeClusterPollControl = 0x0020;
 constexpr uint16_t kZigbeeClusterShadeConfig = 0x0100;
 constexpr uint16_t kZigbeeClusterDoorLock = 0x0101;
 constexpr uint16_t kZigbeeClusterWindowCovering = 0x0102;
@@ -72,6 +73,8 @@ inline const char *zigbeeClusterName(uint16_t clusterId) {
             return "Time";
         case kZigbeeClusterOta:
             return "OTA";
+        case kZigbeeClusterPollControl:
+            return "Poll control";
         case kZigbeeClusterShadeConfig:
             return "Shade configuration";
         case kZigbeeClusterDoorLock:
@@ -132,7 +135,9 @@ inline bool zigbeeClusterIsAuxiliary(uint16_t clusterId) {
         || clusterId == kZigbeeClusterGroups
         || clusterId == kZigbeeClusterScenes
         || clusterId == kZigbeeClusterTime
-        || clusterId == kZigbeeClusterOta;
+        || clusterId == kZigbeeClusterOta
+        // Sleepy-end helper only — must not win device-type classification.
+        || clusterId == kZigbeeClusterPollControl;
 }
 
 inline bool zigbeeBatteryPercentageRemainingValid(uint32_t rawValue) {

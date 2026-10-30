@@ -40,6 +40,7 @@ public:
     uint8_t zigbeeTypeForIeee(const uint8_t ieee[8]) const;
     const char *manufacturerForIeee(const uint8_t ieee[8]) const;
     const char *modelForIeee(const uint8_t ieee[8]) const;
+    uint16_t shortAddrForIeee(const uint8_t ieee[8]) const;
     void removeIeee(const uint8_t ieee[8]);
     String listJson(DeviceTopicMap *formatter);
 

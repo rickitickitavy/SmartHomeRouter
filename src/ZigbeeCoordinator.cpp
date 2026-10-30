@@ -47,6 +47,8 @@ static bool copyZclCharStringAttr(
     if (destination == nullptr || attribute == nullptr || attribute->data.value == nullptr) {
         return false;
     }
+    // Basic ManufacturerName / ModelIdentifier are ZCL character strings:
+    // first byte = length, then that many payload bytes (not a C string).
     if (attribute->data.type != ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING || attribute->data.size < 1) {
         return false;
     }
@@ -56,12 +58,40 @@ static bool copyZclCharStringAttr(
         return false;
     }
     char buffer[33];
-    const size_t copyLen = stringLen < maxLen ? (size_t)stringLen : maxLen;
+    size_t copyLen = stringLen < maxLen ? (size_t)stringLen : maxLen;
     if (copyLen >= sizeof(buffer)) {
         return false;
     }
     memcpy(buffer, bytes + 1, copyLen);
     buffer[copyLen] = '\0';
+    // Trim trailing NULs / spaces / tabs so model compare matches catalog prefixes.
+    while (copyLen > 0
+        && (buffer[copyLen - 1] == '\0'
+            || buffer[copyLen - 1] == ' '
+            || buffer[copyLen - 1] == '\t'
+            || buffer[copyLen - 1] == '\r'
+            || buffer[copyLen - 1] == '\n')) {
+        copyLen--;
+        buffer[copyLen] = '\0';
+    }
+    size_t start = 0;
+    while (buffer[start] == ' ' || buffer[start] == '\t') {
+        start++;
+    }
+    if (start > 0) {
+        memmove(buffer, buffer + start, copyLen - start + 1);
+        copyLen -= start;
+    }
+    if (copyLen == 0) {
+        return false;
+    }
+    // Reject clearly non-text payloads (control bytes); keep printable ASCII + UTF-8.
+    for (size_t index = 0; index < copyLen; index++) {
+        const unsigned char character = (unsigned char)buffer[index];
+        if (character < 0x20 && character != '\t') {
+            return false;
+        }
+    }
     free(*destination);
     *destination = DeviceTopicMap::duplicateBoundedString(buffer, maxLen);
     return *destination != nullptr && (*destination)[0] != '\0';
