@@ -879,19 +879,23 @@ uint8_t ZigbeeCoordinator::registeredZigbeeType(const uint8_t ieee[8]) const {
 }
 
 bool ZigbeeCoordinator::applySavedDeviceClass(BoundZigbeeDevice *slot) {
-    if (slot == nullptr) {
+    if (slot == nullptr || registeredMap == nullptr) {
         return false;
     }
-    const uint8_t savedType = registeredZigbeeType(slot->ieee);
-    if (savedType == ZigbeeDeviceTypeUnknown) {
+    const DeviceTopicEntry *entry = registeredMap->findByIeee(slot->ieee);
+    if (entry == nullptr || !entry->used) {
         return false;
     }
+    // Registered devices keep stored type forever (including unknown).
+    const uint8_t savedType = entry->zigbeeType;
     slot->typeProbeDeadlineMs = 0;
     if (slot->zigbeeType == savedType && slot->lastEmittedType == savedType) {
         return true;
     }
     slot->zigbeeType = savedType;
-    emitDeviceJoin(slot);
+    if (savedType != ZigbeeDeviceTypeUnknown) {
+        emitDeviceJoin(slot);
+    }
     return true;
 }
 
@@ -902,14 +906,12 @@ void ZigbeeCoordinator::mergeBoundDeviceType(BoundZigbeeDevice *slot, uint8_t in
     if (applySavedDeviceClass(slot)) {
         return;
     }
-    const uint8_t merged = mergeZigbeeDeviceType(slot->zigbeeType, incomingType);
-    if (merged == slot->zigbeeType) {
+    // Application Device ID only: first mapped type wins; never replace via clusters/rank.
+    if (incomingType == ZigbeeDeviceTypeUnknown || slot->zigbeeType != ZigbeeDeviceTypeUnknown) {
         return;
     }
-    slot->zigbeeType = merged;
-    if (slot->zigbeeType != ZigbeeDeviceTypeUnknown) {
-        emitDeviceJoin(slot);
-    }
+    slot->zigbeeType = incomingType;
+    emitDeviceJoin(slot);
 }
 
 ZigbeeCoordinator::DescriptorProbe *ZigbeeCoordinator::allocDescriptorProbe(uint16_t shortAddr) {
@@ -1018,16 +1020,11 @@ void ZigbeeCoordinator::onSimpleDescriptor(
     if (slot == nullptr) {
         return;
     }
-    uint8_t classified = classifyZigbeeDeviceTypeFromClusterList(
-        simpleDesc->app_cluster_list,
-        simpleDesc->app_input_cluster_count,
-        simpleDesc->app_output_cluster_count
-    );
-    classified = mergeZigbeeDeviceType(
-        classified,
+    // Type from Application Device ID only (ZDO Simple Descriptor) — not clusters.
+    coordinator->mergeBoundDeviceType(
+        slot,
         zigbeeDeviceTypeFromHaDeviceId(simpleDesc->app_device_id)
     );
-    coordinator->mergeBoundDeviceType(slot, classified);
     coordinator->addKnownEndpoint(slot, simpleDesc->endpoint);
     const uint8_t clusterTotal =
         (uint8_t)(simpleDesc->app_input_cluster_count + simpleDesc->app_output_cluster_count);
@@ -1551,8 +1548,6 @@ void ZigbeeCoordinator::handleIasZoneEnroll(
         enrollDevice.short_addr = shortAddr;
         enrollDevice.endpoint = message->info.src_endpoint;
         storeBoundDevice(&enrollDevice);
-        BoundZigbeeDevice *slot = findByIeee(ieee);
-        mergeBoundDeviceType(slot, ZigbeeDeviceTypeIasZone);
     }
 }
 
@@ -1583,7 +1578,6 @@ void ZigbeeCoordinator::handleAttributeReport(
     adoptReportIdentity(ieee, shortAddr, srcEndpoint);
     completeStatusRead(ieee, clusterId, srcEndpoint);
     BoundZigbeeDevice *slot = findByIeee(ieee);
-    mergeBoundDeviceType(slot, zigbeeDeviceTypeFromCluster(clusterId));
     if (clusterId == kZigbeeClusterBasic
         && (attribute->id == kZigbeeAttrBasicManufacturerName
             || attribute->id == kZigbeeAttrBasicModelIdentifier)) {
@@ -1686,8 +1680,6 @@ void ZigbeeCoordinator::handleLightStateWithSource(bool on, uint8_t endpoint, es
     );
     adoptReportIdentity(ieee, shortAddr, endpoint);
     completeStatusRead(ieee, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, endpoint);
-    BoundZigbeeDevice *onOffSlot = findByIeee(ieee);
-    mergeBoundDeviceType(onOffSlot, ZigbeeDeviceTypeOnOff);
     char eventName[96];
     formatAttrEventName(
         eventName,

@@ -22,7 +22,7 @@ The system MUST define a manufacturer enum with values `unknown`, `tuya`, `aqara
 - **THEN** the mapped enum is `unknown`
 
 ### Requirement: Configuration catalog is keyed by manufacturer and type
-The system MUST maintain a compile-time (`static const`, flash-resident) catalog of configurable attributes keyed by manufacturer enum, classified device type, and optional model prefix. A configurable attribute MUST exclude runtime telemetry and operational state such as on/off status, covering position, battery, RSSI, illuminance, temperature, humidity, and similar live values. Registered devices MUST persist the Zigbee model string used for matching.
+The system MUST maintain a compile-time (`static const`, flash-resident) catalog of configurable attributes keyed by manufacturer enum, classified device type, and optional model prefix. Manufacturer and model (Basic Manufacturer Name / Model Identifier) MUST be used only to select which configurable attributes apply; they MUST NOT assign or override the device’s stored Zigbee type. A configurable attribute MUST exclude runtime telemetry and operational state such as on/off status, covering position, battery, RSSI, illuminance, temperature, humidity, and similar live values. Registered devices MUST persist the Zigbee model string used for matching.
 
 #### Scenario: Tuya onOff has config entries
 - **WHEN** manufacturer is `tuya` and type is `onOff`
@@ -39,6 +39,10 @@ The system MUST maintain a compile-time (`static const`, flash-resident) catalog
 #### Scenario: Status is not configurable
 - **WHEN** the catalog is queried for any manufacturer and type
 - **THEN** on/off status, covering position, battery, and RSSI are absent from configurable attributes
+
+#### Scenario: Model does not change type
+- **WHEN** a registered device has type `onOff` and Basic model/manufacturer strings match a temperature-oriented product profile in the config catalog
+- **THEN** Configure may show attributes for that manufacturer/model/type key but the stored device type remains `onOff`
 
 ### Requirement: Catalog entry describes typed ZCL targets
 Each catalog entry MUST declare a stable config id, human label, value type (`bool`, `enum`, `uint8`, `uint16`, `int8`, `int16`), optional enum labels/values, Zigbee endpoint policy (fixed or first usable), cluster id, attribute id, and ZCL data type for read/write. Manufacturer-specific attributes MUST be marked as such when required by the device class.

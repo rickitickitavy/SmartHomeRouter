@@ -124,11 +124,8 @@ bool FoundDeviceList::noteJoin(const SpiFrame &frame, DeviceTopicMap *registered
     if (registered != nullptr) {
         DeviceTopicEntry *entry = registered->findByIeee(ieee);
         if (entry != nullptr && entry->used) {
+            // Registered Zigbee type is frozen after Save (including unknown).
             bool changed = false;
-            if (entry->zigbeeType == ZigbeeDeviceTypeUnknown && joinType != ZigbeeDeviceTypeUnknown) {
-                entry->zigbeeType = joinType;
-                changed = true;
-            }
             if (entry->manufacturer == DeviceManufacturerUnknown) {
                 const uint8_t mapped = deviceManufacturerFromJoinString(
                     (const char *)frame.payload + SPI_DEVICE_JOIN_MANUFACTURER_OFFSET

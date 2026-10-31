@@ -1213,31 +1213,16 @@ static void runDeviceRegistryFixtures() {
         return;
     }
 
-    const uint16_t onOffOnlyClusters[] = { kZigbeeClusterOnOff };
-    const uint16_t iasWithOnOffClusters[] = { kZigbeeClusterOnOff, kZigbeeClusterIasZone };
-    const uint16_t tempOnlyClusters[] = { 0x0402 };
-    const uint16_t coveringClusters[] = { kZigbeeClusterWindowCovering };
-    const uint16_t leakDetectorClusters[] = {
-        kZigbeeClusterPowerConfig,
-        kZigbeeClusterIasZone
-    };
-    const uint16_t batteryOnlyClusters[] = { kZigbeeClusterPowerConfig };
-    const uint16_t coveringOutClusters[] = { kZigbeeClusterWindowCovering };
-    const uint16_t pollThenTempClusters[] = {
-        kZigbeeClusterPollControl,
-        kZigbeeClusterTemperature
-    };
-    if (classifyZigbeeDeviceTypeFromInClusters(onOffOnlyClusters, 1) != ZigbeeDeviceTypeOnOff
-        || classifyZigbeeDeviceTypeFromInClusters(iasWithOnOffClusters, 2) != ZigbeeDeviceTypeIasZone
-        || classifyZigbeeDeviceTypeFromInClusters(leakDetectorClusters, 2) != ZigbeeDeviceTypeIasZone
-        || classifyZigbeeDeviceTypeFromInClusters(batteryOnlyClusters, 1) != ZigbeeDeviceTypeUnknown
-        || classifyZigbeeDeviceTypeFromInClusters(tempOnlyClusters, 1)
+    if (zigbeeDeviceTypeFromHaDeviceId(0x0051) != ZigbeeDeviceTypeOnOff
+        || zigbeeDeviceTypeFromHaDeviceId(0x0100) != ZigbeeDeviceTypeOnOff
+        || zigbeeDeviceTypeFromHaDeviceId(0x0302)
             != zigbeeDeviceTypeFromCluster(kZigbeeClusterTemperature)
-        || classifyZigbeeDeviceTypeFromInClusters(pollThenTempClusters, 2)
-            != zigbeeDeviceTypeFromCluster(kZigbeeClusterTemperature)
+        || zigbeeDeviceTypeFromHaDeviceId(0x0402) != ZigbeeDeviceTypeIasZone
+        || zigbeeDeviceTypeFromHaDeviceId(0x0202) != ZigbeeDeviceTypeWindowCovering
+        || zigbeeDeviceTypeFromHaDeviceId(0x0008) != ZigbeeDeviceTypeUnknown
+        || zigbeeDeviceTypeFromHaDeviceId(0x0101) != zigbeeDeviceTypeFromCluster(0x0008)
+        || zigbeeDeviceTypeFromHaDeviceId(0x0301) != zigbeeDeviceTypeFromCluster(0x0201)
         || zigbeeDeviceTypeFromCluster(kZigbeeClusterPollControl) != ZigbeeDeviceTypeUnknown
-        || classifyZigbeeDeviceTypeFromInClusters(coveringClusters, 1) != ZigbeeDeviceTypeWindowCovering
-        || classifyZigbeeDeviceTypeFromClusterList(coveringOutClusters, 0, 1) != ZigbeeDeviceTypeWindowCovering
         || zigbeeDeviceTypeFromCluster(kZigbeeClusterWindowCovering) != ZigbeeDeviceTypeWindowCovering
         || zigbeeDeviceTypeFromAttrMessage("Window covering cl=0x0102,attr=0x0008,val=0x0")
             != ZigbeeDeviceTypeWindowCovering
@@ -1484,13 +1469,13 @@ static void runDeviceRegistryFixtures() {
             ZigbeeDeviceTypeWindowCovering
         );
         joinFrame.length = SPI_DEVICE_JOIN_LEN;
-        const bool filledType = foundDevices->noteJoin(joinFrame, topicMap);
+        const bool typeChanged = foundDevices->noteJoin(joinFrame, topicMap);
         foundJson = foundDevices->listJson(topicMap);
-        if (!filledType || coveringEntry->zigbeeType != ZigbeeDeviceTypeWindowCovering
+        if (typeChanged || coveringEntry->zigbeeType != ZigbeeDeviceTypeUnknown
             || foundJson.indexOf("DD") >= 0) {
-            LOGGER.error("Registered unknown type fill fixture failed");
+            LOGGER.error("Registered type freeze fixture failed");
         } else {
-            LOGGER.info("Registered unknown type fill fixture ok");
+            LOGGER.info("Registered type freeze fixture ok");
         }
         topicMap->removeByIeee(coveringIeee);
     }
