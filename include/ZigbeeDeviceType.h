@@ -174,48 +174,70 @@ inline uint8_t zigbeeDeviceTypeFromCluster(uint16_t clusterId) {
     return ZigbeeDeviceTypeUnknown;
 }
 
+// Map ZDO Simple Descriptor Application Device ID (HA/ZHA + ZLO) → catalog type.
+// Unlisted Device IDs stay unknown — do not infer type from clusters here.
 inline uint8_t zigbeeDeviceTypeFromHaDeviceId(uint16_t deviceId) {
     uint16_t clusterId = kZigbeeDeviceTypeNoCluster;
     switch (deviceId) {
-        case 0x0000:
-        case 0x0002:
-        case 0x0009:
-        case 0x0051:
-        case 0x0100:
-        case 0x0103:
-        case 0x010A:
+        case 0x0000: // On/Off Switch
+        case 0x0002: // On/Off Output
+        case 0x0009: // Mains Power Outlet
+        case 0x0051: // Smart Plug
+        case 0x0100: // On/Off Light
+        case 0x0103: // On/Off Light Switch
+        case 0x0108: // On/Off Ballast (ZLO)
+        case 0x010A: // On/Off Plug-in Unit (ZLO)
+        case 0x0850: // On/Off Sensor (ZLO)
             clusterId = 0x0006;
             break;
-        case 0x0001:
-        case 0x0003:
-        case 0x0101:
-        case 0x0104:
-        case 0x010B:
+        case 0x0001: // Level Control Switch
+        case 0x0003: // Level Controllable Output
+        case 0x0101: // Dimmable Light
+        case 0x0104: // Dimmer Switch
+        case 0x0109: // Dimmable Ballast (ZLO)
+        case 0x010B: // Dimmable Plug-in Unit (ZLO)
             clusterId = 0x0008;
             break;
-        case 0x0102:
-        case 0x0105:
+        case 0x0102: // Color Dimmable Light
+        case 0x0105: // Color Dimmer Switch
+        case 0x010C: // Color Temperature Light (ZLO)
+        case 0x010D: // Extended Color Light (ZLO)
             clusterId = 0x0300;
             break;
-        case 0x0200:
-        case 0x0201:
-        case 0x0202:
-        case 0x0203:
+        case 0x0106: // Light Sensor
+        case 0x010E: // Light Level Sensor (ZLO)
+            clusterId = 0x0400;
+            break;
+        case 0x0107: // Occupancy Sensor
+            clusterId = 0x0406;
+            break;
+        case 0x0200: // Shade
+        case 0x0201: // Shade Controller
+        case 0x0202: // Window Covering Device
+        case 0x0203: // Window Covering Controller
             clusterId = 0x0102;
             break;
-        case 0x0301:
+        case 0x0300: // Heating/Cooling Unit
+        case 0x0301: // Thermostat
             clusterId = 0x0201;
             break;
-        case 0x0302:
+        case 0x0302: // Temperature Sensor
             clusterId = 0x0402;
             break;
-        case 0x0402:
+        case 0x0305: // Pressure Sensor
+            clusterId = 0x0403;
+            break;
+        case 0x0306: // Flow Sensor
+            clusterId = 0x0404;
+            break;
+        case 0x0402: // IAS Zone
             clusterId = 0x0500;
             break;
-        case 0x000A:
+        case 0x000A: // Door Lock
             clusterId = 0x0101;
             break;
         default:
+            // e.g. 0x0008 Range Extender — no product type mapping
             break;
     }
     if (clusterId == kZigbeeDeviceTypeNoCluster) {
