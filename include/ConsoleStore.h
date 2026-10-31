@@ -66,6 +66,9 @@ struct ConsoleCompositeCell {
     uint8_t alignV;
     char *text;
     ConsoleBinding *binding;
+    char *cameraId;
+    uint8_t cameraMode;
+    uint8_t cameraChannel;
     ConsoleCompositeCell *next;
 };
 

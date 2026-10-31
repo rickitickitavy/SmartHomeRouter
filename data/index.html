@@ -64,6 +64,9 @@
             } else {
                 stopAutomationsLive();
             }
+            if (name == "cameras") {
+                loadCameras();
+            }
         }
 
         function showSystemTab(name) {
@@ -628,6 +631,7 @@
             var canAdd = admin || hasRole("addDevices");
             setHidden(document.querySelector('.sidebar-btn[data-section="network"]'), !admin);
             setHidden(document.querySelector('.sidebar-btn[data-section="automation"]'), !admin);
+            setHidden(document.querySelector('.sidebar-btn[data-section="cameras"]'), !admin);
             setHidden(document.querySelector('.system-tab-btn[data-tab="update"]'), !admin);
             setHidden(document.querySelector('.system-tab-btn[data-tab="hardware"]'), !admin);
             setHidden(document.querySelector('.sidebar-btn[data-section="security"]'), !canEditUsers);
@@ -9781,7 +9785,8 @@
                                 receivers: "",
                                 theme: "",
                                 message: "",
-                                parameters: []
+                                parameters: [],
+                                cameraAttaches: []
                             };
                         } else {
                             var firstDevice = registeredDeviceRows[0] || null;
@@ -10060,6 +10065,18 @@
                         if (!Array.isArray(action.parameters)) {
                             action.parameters = [];
                         }
+                        if (!Array.isArray(action.cameraAttaches)) {
+                            action.cameraAttaches = [];
+                            if (action.attachCamera && action.cameraId) {
+                                action.cameraAttaches.push({
+                                    cameraId: action.cameraId || "",
+                                    channel: action.cameraChannel === 2 ? 2 : 1
+                                });
+                            }
+                            delete action.attachCamera;
+                            delete action.cameraId;
+                            delete action.cameraChannel;
+                        }
                         var emailFieldsTable = document.createElement("table");
                         emailFieldsTable.className = "automation-email-fields-table";
                         function appendEmailFieldRow(labelText, control) {
@@ -10097,8 +10114,120 @@
                             automationEditorDraft.actions[actionIndex].message = messageInput.value;
                         };
                         appendEmailFieldRow("Message", messageInput);
+                        if (!cameraListCache || cameraListCache.length === 0) {
+                            fetch("/api/cameras", { cache: "no-store" }).then(function (response) {
+                                return response.ok ? response.json() : [];
+                            }).then(function (rows) {
+                                cameraListCache = Array.isArray(rows) ? rows : [];
+                                renderAutomationActionsEditor();
+                            }).catch(function () {});
+                        }
                         var paramsHost = document.createElement("div");
                         paramsHost.className = "automation-email-params";
+                        var cameraAttachHost = document.createElement("div");
+                        cameraAttachHost.className = "automation-email-params";
+                        function fillEmailCameraSelect(selectEl, selectedId) {
+                            selectEl.innerHTML = "";
+                            var emptyOption = document.createElement("option");
+                            emptyOption.value = "";
+                            emptyOption.textContent = "Select camera";
+                            selectEl.appendChild(emptyOption);
+                            (cameraListCache || []).forEach(function (cameraRow) {
+                                var option = document.createElement("option");
+                                option.value = cameraRow.id || "";
+                                option.textContent = cameraRow.name || cameraRow.id || "";
+                                selectEl.appendChild(option);
+                            });
+                            selectEl.value = selectedId || "";
+                        }
+                        function renderEmailCameraAttaches() {
+                            cameraAttachHost.innerHTML = "";
+                            var attaches =
+                                automationEditorDraft.actions[actionIndex].cameraAttaches || [];
+                            var table = document.createElement("table");
+                            table.className = "automation-email-params-table data-table";
+                            var thead = document.createElement("thead");
+                            thead.innerHTML =
+                                "<tr><th>Camera</th><th>Channel</th><th></th></tr>";
+                            table.appendChild(thead);
+                            var tbody = document.createElement("tbody");
+                            var attachIndex;
+                            for (attachIndex = 0; attachIndex < attaches.length; attachIndex++) {
+                                (function (emailAttachIndex) {
+                                    var emailAttach = attaches[emailAttachIndex];
+                                    var tr = document.createElement("tr");
+                                    var cameraSelect = document.createElement("select");
+                                    fillEmailCameraSelect(
+                                        cameraSelect,
+                                        emailAttach.cameraId || ""
+                                    );
+                                    var channelSelect = document.createElement("select");
+                                    [1, 2].forEach(function (channelValue) {
+                                        var option = document.createElement("option");
+                                        option.value = String(channelValue);
+                                        option.textContent = "Channel " + String(channelValue);
+                                        channelSelect.appendChild(option);
+                                    });
+                                    channelSelect.value =
+                                        emailAttach.channel === 2 ? "2" : "1";
+                                    cameraSelect.onchange = function () {
+                                        automationEditorDraft.actions[actionIndex]
+                                            .cameraAttaches[emailAttachIndex].cameraId =
+                                            cameraSelect.value || "";
+                                    };
+                                    channelSelect.onchange = function () {
+                                        automationEditorDraft.actions[actionIndex]
+                                            .cameraAttaches[emailAttachIndex].channel =
+                                            parseInt(channelSelect.value, 10) === 2 ? 2 : 1;
+                                    };
+                                    var removeAttachBtn = document.createElement("button");
+                                    removeAttachBtn.type = "button";
+                                    removeAttachBtn.className = "console-widget-delete-btn";
+                                    removeAttachBtn.textContent = "🗑";
+                                    removeAttachBtn.title = "Remove camera attach";
+                                    removeAttachBtn.setAttribute(
+                                        "aria-label",
+                                        "Remove camera attach"
+                                    );
+                                    removeAttachBtn.onclick = function () {
+                                        automationEditorDraft.actions[actionIndex]
+                                            .cameraAttaches.splice(emailAttachIndex, 1);
+                                        renderEmailCameraAttaches();
+                                    };
+                                    function appendCell(control) {
+                                        var td = document.createElement("td");
+                                        td.appendChild(control);
+                                        tr.appendChild(td);
+                                    }
+                                    appendCell(cameraSelect);
+                                    appendCell(channelSelect);
+                                    appendCell(removeAttachBtn);
+                                    tbody.appendChild(tr);
+                                })(attachIndex);
+                            }
+                            table.appendChild(tbody);
+                            if (attaches.length > 0) {
+                                cameraAttachHost.appendChild(table);
+                            }
+                            var addAttachBtn = document.createElement("button");
+                            addAttachBtn.type = "button";
+                            addAttachBtn.className = "btn btn-secondary btn-inline";
+                            addAttachBtn.textContent = "Add camera snapshot";
+                            addAttachBtn.disabled = attaches.length >= 8;
+                            addAttachBtn.onclick = function () {
+                                var firstCamera =
+                                    cameraListCache && cameraListCache.length
+                                        ? cameraListCache[0]
+                                        : null;
+                                automationEditorDraft.actions[actionIndex].cameraAttaches.push({
+                                    cameraId: firstCamera ? firstCamera.id || "" : "",
+                                    channel: 1
+                                });
+                                renderEmailCameraAttaches();
+                            };
+                            cameraAttachHost.appendChild(addAttachBtn);
+                        }
+                        renderEmailCameraAttaches();
                         function renderEmailParams() {
                             paramsHost.innerHTML = "";
                             var parameters = automationEditorDraft.actions[actionIndex].parameters || [];
@@ -10215,6 +10344,7 @@
                         renderEmailParams();
                         row.appendChild(emailFieldsTable);
                         row.appendChild(paramsHost);
+                        row.appendChild(cameraAttachHost);
                     } else {
                         var nameSelect = document.createElement("select");
                         fillAutomationNameSelect(nameSelect, action.name || "");
@@ -10460,6 +10590,662 @@
             reader.readAsText(file);
         }
 
+        var cameraDialogBaseline = null;
+        var cameraDialogIsEdit = false;
+        var cameraDialogOriginalId = "";
+        var cameraDiscoverPollTimer = null;
+        var cameraDiscoverSelectedIndex = -1;
+        var cameraDiscoverRows = [];
+        var cameraDiscoverRunning = false;
+        var cameraListCache = [];
+
+        function setCamerasSuccess(message) {
+            var line = document.getElementById("camerasSaveSuccess");
+            if (!line) {
+                return;
+            }
+            if (message) {
+                line.hidden = false;
+                line.textContent = message;
+            } else {
+                line.hidden = true;
+                line.textContent = "";
+            }
+        }
+
+        function loadCameras() {
+            var errorLine = document.getElementById("camerasSaveError");
+            if (errorLine) {
+                errorLine.hidden = true;
+            }
+            fetch("/api/cameras", { cache: "no-store" }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    return JSON.parse(text || "[]");
+                });
+            }).then(function (rows) {
+                cameraListCache = Array.isArray(rows) ? rows : [];
+                renderCameraTable(cameraListCache);
+            }).catch(function (error) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = error && error.message ? error.message : "Cameras load failed";
+                }
+            });
+        }
+
+        function renderCameraTable(rows) {
+            var body = document.getElementById("camerasTableBody");
+            if (!body) {
+                return;
+            }
+            body.innerHTML = "";
+            var index;
+            for (index = 0; index < rows.length; index++) {
+                var camera = rows[index];
+                var tableRow = document.createElement("tr");
+                tableRow.onclick = (function (stored) {
+                    return function () {
+                        openCameraDialog(stored.id);
+                    };
+                })(camera);
+                var activeCell = document.createElement("td");
+                activeCell.textContent = camera.active ? "yes" : "no";
+                var nameCell = document.createElement("td");
+                nameCell.textContent = camera.name || "";
+                var typeCell = document.createElement("td");
+                typeCell.textContent = "ONVIF";
+                var urlCell = document.createElement("td");
+                urlCell.textContent = camera.url || "";
+                var statusCell = document.createElement("td");
+                statusCell.textContent = camera.status || "";
+                tableRow.appendChild(activeCell);
+                tableRow.appendChild(nameCell);
+                tableRow.appendChild(typeCell);
+                tableRow.appendChild(urlCell);
+                tableRow.appendChild(statusCell);
+                body.appendChild(tableRow);
+            }
+        }
+
+        function fillCameraDialog(camera) {
+            var data = camera || {};
+            var channels = Array.isArray(data.channels) ? data.channels : [];
+            var channel1 = channels[0] || {};
+            var channel2 = channels[1] || {};
+            document.getElementById("cameraName").value = data.name || "";
+            document.getElementById("cameraActive").checked = camera ? !!data.active : true;
+            document.getElementById("cameraType").value = "onvif";
+            document.getElementById("cameraUrl").value = data.url || "";
+            document.getElementById("cameraHost").value = data.host || "";
+            document.getElementById("cameraPort").value = data.port ? String(data.port) : "80";
+            document.getElementById("cameraUsername").value = data.username || "";
+            document.getElementById("cameraPassword").value = data.password || "";
+            document.getElementById("cameraChannel1Snapshot").value = channel1.snapshotUrl || "";
+            document.getElementById("cameraChannel1Live").value = channel1.liveUrl || "";
+            document.getElementById("cameraChannel2Snapshot").value = channel2.snapshotUrl || "";
+            document.getElementById("cameraChannel2Live").value = channel2.liveUrl || "";
+        }
+
+        function readCameraDialogBody() {
+            var portValue = parseInt(document.getElementById("cameraPort").value, 10);
+            return {
+                name: document.getElementById("cameraName").value.trim(),
+                active: document.getElementById("cameraActive").checked,
+                type: document.getElementById("cameraType").value || "onvif",
+                url: document.getElementById("cameraUrl").value.trim(),
+                host: document.getElementById("cameraHost").value.trim(),
+                port: isNaN(portValue) ? 80 : portValue,
+                username: document.getElementById("cameraUsername").value,
+                password: document.getElementById("cameraPassword").value,
+                channels: [
+                    {
+                        snapshotUrl: document.getElementById("cameraChannel1Snapshot").value.trim(),
+                        liveUrl: document.getElementById("cameraChannel1Live").value.trim()
+                    },
+                    {
+                        snapshotUrl: document.getElementById("cameraChannel2Snapshot").value.trim(),
+                        liveUrl: document.getElementById("cameraChannel2Live").value.trim()
+                    }
+                ]
+            };
+        }
+
+        function showCameraDialogError(message) {
+            var errorLine = document.getElementById("cameraDialogError");
+            if (!errorLine) {
+                return;
+            }
+            errorLine.hidden = false;
+            errorLine.textContent = message;
+        }
+
+        /* Add opens an in-memory draft only; the camera exists after the first successful Save. */
+        function openCameraDialog(cameraId, draftCamera) {
+            var errorLine = document.getElementById("cameraDialogError");
+            if (errorLine) {
+                errorLine.hidden = true;
+            }
+            setCamerasSuccess("");
+            var isEdit = !!cameraId;
+            var loadCamera = isEdit
+                ? fetch("/api/cameras/item?id=" + encodeURIComponent(cameraId), { cache: "no-store" }).then(function (response) {
+                    return response.text().then(function (text) {
+                        if (!response.ok) {
+                            throw new Error(text || ("HTTP " + response.status));
+                        }
+                        return JSON.parse(text);
+                    });
+                })
+                : Promise.resolve(draftCamera || null);
+            loadCamera.then(function (camera) {
+                cameraDialogIsEdit = isEdit;
+                cameraDialogOriginalId = isEdit ? (camera && camera.id ? camera.id : cameraId) : "";
+                document.getElementById("cameraDialogTitle").textContent = isEdit ? "Edit camera" : "Add camera";
+                document.getElementById("cameraDeleteBtn").hidden = !isEdit;
+                fillCameraDialog(camera);
+                cameraDialogBaseline = null;
+                document.getElementById("cameraDialog").hidden = false;
+                cameraDialogBaseline = JSON.stringify(readCameraDialogBody());
+            }).catch(function (error) {
+                reportStoreActionError("camerasSaveError", error, "Camera load failed");
+            });
+        }
+
+        function showCameraDiscoverError(message) {
+            var errorLine = document.getElementById("cameraDiscoverError");
+            if (!errorLine) {
+                return;
+            }
+            errorLine.hidden = !message;
+            errorLine.textContent = message || "";
+        }
+
+        function setCameraDiscoverToggleUi(running) {
+            cameraDiscoverRunning = !!running;
+            var toggleBtn = document.getElementById("cameraDiscoverToggleBtn");
+            if (toggleBtn) {
+                toggleBtn.textContent = cameraDiscoverRunning ? "Stop" : "Discover";
+            }
+            var typeSelect = document.getElementById("cameraDiscoverType");
+            if (typeSelect) {
+                typeSelect.disabled = cameraDiscoverRunning;
+            }
+        }
+
+        function stopCameraDiscoverPoll() {
+            if (cameraDiscoverPollTimer != null) {
+                window.clearInterval(cameraDiscoverPollTimer);
+                cameraDiscoverPollTimer = null;
+            }
+        }
+
+        function renderCameraDiscoverTable(rows) {
+            cameraDiscoverRows = Array.isArray(rows) ? rows : [];
+            if (cameraDiscoverSelectedIndex >= cameraDiscoverRows.length) {
+                cameraDiscoverSelectedIndex = -1;
+            }
+            var body = document.getElementById("cameraDiscoverTableBody");
+            if (!body) {
+                return;
+            }
+            body.innerHTML = "";
+            cameraDiscoverRows.forEach(function (row, index) {
+                var tr = document.createElement("tr");
+                if (index === cameraDiscoverSelectedIndex) {
+                    tr.classList.add("selected");
+                }
+                tr.onclick = (function (rowIndex) {
+                    return function () {
+                        cameraDiscoverSelectedIndex = rowIndex;
+                        renderCameraDiscoverTable(cameraDiscoverRows);
+                    };
+                })(index);
+                var nameCell = document.createElement("td");
+                nameCell.textContent = row.name || row.host || "";
+                var hostCell = document.createElement("td");
+                hostCell.textContent = row.host || "";
+                var urlCell = document.createElement("td");
+                urlCell.textContent = row.url || row.xaddr || "";
+                tr.appendChild(nameCell);
+                tr.appendChild(hostCell);
+                tr.appendChild(urlCell);
+                body.appendChild(tr);
+            });
+            var addBtn = document.getElementById("cameraDiscoverAddBtn");
+            if (addBtn) {
+                addBtn.disabled = cameraDiscoverSelectedIndex < 0;
+            }
+        }
+
+        function refreshCameraDiscoverList() {
+            return fetch("/api/cameras/discover", { cache: "no-store" }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    return JSON.parse(text || "{}");
+                });
+            }).then(function (payload) {
+                setCameraDiscoverToggleUi(!!payload.discovering);
+                renderCameraDiscoverTable(payload.cameras || []);
+                if (!payload.discovering) {
+                    stopCameraDiscoverPoll();
+                }
+            }).catch(function (error) {
+                showCameraDiscoverError(error && error.message ? error.message : "Discover list failed");
+            });
+        }
+
+        function openCameraDiscoverDialog() {
+            showCameraDiscoverError("");
+            stopCameraDiscoverPoll();
+            cameraDiscoverSelectedIndex = -1;
+            cameraDiscoverRows = [];
+            renderCameraDiscoverTable([]);
+            setCameraDiscoverToggleUi(false);
+            document.getElementById("cameraDiscoverDialog").hidden = false;
+            fetch("/api/cameras/discover/clear", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: "{}"
+            }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                });
+            }).then(function () {
+                cameraDiscoverSelectedIndex = -1;
+                cameraDiscoverRows = [];
+                renderCameraDiscoverTable([]);
+                setCameraDiscoverToggleUi(false);
+            }).catch(function (error) {
+                showCameraDiscoverError(error && error.message ? error.message : "Clear failed");
+            });
+        }
+
+        function closeCameraDiscoverDialog() {
+            stopCameraDiscoverPoll();
+            if (cameraDiscoverRunning) {
+                fetch("/api/cameras/discover/stop", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: "{}"
+                }).catch(function () {});
+            }
+            setCameraDiscoverToggleUi(false);
+            document.getElementById("cameraDiscoverDialog").hidden = true;
+        }
+
+        function toggleCameraDiscover() {
+            showCameraDiscoverError("");
+            if (cameraDiscoverRunning) {
+                fetch("/api/cameras/discover/stop", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: "{}"
+                }).then(function (response) {
+                    return response.text().then(function (text) {
+                        if (!response.ok) {
+                            throw new Error(text || ("HTTP " + response.status));
+                        }
+                    });
+                }).then(function () {
+                    setCameraDiscoverToggleUi(false);
+                    stopCameraDiscoverPoll();
+                    return refreshCameraDiscoverList();
+                }).catch(function (error) {
+                    showCameraDiscoverError(error && error.message ? error.message : "Stop failed");
+                });
+                return;
+            }
+            var typeSelect = document.getElementById("cameraDiscoverType");
+            var typeValue = typeSelect && typeSelect.value ? typeSelect.value : "onvif";
+            fetch("/api/cameras/discover/start", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ type: typeValue })
+            }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                });
+            }).then(function () {
+                setCameraDiscoverToggleUi(true);
+                stopCameraDiscoverPoll();
+                cameraDiscoverPollTimer = window.setInterval(refreshCameraDiscoverList, 1000);
+                return refreshCameraDiscoverList();
+            }).catch(function (error) {
+                showCameraDiscoverError(error && error.message ? error.message : "Discover start failed");
+                setCameraDiscoverToggleUi(false);
+            });
+        }
+
+        function addDiscoveredCamera() {
+            if (cameraDiscoverSelectedIndex < 0
+                || cameraDiscoverSelectedIndex >= cameraDiscoverRows.length) {
+                showCameraDiscoverError("Select a discovered camera first");
+                return;
+            }
+            var row = cameraDiscoverRows[cameraDiscoverSelectedIndex];
+            var draft = {
+                name: row.name || row.host || "",
+                active: true,
+                type: "onvif",
+                url: row.url || row.xaddr || "",
+                host: row.host || "",
+                port: row.port || 80,
+                username: "",
+                password: "",
+                channels: [
+                    { snapshotUrl: "", liveUrl: "" },
+                    { snapshotUrl: "", liveUrl: "" }
+                ]
+            };
+            closeCameraDiscoverDialog();
+            openCameraDialog("", draft);
+        }
+
+        function resolveCameraDialogOnvif() {
+            var errorLine = document.getElementById("cameraDialogError");
+            if (errorLine) {
+                errorLine.hidden = true;
+            }
+            var body = readCameraDialogBody();
+            var resolveBtn = document.getElementById("cameraResolveBtn");
+            if (resolveBtn) {
+                resolveBtn.disabled = true;
+            }
+            fetch("/api/cameras/test", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    host: body.host,
+                    port: body.port,
+                    url: body.url,
+                    username: body.username,
+                    password: body.password
+                })
+            }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    return JSON.parse(text || "{}");
+                });
+            }).then(function (result) {
+                if (!result || !result.ok) {
+                    throw new Error((result && result.error) ? result.error : "ONVIF resolve failed");
+                }
+                var channels = Array.isArray(result.channels) ? result.channels : [];
+                var channel1 = channels[0] || {};
+                var channel2 = channels[1] || {};
+                if (result.name && !document.getElementById("cameraName").value.trim()) {
+                    document.getElementById("cameraName").value = result.name;
+                }
+                if (result.url) {
+                    document.getElementById("cameraUrl").value = result.url;
+                }
+                if (result.host) {
+                    document.getElementById("cameraHost").value = result.host;
+                }
+                if (result.port) {
+                    document.getElementById("cameraPort").value = String(result.port);
+                }
+                document.getElementById("cameraChannel1Snapshot").value = channel1.snapshotUrl || "";
+                document.getElementById("cameraChannel1Live").value = channel1.liveUrl || "";
+                document.getElementById("cameraChannel2Snapshot").value = channel2.snapshotUrl || "";
+                document.getElementById("cameraChannel2Live").value = channel2.liveUrl || "";
+            }).catch(function (error) {
+                showCameraDialogError(error && error.message ? error.message : "ONVIF resolve failed");
+            }).then(function () {
+                if (resolveBtn) {
+                    resolveBtn.disabled = false;
+                }
+            });
+        }
+
+        function testCameraDialogSnapshots() {
+            var errorLine = document.getElementById("cameraDialogError");
+            if (errorLine) {
+                errorLine.hidden = true;
+            }
+            var body = readCameraDialogBody();
+            var testBtn = document.getElementById("cameraTestBtn");
+            if (testBtn) {
+                testBtn.disabled = true;
+            }
+            fetch("/api/cameras/test-snapshots", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    username: body.username,
+                    password: body.password,
+                    snapshotUrl1: body.channels[0] ? body.channels[0].snapshotUrl : "",
+                    snapshotUrl2: body.channels[1] ? body.channels[1].snapshotUrl : ""
+                })
+            }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    return JSON.parse(text || "{}");
+                });
+            }).then(function (result) {
+                var channels = Array.isArray(result.channels) ? result.channels : [];
+                var parts = [];
+                var index;
+                for (index = 0; index < channels.length; index++) {
+                    var channel = channels[index] || {};
+                    var label = "Ch" + (channel.channel || (index + 1));
+                    if (channel.skipped) {
+                        parts.push(label + " skipped");
+                    } else if (channel.ok) {
+                        parts.push(label + " OK (" + (channel.bytes || 0) + " B JPEG)");
+                    } else {
+                        parts.push(label + " FAIL: " + (channel.error || "error"));
+                    }
+                }
+                if (!result || !result.ok) {
+                    throw new Error(parts.length ? parts.join("; ") : (result.error || "Snapshot test failed"));
+                }
+                setCamerasSuccess(parts.length ? ("Snapshots: " + parts.join("; ")) : "Snapshots OK");
+            }).catch(function (error) {
+                showCameraDialogError(error && error.message ? error.message : "Snapshot test failed");
+            }).then(function () {
+                if (testBtn) {
+                    testBtn.disabled = false;
+                }
+            });
+        }
+
+        function manualAddFromCameraDiscover() {
+            closeCameraDiscoverDialog();
+            openCameraDialog("");
+        }
+
+        function closeCameraDialog() {
+            cameraDialogBaseline = null;
+            cameraDialogIsEdit = false;
+            cameraDialogOriginalId = "";
+            document.getElementById("cameraDialog").hidden = true;
+        }
+
+        function cameraDialogHasUnsavedChanges() {
+            if (cameraDialogBaseline == null) {
+                return false;
+            }
+            return cameraDialogBaseline !== JSON.stringify(readCameraDialogBody());
+        }
+
+        function requestCloseCameraDialog() {
+            if (cameraDialogHasUnsavedChanges()) {
+                openUnsavedChangesDialog(closeCameraDialog);
+                return;
+            }
+            closeCameraDialog();
+        }
+
+        function saveCameraDialog() {
+            var errorLine = document.getElementById("cameraDialogError");
+            if (errorLine) {
+                errorLine.hidden = true;
+            }
+            var body = readCameraDialogBody();
+            if (!body.name) {
+                showCameraDialogError("Camera name is required");
+                return;
+            }
+            var isEdit = cameraDialogIsEdit;
+            if (isEdit) {
+                body.id = cameraDialogOriginalId;
+                body.originalId = cameraDialogOriginalId;
+            }
+            fetch(isEdit ? "/api/cameras/update" : "/api/cameras", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body)
+            }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                });
+            }).then(function () {
+                closeCameraDialog();
+                consoleCameraMediaCache = {};
+                loadCameras();
+            }).catch(function (error) {
+                showCameraDialogError(error && error.message ? error.message : "Save failed");
+            });
+        }
+
+        function openCameraDeleteConfirm() {
+            var detail = document.getElementById("cameraDeleteConfirmDetail");
+            if (detail) {
+                detail.textContent = "Delete camera \"" + document.getElementById("cameraName").value + "\"?";
+            }
+            document.getElementById("cameraDeleteConfirmDialog").hidden = false;
+        }
+
+        function closeCameraDeleteConfirm() {
+            document.getElementById("cameraDeleteConfirmDialog").hidden = true;
+        }
+
+        function confirmDeleteCamera() {
+            var cameraId = cameraDialogOriginalId;
+            closeCameraDeleteConfirm();
+            if (!cameraId) {
+                return;
+            }
+            fetch("/api/cameras", {
+                method: "DELETE",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: cameraId })
+            }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                });
+            }).then(function () {
+                closeCameraDialog();
+                consoleCameraMediaCache = {};
+                loadCameras();
+            }).catch(function (error) {
+                showCameraDialogError(error && error.message ? error.message : "Delete failed");
+            });
+        }
+
+        function exportAllCameras() {
+            clearStoreActionErrors("camerasSaveError");
+            setCamerasSuccess("");
+            fetch("/api/cameras/store", { cache: "no-store" }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    var blob = new Blob([text || "[]"], { type: "application/json;charset=utf-8" });
+                    var objectUrl = URL.createObjectURL(blob);
+                    var link = document.createElement("a");
+                    link.href = objectUrl;
+                    link.download = "cameras.json";
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(objectUrl);
+                });
+            }).catch(function (error) {
+                reportStoreActionError("camerasSaveError", error, "Export failed");
+            });
+        }
+
+        function chooseCamerasRestoreFile() {
+            clearStoreActionErrors("camerasSaveError");
+            setCamerasSuccess("");
+            var fileInput = document.getElementById("camerasRestoreFile");
+            if (!fileInput) {
+                return;
+            }
+            fileInput.value = "";
+            fileInput.click();
+        }
+
+        function onCamerasRestoreFileSelected(event) {
+            var fileInput = event && event.target ? event.target : null;
+            var file = fileInput && fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+            if (!file) {
+                return;
+            }
+            openAppConfirmDialog({
+                title: "Replace cameras",
+                message: "Import replaces all cameras with this file. Continue?",
+                confirmLabel: "Continue",
+                onConfirm: function () {
+                    clearStoreActionErrors("camerasSaveError");
+                    var reader = new FileReader();
+                    reader.onerror = function () {
+                        reportStoreActionError("camerasSaveError", null, "Failed to read the selected file");
+                    };
+                    reader.onload = function () {
+                        var text = reader.result ? String(reader.result) : "";
+                        var parsed;
+                        try {
+                            parsed = JSON.parse(text);
+                        } catch (parseError) {
+                            reportStoreActionError("camerasSaveError", null, "Selected file is not valid JSON");
+                            return;
+                        }
+                        if (!Array.isArray(parsed)) {
+                            reportStoreActionError("camerasSaveError", null, "Selected file must be a cameras JSON array");
+                            return;
+                        }
+                        fetch("/api/cameras/restore", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: text
+                        }).then(function (response) {
+                            return response.text().then(function (bodyText) {
+                                if (!response.ok) {
+                                    throw new Error(bodyText || ("HTTP " + response.status));
+                                }
+                                consoleCameraMediaCache = {};
+                                setCamerasSuccess("Cameras imported");
+                                loadCameras();
+                            });
+                        }).catch(function (error) {
+                            reportStoreActionError("camerasSaveError", error, "Import failed");
+                        });
+                    };
+                    reader.readAsText(file);
+                }
+            });
+        }
+
         function loadConsoles() {
             var errorLine = document.getElementById("consolesSaveError");
             if (errorLine) {
@@ -10617,7 +11403,7 @@
         }
 
         function ensureConsoleEditorDevicesLoaded() {
-            return fetch("/api/devices", { cache: "no-store" }).then(function (response) {
+            var devicesLoad = fetch("/api/devices", { cache: "no-store" }).then(function (response) {
                 return response.json();
             }).then(function (rows) {
                 if (Array.isArray(rows)) {
@@ -10626,6 +11412,17 @@
             }).catch(function () {
                 /* keep any previously loaded rows */
             });
+            var camerasLoad = fetch("/api/cameras", { cache: "no-store" }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error("cameras unavailable");
+                }
+                return response.json();
+            }).then(function (rows) {
+                consoleEditorCameras = Array.isArray(rows) ? rows : [];
+            }).catch(function () {
+                consoleEditorCameras = [];
+            });
+            return Promise.all([devicesLoad, camerasLoad]);
         }
 
         function openConsoleEditDialog(consoleId) {
@@ -11636,6 +12433,115 @@
             }
         }
 
+        var consoleCameraMediaCache = {};
+        var CONSOLE_CAMERA_REFRESH_MS = 3000;
+
+        function consoleCameraFetchMedia(cameraId) {
+            if (!cameraId) {
+                return Promise.resolve(null);
+            }
+            if (!consoleCameraMediaCache[cameraId]) {
+                consoleCameraMediaCache[cameraId] = fetch(
+                    "/api/cameras/media?id=" + encodeURIComponent(cameraId),
+                    { cache: "no-store" }
+                ).then(function (response) {
+                    if (!response.ok) {
+                        return null;
+                    }
+                    return response.json();
+                }).catch(function () {
+                    return null;
+                });
+            }
+            return consoleCameraMediaCache[cameraId];
+        }
+
+        function consoleCameraUrlWithCacheBuster(url) {
+            return url + (url.indexOf("?") >= 0 ? "&" : "?") + "_=" + Date.now();
+        }
+
+        function buildConsoleCameraView(cell) {
+            var host = document.createElement("div");
+            host.className = "console-camera-view";
+            var cameraId = cell && cell.cameraId ? String(cell.cameraId) : "";
+            var mode = cell && cell.cameraMode === "live" ? "live" : "jpegRefresh";
+            var channelIndex = cell && Number(cell.cameraChannel) === 2 ? 1 : 0;
+            function showUnavailable() {
+                host.innerHTML = "";
+                var note = document.createElement("div");
+                note.className = "console-camera-placeholder";
+                note.textContent = "Camera unavailable";
+                host.appendChild(note);
+            }
+            if (!cameraId) {
+                showUnavailable();
+                return host;
+            }
+            consoleCameraFetchMedia(cameraId).then(function (media) {
+                var channels = media && Array.isArray(media.channels) ? media.channels : [];
+                var channel = channels[channelIndex] || null;
+                var url = channel ? (mode === "live" ? channel.liveUrl : channel.snapshotUrl) : "";
+                if (!url) {
+                    showUnavailable();
+                    return;
+                }
+                var img = document.createElement("img");
+                img.className = "console-camera-img";
+                img.alt = "";
+                img.onerror = function () {
+                    if (mode === "live") {
+                        showUnavailable();
+                    }
+                };
+                if (mode === "live") {
+                    img.src = url;
+                } else {
+                    img.src = consoleCameraUrlWithCacheBuster(url);
+                    var timerId = window.setInterval(function () {
+                        if (!img.isConnected) {
+                            window.clearInterval(timerId);
+                            return;
+                        }
+                        img.src = consoleCameraUrlWithCacheBuster(url);
+                    }, CONSOLE_CAMERA_REFRESH_MS);
+                }
+                host.innerHTML = "";
+                host.appendChild(img);
+            });
+            return host;
+        }
+
+        var consoleEditorCameras = [];
+
+        function buildCompositeCameraSelectLine(labelText, className, widgetIndex, rowIndex, cellIndex, options, value, rerender) {
+            var line = document.createElement("label");
+            line.className = "console-composite-field-line";
+            var label = document.createElement("span");
+            label.className = "console-composite-field-label";
+            label.textContent = labelText;
+            var select = document.createElement("select");
+            select.className = className;
+            select.setAttribute("data-widget-index", String(widgetIndex));
+            select.setAttribute("data-row-index", String(rowIndex));
+            select.setAttribute("data-cell-index", String(cellIndex));
+            options.forEach(function (pair) {
+                var option = document.createElement("option");
+                option.value = pair[0];
+                option.textContent = pair[1];
+                select.appendChild(option);
+            });
+            select.value = value;
+            select.onchange = function () {
+                syncConsoleEditorDraftFromDom();
+                if (rerender) {
+                    renderConsoleEditor();
+                }
+            };
+            line.appendChild(label);
+            line.appendChild(select);
+            return line;
+        }
+
         function buildCompositeBody(widget, options) {
             options = options || {};
             var isEdit = !!options.isEdit;
@@ -12036,13 +12942,14 @@
                         contentSelect.setAttribute("data-widget-index", String(widgetIndex));
                         contentSelect.setAttribute("data-row-index", String(rowIndex));
                         contentSelect.setAttribute("data-cell-index", String(cellIndex));
-                        [["empty", "Empty"], ["text", "Text"], ["device", "Device"]].forEach(function (pair) {
+                        [["empty", "Empty"], ["text", "Text"], ["device", "Device"], ["camera", "Camera"]].forEach(function (pair) {
                             var option = document.createElement("option");
                             option.value = pair[0];
                             option.textContent = pair[1];
                             contentSelect.appendChild(option);
                         });
                         contentSelect.value = cell.content === "text" || cell.content === "device"
+                            || cell.content === "camera"
                             ? cell.content
                             : "empty";
                         contentSelect.onchange = (function (wIndex, rIndex, cIndex, selectEl) {
@@ -12084,6 +12991,21 @@
                                     }
                                     renderConsoleEditor();
                                     openConsoleCompositeDeviceDialog(wIndex, rIndex, cIndex);
+                                    return;
+                                }
+                                if (nextContent === "camera") {
+                                    target.binding = null;
+                                    target.text = "";
+                                    if (!target.cameraId) {
+                                        target.cameraId = consoleEditorCameras.length
+                                            ? String(consoleEditorCameras[0].id || "")
+                                            : "";
+                                    }
+                                    if (target.cameraMode !== "live") {
+                                        target.cameraMode = "jpegRefresh";
+                                    }
+                                    target.cameraChannel = Number(target.cameraChannel) === 2 ? 2 : 1;
+                                    renderConsoleEditor();
                                     return;
                                 }
                                 target.binding = null;
@@ -12144,12 +13066,53 @@
                                 };
                             })(widgetIndex, rowIndex, cellIndex);
                             cellBody.appendChild(previewHost);
+                        } else if (cell.content === "camera") {
+                            var cameraOptions = [["", "Select camera"]];
+                            var cameraKnown = false;
+                            var cameraListIndex;
+                            for (cameraListIndex = 0; cameraListIndex < consoleEditorCameras.length; cameraListIndex++) {
+                                var cameraRow = consoleEditorCameras[cameraListIndex];
+                                cameraOptions.push([String(cameraRow.id || ""), cameraRow.name || cameraRow.id || ""]);
+                                if (String(cameraRow.id || "") === (cell.cameraId || "")) {
+                                    cameraKnown = true;
+                                }
+                            }
+                            if (cell.cameraId && !cameraKnown) {
+                                cameraOptions.push([String(cell.cameraId), String(cell.cameraId)]);
+                            }
+                            cellBody.appendChild(buildCompositeCameraSelectLine(
+                                "Camera", "console-composite-camera-id", widgetIndex, rowIndex, cellIndex,
+                                cameraOptions, cell.cameraId || "", true
+                            ));
+                            cellBody.appendChild(buildCompositeCameraSelectLine(
+                                "Mode", "console-composite-camera-mode", widgetIndex, rowIndex, cellIndex,
+                                [["jpegRefresh", "JPEG refresh"], ["live", "Live"]],
+                                cell.cameraMode === "live" ? "live" : "jpegRefresh", false
+                            ));
+                            cellBody.appendChild(buildCompositeCameraSelectLine(
+                                "Channel", "console-composite-camera-channel", widgetIndex, rowIndex, cellIndex,
+                                [["1", "1"], ["2", "2"]],
+                                Number(cell.cameraChannel) === 2 ? "2" : "1", false
+                            ));
+                            var cameraPreview = document.createElement("div");
+                            cameraPreview.className = "console-camera-placeholder";
+                            var cameraPreviewName = "";
+                            for (cameraListIndex = 0; cameraListIndex < consoleEditorCameras.length; cameraListIndex++) {
+                                if (String(consoleEditorCameras[cameraListIndex].id || "") === (cell.cameraId || "")) {
+                                    cameraPreviewName = consoleEditorCameras[cameraListIndex].name || "";
+                                    break;
+                                }
+                            }
+                            cameraPreview.textContent = cameraPreviewName || "\uD83D\uDDBC";
+                            cellBody.appendChild(cameraPreview);
                         }
                     } else if (cell.content === "text") {
                         var textSpan = document.createElement("div");
                         textSpan.className = "console-composite-text-view";
                         textSpan.textContent = cell.text || "";
                         cellBody.appendChild(textSpan);
+                    } else if (cell.content === "camera") {
+                        cellBody.appendChild(buildConsoleCameraView(cell));
                     } else if (cell.content === "device" && cell.binding) {
                         if (live && typeof placeBuildDeviceRow === "function") {
                             cellBody.appendChild(placeBuildDeviceRow(cell.binding));
@@ -12996,6 +13959,36 @@
                     && tWidget.compositeRows[tRowIndex].cells
                     && tWidget.compositeRows[tRowIndex].cells[tCellIndex]) {
                     tWidget.compositeRows[tRowIndex].cells[tCellIndex].text = textInputs[textIndex].value || "";
+                }
+            }
+            var cameraFieldDefs = [
+                { selector: ".console-composite-camera-id", field: "cameraId" },
+                { selector: ".console-composite-camera-mode", field: "cameraMode" },
+                { selector: ".console-composite-camera-channel", field: "cameraChannel" }
+            ];
+            var cameraDefIndex;
+            for (cameraDefIndex = 0; cameraDefIndex < cameraFieldDefs.length; cameraDefIndex++) {
+                var cameraSelects = document.querySelectorAll(cameraFieldDefs[cameraDefIndex].selector);
+                var cameraSelectIndex;
+                for (cameraSelectIndex = 0; cameraSelectIndex < cameraSelects.length; cameraSelectIndex++) {
+                    var camSelect = cameraSelects[cameraSelectIndex];
+                    var camWidget = consoleEditorDraft.widgets[parseInt(camSelect.getAttribute("data-widget-index"), 10)];
+                    var camRow = camWidget && camWidget.compositeRows
+                        ? camWidget.compositeRows[parseInt(camSelect.getAttribute("data-row-index"), 10)]
+                        : null;
+                    var camCell = camRow && camRow.cells
+                        ? camRow.cells[parseInt(camSelect.getAttribute("data-cell-index"), 10)]
+                        : null;
+                    if (!camCell) {
+                        continue;
+                    }
+                    if (cameraFieldDefs[cameraDefIndex].field === "cameraChannel") {
+                        camCell.cameraChannel = camSelect.value === "2" ? 2 : 1;
+                    } else if (cameraFieldDefs[cameraDefIndex].field === "cameraMode") {
+                        camCell.cameraMode = camSelect.value === "live" ? "live" : "jpegRefresh";
+                    } else {
+                        camCell.cameraId = camSelect.value || "";
+                    }
                 }
             }
         }
@@ -15041,6 +16034,14 @@
                 requestCloseConsoleEditDialog();
                 return true;
             }
+            if (dialogId === "cameraDialog") {
+                requestCloseCameraDialog();
+                return true;
+            }
+            if (dialogId === "cameraDeleteConfirmDialog") {
+                closeCameraDeleteConfirm();
+                return true;
+            }
             if (dialogId === "automationEditDialog") {
                 requestCloseAutomationEditDialog();
                 return true;
@@ -15189,6 +16190,7 @@
         <button type="button" class="sidebar-btn" data-section="network" onclick="showMainSection('network')">Network</button>
         <button type="button" class="sidebar-btn" data-section="devices" onclick="showMainSection('devices')">Devices</button>
         <button type="button" class="sidebar-btn" data-section="automation" onclick="showMainSection('automation')">Automation</button>
+        <button type="button" class="sidebar-btn" data-section="cameras" onclick="showMainSection('cameras')">Cameras</button>
         <button type="button" class="sidebar-btn" data-section="consoles" onclick="showMainSection('consoles')">Consoles</button>
         <button type="button" class="sidebar-btn" data-section="security" onclick="showMainSection('security')">Security</button>
         <button type="button" class="sidebar-btn" data-section="system" onclick="showMainSection('system')">System</button>
@@ -15636,6 +16638,33 @@
                 <button type="button" class="btn btn-primary" onclick="createAutomationAndEdit()">Add</button>
                 <button type="button" class="btn btn-secondary" onclick="exportAllAutomations()">Export all</button>
                 <button type="button" class="btn btn-secondary" onclick="chooseAutomationsRestoreFile(true)">Import all</button>
+            </div>
+        </section>
+
+        <section id="section-cameras" class="section-panel" aria-label="Cameras">
+            <h2 class="section-title">Cameras</h2>
+            <p id="camerasSaveError" class="save-error" hidden></p>
+            <p id="camerasSaveSuccess" class="save-success" hidden></p>
+            <input id="camerasRestoreFile" type="file" accept=".json,application/json" hidden onchange="onCamerasRestoreFileSelected(event)">
+            <div class="settings-scroll">
+                <table class="data-table selectable">
+                    <thead>
+                        <tr>
+                            <th>Active</th>
+                            <th>Name</th>
+                            <th>Type</th>
+                            <th>URL</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="camerasTableBody"></tbody>
+                </table>
+            </div>
+            <div class="dialog-actions">
+                <button type="button" class="btn btn-primary" onclick="openCameraDialog('')">Add</button>
+                <button type="button" class="btn btn-secondary" onclick="openCameraDiscoverDialog()">Discover</button>
+                <button type="button" class="btn btn-secondary" onclick="exportAllCameras()">Export</button>
+                <button type="button" class="btn btn-secondary" onclick="chooseCamerasRestoreFile()">Import</button>
             </div>
         </section>
 
@@ -16265,6 +17294,114 @@
         <div class="dialog-actions">
             <button type="button" class="btn btn-primary" onclick="signOut()">Sign out</button>
             <button type="button" class="btn btn-secondary" onclick="closeSignOutConfirm()">Cancel</button>
+        </div>
+    </div>
+</div>
+<div id="cameraDiscoverDialog" class="dialog-overlay" hidden>
+    <div class="dialog-panel user-dialog-panel" role="dialog" aria-label="Discover cameras">
+        <h3 class="upload-title">Discover cameras</h3>
+        <p id="cameraDiscoverError" class="save-error" hidden></p>
+        <div class="user-dialog-body">
+            <div class="field">
+                <label for="cameraDiscoverType">Type</label>
+                <select id="cameraDiscoverType">
+                    <option value="onvif">ONVIF</option>
+                </select>
+            </div>
+            <table class="data-table selectable">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Host</th>
+                        <th>URL</th>
+                    </tr>
+                </thead>
+                <tbody id="cameraDiscoverTableBody"></tbody>
+            </table>
+            <p id="cameraDiscoverHint" class="field-hint">WS-Discovery finds cameras only. Open Add discovered, enter Username/Password, then Resolve to fill snapshot/live URLs. Already registered hosts are omitted.</p>
+        </div>
+        <div class="dialog-actions user-dialog-actions">
+            <button type="button" id="cameraDiscoverToggleBtn" class="btn btn-primary" onclick="toggleCameraDiscover()">Discover</button>
+            <button type="button" id="cameraDiscoverAddBtn" class="btn btn-secondary" onclick="addDiscoveredCamera()">Add discovered</button>
+            <button type="button" class="btn btn-secondary" onclick="manualAddFromCameraDiscover()">Manual</button>
+            <button type="button" class="btn btn-secondary" onclick="closeCameraDiscoverDialog()">Close</button>
+        </div>
+    </div>
+</div>
+<div id="cameraDialog" class="dialog-overlay" hidden>
+    <div class="dialog-panel user-dialog-panel" role="dialog" aria-label="Camera">
+        <h3 id="cameraDialogTitle" class="upload-title">Add camera</h3>
+        <p id="cameraDialogError" class="save-error" hidden></p>
+        <div class="user-dialog-body">
+            <div class="field">
+                <label for="cameraName">Name</label>
+                <input id="cameraName" type="text" autocomplete="off">
+            </div>
+            <div class="field-check">
+                <input id="cameraActive" type="checkbox" checked>
+                <span>Active</span>
+            </div>
+            <div class="field">
+                <label for="cameraType">Type</label>
+                <select id="cameraType">
+                    <option value="onvif">ONVIF</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="cameraUrl">URL</label>
+                <input id="cameraUrl" type="text" autocomplete="off">
+            </div>
+            <div class="field">
+                <label for="cameraHost">Host</label>
+                <input id="cameraHost" type="text" autocomplete="off">
+            </div>
+            <div class="field">
+                <label for="cameraPort">Port</label>
+                <input id="cameraPort" type="number" min="1" max="65535" step="1" value="80">
+            </div>
+            <div class="field">
+                <label for="cameraUsername">Username</label>
+                <input id="cameraUsername" type="text" autocomplete="off">
+            </div>
+            <div class="field">
+                <label for="cameraPassword">Password</label>
+                <input id="cameraPassword" type="password" autocomplete="new-password">
+            </div>
+            <p class="camera-dialog-section">Channel 1</p>
+            <div class="field">
+                <label for="cameraChannel1Snapshot">Snapshot URL</label>
+                <input id="cameraChannel1Snapshot" type="text" autocomplete="off">
+            </div>
+            <div class="field">
+                <label for="cameraChannel1Live">Live URL</label>
+                <input id="cameraChannel1Live" type="text" autocomplete="off">
+            </div>
+            <p class="camera-dialog-section">Channel 2</p>
+            <div class="field">
+                <label for="cameraChannel2Snapshot">Snapshot URL</label>
+                <input id="cameraChannel2Snapshot" type="text" autocomplete="off">
+            </div>
+            <div class="field">
+                <label for="cameraChannel2Live">Live URL</label>
+                <input id="cameraChannel2Live" type="text" autocomplete="off">
+            </div>
+        </div>
+        <div class="dialog-actions user-dialog-actions">
+            <button type="button" class="btn btn-primary" onclick="saveCameraDialog()">Save</button>
+            <button type="button" id="cameraResolveBtn" class="btn btn-secondary" onclick="resolveCameraDialogOnvif()">Resolve</button>
+            <button type="button" id="cameraTestBtn" class="btn btn-secondary" onclick="testCameraDialogSnapshots()">Test</button>
+            <button type="button" id="cameraDeleteBtn" class="btn btn-secondary" hidden onclick="openCameraDeleteConfirm()">Delete</button>
+            <button type="button" class="btn btn-secondary" onclick="requestCloseCameraDialog()">Cancel</button>
+        </div>
+    </div>
+</div>
+<div id="cameraDeleteConfirmDialog" class="dialog-overlay dialog-overlay-front" hidden>
+    <div class="dialog-panel" role="dialog" aria-label="Delete camera">
+        <h3 class="upload-title">Delete camera</h3>
+        <p id="cameraDeleteConfirmDetail" class="field-hint"></p>
+        <div class="dialog-actions">
+            <button type="button" class="btn btn-primary" onclick="confirmDeleteCamera()">Delete</button>
+            <button type="button" class="btn btn-secondary" onclick="closeCameraDeleteConfirm()">Cancel</button>
         </div>
     </div>
 </div>

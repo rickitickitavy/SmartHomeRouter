@@ -7,6 +7,7 @@
 #include "UserStore.h"
 #include "ConsoleStore.h"
 #include "AutomationStore.h"
+#include "CameraStore.h"
 #include "PsramJsonBuffer.h"
 
 class WebConsole {
@@ -31,7 +32,8 @@ public:
         SettingsManager *settingsManager,
         UserStore *userStore,
         ConsoleStore *consoleStore,
-        AutomationStore *automationStore
+        AutomationStore *automationStore,
+        CameraStore *cameraStore = nullptr
     );
 
     void begin();
@@ -68,6 +70,7 @@ private:
     UserStore *userStore;
     ConsoleStore *consoleStore;
     AutomationStore *automationStore;
+    CameraStore *cameraStore;
     FoundDeviceList *foundDevices = nullptr;
     SearchStartFn startSearch = nullptr;
     SearchStopFn stopSearch = nullptr;
@@ -159,6 +162,21 @@ private:
     void handleAutomationPut(AsyncWebServerRequest *request);
     void handleAutomationActivePost(AsyncWebServerRequest *request);
     void handleAutomationDelete(AsyncWebServerRequest *request);
+    void handleCamerasGet(AsyncWebServerRequest *request);
+    void handleCamerasPost(AsyncWebServerRequest *request);
+    void handleCamerasStoreGet(AsyncWebServerRequest *request);
+    void handleCamerasRestorePost(AsyncWebServerRequest *request);
+    void handleCameraGet(AsyncWebServerRequest *request);
+    void handleCameraPut(AsyncWebServerRequest *request);
+    void handleCameraDelete(AsyncWebServerRequest *request);
+    void handleCameraMediaGet(AsyncWebServerRequest *request);
+    void handleCamerasDiscoverGet(AsyncWebServerRequest *request);
+    void handleCamerasDiscoverStartPost(AsyncWebServerRequest *request);
+    void handleCamerasDiscoverStopPost(AsyncWebServerRequest *request);
+    void handleCamerasDiscoverClearPost(AsyncWebServerRequest *request);
+    void handleCamerasTestPost(AsyncWebServerRequest *request);
+    void handleCamerasTestSnapshotsPost(AsyncWebServerRequest *request);
+    void sendCameraWriteResult(AsyncWebServerRequest *request, CameraWriteResult result);
     void fillUserFromJson(const char *json, UserRecord *user);
     void sendUserWriteResult(AsyncWebServerRequest *request, UserWriteResult result);
     void sendConsoleWriteResult(AsyncWebServerRequest *request, ConsoleWriteResult result);

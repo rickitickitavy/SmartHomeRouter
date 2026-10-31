@@ -20,6 +20,7 @@
 #if defined(BOARD_ROLE_HOST)
 #include "ActionCommandQueue.h"
 #include "AutomationStore.h"
+#include "CameraStore.h"
 #include "AutomationEngine.h"
 #include "EmailSender.h"
 #include "InterChipHost.h"
@@ -71,6 +72,7 @@ static UserStore *userStore = nullptr;
 static ConsoleStore *consoleStore = nullptr;
 #if defined(BOARD_ROLE_HOST)
 static AutomationStore *automationStore = nullptr;
+static CameraStore *cameraStore = nullptr;
 static AutomationEngine *automationEngine = nullptr;
 static EmailSender *emailSender = nullptr;
 ActionCommandQueue actionCommandQueue;
@@ -144,6 +146,9 @@ static void pumpHostDeferredStoreWork() {
 #if defined(BOARD_ROLE_HOST)
     if (automationStore != nullptr) {
         automationStore->persistIfDue();
+    }
+    if (cameraStore != nullptr) {
+        cameraStore->persistIfDue();
     }
 #endif
 }
@@ -1991,6 +1996,8 @@ static void setupHost() {
     consoleStore->begin(true);
     automationStore = new AutomationStore();
     automationStore->begin(true);
+    cameraStore = new CameraStore();
+    cameraStore->begin(true);
     automationEngine = new AutomationEngine();
     emailSender = new EmailSender(settingsManager);
     topicMap = settingsManager->deviceMap();
@@ -1999,7 +2006,7 @@ static void setupHost() {
     wifiController = new WiFiController(settingsManager, forceAp);
     mqttClient = new MqttClient(settingsManager, topicMap);
     mqttBroker = new MqttBroker(settingsManager);
-    webConsole = new WebConsole(settingsManager, userStore, consoleStore, automationStore);
+    webConsole = new WebConsole(settingsManager, userStore, consoleStore, automationStore, cameraStore);
     webConsole->setDeviceServices(
         foundDevices,
         startDeviceSearch,
@@ -2051,7 +2058,8 @@ static void setupHost() {
         &ZIGBEE_SPI_PROXY,
         topicMap,
         applyManualDeviceCommandImmediate,
-        emailSender
+        emailSender,
+        cameraStore
     );
     webConsole->setActionRunner([](const char *actionObjectJson) -> int {
         if (automationStore == nullptr || automationEngine == nullptr || actionObjectJson == nullptr) {

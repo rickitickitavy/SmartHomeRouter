@@ -207,6 +207,9 @@ uint8_t ConsoleStore::parseCellContentId(const char *text) {
     if (text != nullptr && strcmp(text, "device") == 0) {
         return CONSOLE_CELL_CONTENT_DEVICE;
     }
+    if (text != nullptr && strcmp(text, "camera") == 0) {
+        return CONSOLE_CELL_CONTENT_CAMERA;
+    }
     return CONSOLE_CELL_CONTENT_EMPTY;
 }
 
@@ -216,6 +219,9 @@ const char *ConsoleStore::cellContentJsonId(uint8_t content) {
     }
     if (content == CONSOLE_CELL_CONTENT_DEVICE) {
         return "device";
+    }
+    if (content == CONSOLE_CELL_CONTENT_CAMERA) {
+        return "camera";
     }
     return "empty";
 }
@@ -388,6 +394,7 @@ void ConsoleStore::freeCompositeCellList(ConsoleCompositeCell *&listHead) {
     while (listHead != nullptr) {
         ConsoleCompositeCell *next = listHead->next;
         free(listHead->text);
+        free(listHead->cameraId);
         if (listHead->binding != nullptr) {
             ConsoleBinding *binding = listHead->binding;
             listHead->binding = nullptr;
@@ -1208,12 +1215,17 @@ bool ConsoleStore::parseCompositeRows(const char *widgetJson, ConsoleCompositeRo
                 cell->content = CONSOLE_CELL_CONTENT_EMPTY;
                 cell->alignH = CONSOLE_ICON_ALIGN_CENTER;
                 cell->alignV = CONSOLE_ALIGN_V_CENTER;
+                cell->cameraMode = CAMERA_MODE_JPEG_REFRESH;
+                cell->cameraChannel = 1;
                 double widthValue = 1.0;
                 String widthUnitText;
                 String contentText;
                 String cellText;
                 String alignHText;
                 String alignVText;
+                String cameraIdText;
+                String cameraModeText;
+                double cameraChannelValue = 1.0;
                 bool contour = false;
                 extractJsonDouble(cellObject.c_str(), "width", widthValue);
                 extractJsonString(cellObject.c_str(), "widthUnit", widthUnitText);
@@ -1221,6 +1233,9 @@ bool ConsoleStore::parseCompositeRows(const char *widgetJson, ConsoleCompositeRo
                 extractJsonString(cellObject.c_str(), "text", cellText);
                 extractJsonString(cellObject.c_str(), "alignH", alignHText);
                 extractJsonString(cellObject.c_str(), "alignV", alignVText);
+                extractJsonString(cellObject.c_str(), "cameraId", cameraIdText);
+                extractJsonString(cellObject.c_str(), "cameraMode", cameraModeText);
+                extractJsonDouble(cellObject.c_str(), "cameraChannel", cameraChannelValue);
                 extractJsonBool(cellObject.c_str(), "contour", contour);
                 if (widthValue <= 0.0 || widthValue != widthValue) {
                     widthValue = 1.0;
@@ -1255,6 +1270,25 @@ bool ConsoleStore::parseCompositeRows(const char *widgetJson, ConsoleCompositeRo
                         free(row);
                         freeCompositeRowList(*outRows);
                         return false;
+                    }
+                } else if (cell->content == CONSOLE_CELL_CONTENT_CAMERA) {
+                    cell->cameraId = duplicateBoundedString(cameraIdText.c_str(), CAMERA_ID_BUF - 1);
+                    if (cell->cameraId == nullptr) {
+                        free(cell);
+                        freeCompositeCellList(row->cells);
+                        free(row);
+                        freeCompositeRowList(*outRows);
+                        return false;
+                    }
+                    if (cameraModeText == "live") {
+                        cell->cameraMode = CAMERA_MODE_LIVE;
+                    } else {
+                        cell->cameraMode = CAMERA_MODE_JPEG_REFRESH;
+                    }
+                    if (cameraChannelValue >= 2.0 && cameraChannelValue < 3.0) {
+                        cell->cameraChannel = 2;
+                    } else {
+                        cell->cameraChannel = 1;
                     }
                 }
                 cell->next = nullptr;
@@ -1839,6 +1873,13 @@ void ConsoleStore::appendCompositeRowsJson(PsramJsonBuffer &json, const ConsoleC
             } else if (cell->content == CONSOLE_CELL_CONTENT_DEVICE && cell->binding != nullptr) {
                 json += ",\"binding\":";
                 appendOneBindingJson(json, cell->binding);
+            } else if (cell->content == CONSOLE_CELL_CONTENT_CAMERA) {
+                json += ",\"cameraId\":\"";
+                appendJsonEscaped(json, cell->cameraId != nullptr ? cell->cameraId : "", CAMERA_ID_BUF);
+                json += "\",\"cameraMode\":\"";
+                json += cell->cameraMode == CAMERA_MODE_LIVE ? "live" : "jpegRefresh";
+                json += "\",\"cameraChannel\":";
+                json += String((unsigned int)(cell->cameraChannel == 2 ? 2 : 1));
             }
             json += "}";
         }

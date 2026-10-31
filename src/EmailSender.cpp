@@ -176,17 +176,51 @@ void EmailSender::freeJob(EmailJob *job) {
     free(job->receivers);
     free(job->theme);
     free(job->body);
+    for (uint8_t index = 0; index < job->jpegCount && index < AUTOMATION_EMAIL_CAMERA_ATTACHES_MAX;
+         index++) {
+        free(job->jpegData[index]);
+        job->jpegData[index] = nullptr;
+        job->jpegSize[index] = 0;
+    }
+    job->jpegCount = 0;
     job->receivers = nullptr;
     job->theme = nullptr;
     job->body = nullptr;
     free(job);
 }
 
-bool EmailSender::enqueue(const char *receivers, const char *theme, const char *body) {
+bool EmailSender::enqueue(
+    const char *receivers,
+    const char *theme,
+    const char *body,
+    uint8_t *jpegPsramOwned,
+    size_t jpegSize
+) {
+    if (jpegPsramOwned == nullptr || jpegSize == 0) {
+        if (jpegPsramOwned != nullptr) {
+            free(jpegPsramOwned);
+        }
+        return enqueue(receivers, theme, body, nullptr, 0);
+    }
+    JpegPart part;
+    part.data = jpegPsramOwned;
+    part.size = jpegSize;
+    return enqueue(receivers, theme, body, &part, 1);
+}
+
+bool EmailSender::enqueue(
+    const char *receivers,
+    const char *theme,
+    const char *body,
+    const JpegPart *jpegParts,
+    int jpegCount
+) {
 #if !BOARD_ROLE_HOST
     (void)receivers;
     (void)theme;
     (void)body;
+    (void)jpegParts;
+    (void)jpegCount;
     LOGGER.warning("Email action ignored: host-only feature");
     return false;
 #else
@@ -197,6 +231,12 @@ bool EmailSender::enqueue(const char *receivers, const char *theme, const char *
     if (sendQueue == nullptr) {
         LOGGER.warning("Email action ignored: send queue unavailable");
         return false;
+    }
+    if (jpegCount < 0) {
+        jpegCount = 0;
+    }
+    if (jpegCount > AUTOMATION_EMAIL_CAMERA_ATTACHES_MAX) {
+        jpegCount = AUTOMATION_EMAIL_CAMERA_ATTACHES_MAX;
     }
 
     EmailJob *job = static_cast<EmailJob *>(
@@ -222,8 +262,33 @@ bool EmailSender::enqueue(const char *receivers, const char *theme, const char *
         LOGGER.warning("Email action ignored: out of PSRAM for send job");
         return false;
     }
+    if (jpegParts != nullptr) {
+        for (int index = 0; index < jpegCount; index++) {
+            if (jpegParts[index].data == nullptr || jpegParts[index].size == 0) {
+                continue;
+            }
+            const uint8_t slot = job->jpegCount;
+            if (slot >= AUTOMATION_EMAIL_CAMERA_ATTACHES_MAX) {
+                break;
+            }
+            job->jpegData[slot] = jpegParts[index].data;
+            job->jpegSize[slot] = jpegParts[index].size;
+            snprintf(
+                job->jpegFilename[slot],
+                sizeof(job->jpegFilename[slot]),
+                "camera%d.jpg",
+                (int)slot + 1
+            );
+            job->jpegCount++;
+        }
+    }
 
     if (xQueueSend(sendQueue, &job, 0) != pdTRUE) {
+        for (uint8_t index = 0; index < job->jpegCount; index++) {
+            job->jpegData[index] = nullptr;
+            job->jpegSize[index] = 0;
+        }
+        job->jpegCount = 0;
         freeJob(job);
         LOGGER.warning("Email action ignored: send queue full");
         return false;
@@ -475,6 +540,21 @@ void EmailSender::sendJob(const EmailJob &job) {
         }
         message.subject = job.theme != nullptr ? job.theme : "";
         message.text.content = job.body != nullptr ? job.body : "";
+
+        for (uint8_t jpegIndex = 0;
+             jpegIndex < job.jpegCount && jpegIndex < AUTOMATION_EMAIL_CAMERA_ATTACHES_MAX;
+             jpegIndex++) {
+            if (job.jpegData[jpegIndex] == nullptr || job.jpegSize[jpegIndex] == 0) {
+                continue;
+            }
+            SMTP_Attachment jpegAttachment;
+            jpegAttachment.descr.filename = job.jpegFilename[jpegIndex];
+            jpegAttachment.descr.mime = "image/jpeg";
+            jpegAttachment.blob.data = job.jpegData[jpegIndex];
+            jpegAttachment.blob.size = job.jpegSize[jpegIndex];
+            jpegAttachment.descr.transfer_encoding = Content_Transfer_Encoding::enc_base64;
+            message.addAttachment(jpegAttachment);
+        }
 
         if (job.receivers != nullptr) {
             String receiversText = job.receivers;

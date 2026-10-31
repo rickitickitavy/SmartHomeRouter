@@ -46,12 +46,14 @@ WebConsole::WebConsole(
     SettingsManager *settingsManager,
     UserStore *userStore,
     ConsoleStore *consoleStore,
-    AutomationStore *automationStore
+    AutomationStore *automationStore,
+    CameraStore *cameraStore
 )
     : settingsManager(settingsManager),
       userStore(userStore),
       consoleStore(consoleStore),
       automationStore(automationStore),
+      cameraStore(cameraStore),
       server(80),
       devicesSocket("/ws/devices"),
       consolesSocket("/ws/consoles") {}
@@ -336,6 +338,101 @@ void WebConsole::begin() {
         }
     );
 
+    server.on("/api/cameras/item", HTTP_GET, [this](AsyncWebServerRequest *request) { handleCameraGet(request); });
+    server.on("/api/cameras/media", HTTP_GET, [this](AsyncWebServerRequest *request) { handleCameraMediaGet(request); });
+    server.on(
+        "/api/cameras/test",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleCamerasTestPost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
+    server.on(
+        "/api/cameras/test-snapshots",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleCamerasTestSnapshotsPost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
+    server.on(
+        "/api/cameras/discover/start",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleCamerasDiscoverStartPost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
+    server.on(
+        "/api/cameras/discover/stop",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleCamerasDiscoverStopPost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
+    server.on(
+        "/api/cameras/discover/clear",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleCamerasDiscoverClearPost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
+    server.on(
+        "/api/cameras/discover",
+        HTTP_GET,
+        [this](AsyncWebServerRequest *request) { handleCamerasDiscoverGet(request); }
+    );
+    server.on("/api/cameras/store", HTTP_GET, [this](AsyncWebServerRequest *request) { handleCamerasStoreGet(request); });
+    server.on(
+        "/api/cameras/restore",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleCamerasRestorePost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxRestore);
+        }
+    );
+    server.on(
+        "/api/cameras/update",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleCameraPut(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
+    server.on(
+        AsyncURIMatcher::exact("/api/cameras"),
+        HTTP_GET,
+        [this](AsyncWebServerRequest *request) { handleCamerasGet(request); }
+    );
+    server.on(
+        AsyncURIMatcher::exact("/api/cameras"),
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleCamerasPost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
+    server.on(
+        AsyncURIMatcher::exact("/api/cameras"),
+        HTTP_DELETE,
+        [this](AsyncWebServerRequest *request) { handleCameraDelete(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
+
     server.on("/api/devices/store", HTTP_GET, [this](AsyncWebServerRequest *request) { handleDevicesStoreGet(request); });
     server.on(
         "/api/devices/configure",
@@ -461,6 +558,9 @@ void WebConsole::rebind() {
 void WebConsole::loop() {
     devicesSocket.cleanupClients();
     consolesSocket.cleanupClients();
+    if (cameraStore != nullptr) {
+        cameraStore->tickDiscovery();
+    }
 }
 
 int WebConsole::activeWebSocketCount() const {
@@ -1422,6 +1522,382 @@ void WebConsole::handleAutomationDelete(AsyncWebServerRequest *request) {
         return;
     }
     sendAutomationWriteResult(request, result);
+}
+
+void WebConsole::sendCameraWriteResult(AsyncWebServerRequest *request, CameraWriteResult result) {
+    if (result == CameraWriteOk) {
+        request->send(200, "text/plain", "Saved");
+        return;
+    }
+    if (result == CameraWriteNotFound) {
+        request->send(404, "text/plain", "Camera not found");
+        return;
+    }
+    if (result == CameraWriteFull) {
+        request->send(400, "text/plain", "Camera table full");
+        return;
+    }
+    if (result == CameraWriteBadId) {
+        request->send(400, "text/plain", "Bad camera id");
+        return;
+    }
+    if (result == CameraWriteBadName) {
+        request->send(400, "text/plain", "Bad camera name");
+        return;
+    }
+    if (result == CameraWriteDuplicateId) {
+        request->send(409, "text/plain", "Camera id already exists");
+        return;
+    }
+    if (result == CameraWriteOutOfMemory) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
+    }
+    if (result == CameraWriteValidation) {
+        request->send(
+            400,
+            "text/plain",
+            "Invalid camera (check name, http(s) snapshot/URL fields; live may be http(s) or rtsp)"
+        );
+        return;
+    }
+    request->send(400, "text/plain", "Bad camera");
+}
+
+void WebConsole::handleCamerasGet(AsyncWebServerRequest *request) {
+    // Cameras section mutate APIs stay admin-only; list is also for Consoles editors (picker).
+    const UserRecord *user = nullptr;
+    if (!requireUser(request, &user)) {
+        return;
+    }
+    if (user == nullptr || (!user->isAdmin && !user->editConsoles)) {
+        request->send(403, "text/plain", "Forbidden");
+        return;
+    }
+    if (cameraStore == nullptr) {
+        request->send(500, "text/plain", "Cameras unavailable");
+        return;
+    }
+    if (user->isAdmin) {
+        cameraStore->refreshAllStatus();
+    }
+    String json = cameraStore->listJson(false);
+    if (json.length() == 0) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
+    }
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleCamerasStoreGet(AsyncWebServerRequest *request) {
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (cameraStore == nullptr) {
+        request->send(500, "text/plain", "Cameras unavailable");
+        return;
+    }
+    String json = cameraStore->listJson(true);
+    if (json.length() == 0) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
+    }
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleCamerasRestorePost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (cameraStore == nullptr) {
+        request->send(500, "text/plain", "Cameras unavailable");
+        return;
+    }
+    String trimmed = body;
+    trimmed.trim();
+    if (trimmed.length() == 0 || trimmed.charAt(0) != '[') {
+        LOGGER.error("Camera import failed: body is empty or not a JSON array");
+        request->send(400, "text/plain", "Need a cameras JSON array");
+        return;
+    }
+    const CameraWriteResult result = cameraStore->replaceAllFromJson(trimmed);
+    if (result != CameraWriteOk) {
+        LOGGER.error(String("Camera import failed: ") + CameraStore::writeResultText(result));
+        sendCameraWriteResult(request, result);
+        return;
+    }
+    LOGGER.info("Camera import restored " + String(cameraStore->cameraCount()) + " camera(s)");
+    request->send(200, "text/plain", "Restored");
+}
+
+void WebConsole::handleCamerasPost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (cameraStore == nullptr) {
+        request->send(500, "text/plain", "Cameras unavailable");
+        return;
+    }
+    CameraRecord *created = nullptr;
+    const CameraWriteResult result = cameraStore->createFromJson(body.c_str(), &created);
+    if (result != CameraWriteOk || created == nullptr) {
+        sendCameraWriteResult(request, result);
+        return;
+    }
+    AsyncWebServerResponse *response = request->beginResponse(
+        200,
+        "application/json",
+        cameraStore->cameraFullJson(created, true)
+    );
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleCameraGet(AsyncWebServerRequest *request) {
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (cameraStore == nullptr) {
+        request->send(500, "text/plain", "Cameras unavailable");
+        return;
+    }
+    String cameraId;
+    if (request->hasParam("id")) {
+        cameraId = request->getParam("id")->value();
+    }
+    const CameraRecord *camera = cameraStore->findById(cameraId.c_str());
+    if (camera == nullptr) {
+        request->send(404, "text/plain", "Camera not found");
+        return;
+    }
+    AsyncWebServerResponse *response = request->beginResponse(
+        200,
+        "application/json",
+        cameraStore->cameraFullJson(camera, true)
+    );
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleCameraPut(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (cameraStore == nullptr) {
+        request->send(500, "text/plain", "Cameras unavailable");
+        return;
+    }
+    String lookupId;
+    String cameraId;
+    extractJsonString(body.c_str(), "originalId", lookupId);
+    extractJsonString(body.c_str(), "id", cameraId);
+    if (lookupId.length() == 0) {
+        lookupId = cameraId;
+    }
+    if (lookupId.length() == 0) {
+        request->send(400, "text/plain", "Need camera id");
+        return;
+    }
+    const bool keepId = cameraId.length() == 0 || cameraId == lookupId;
+    sendCameraWriteResult(request, cameraStore->replaceFromJson(lookupId.c_str(), body.c_str(), keepId));
+}
+
+void WebConsole::handleCameraDelete(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (cameraStore == nullptr) {
+        request->send(500, "text/plain", "Cameras unavailable");
+        return;
+    }
+    String cameraId;
+    extractJsonString(body.c_str(), "id", cameraId);
+    const CameraWriteResult result = cameraStore->deleteById(cameraId.c_str());
+    if (result == CameraWriteOk) {
+        request->send(200, "text/plain", "Deleted");
+        return;
+    }
+    sendCameraWriteResult(request, result);
+}
+
+void WebConsole::handleCameraMediaGet(AsyncWebServerRequest *request) {
+    const UserRecord *user = nullptr;
+    if (!requireUser(request, &user)) {
+        return;
+    }
+    if (cameraStore == nullptr || user == nullptr) {
+        request->send(500, "text/plain", "Cameras unavailable");
+        return;
+    }
+    String cameraId;
+    if (request->hasParam("id")) {
+        cameraId = request->getParam("id")->value();
+    }
+    const CameraRecord *camera = cameraStore->findById(cameraId.c_str());
+    if (camera == nullptr) {
+        request->send(404, "text/plain", "Camera not found");
+        return;
+    }
+    if (!CameraStore::userMayView(camera, user->userName, user->isAdmin || user->editConsoles)) {
+        request->send(403, "text/plain", "Forbidden");
+        return;
+    }
+    String json = "{\"id\":\"";
+    appendJsonEscaped(json, camera->id, CAMERA_ID_BUF);
+    json += "\",\"channels\":[";
+    for (int channel = 0; channel < CAMERA_CHANNELS; channel++) {
+        if (channel > 0) {
+            json += ',';
+        }
+        json += "{\"snapshotUrl\":\"";
+        appendJsonEscaped(json, camera->onvif.channels[channel].snapshotUrl, CAMERA_URL_MAX);
+        json += "\",\"liveUrl\":\"";
+        appendJsonEscaped(json, camera->onvif.channels[channel].liveUrl, CAMERA_URL_MAX);
+        json += "\"}";
+    }
+    json += "]}";
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleCamerasDiscoverGet(AsyncWebServerRequest *request) {
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (cameraStore == nullptr) {
+        request->send(500, "text/plain", "Cameras unavailable");
+        return;
+    }
+    String json = "{\"discovering\":";
+    json += cameraStore->isDiscovering() ? "true" : "false";
+    json += ",\"cameras\":";
+    String camerasJson = cameraStore->discoveredJson();
+    if (camerasJson.length() == 0) {
+        json += "[]";
+    } else {
+        json += camerasJson;
+    }
+    json += "}";
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleCamerasDiscoverStartPost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (cameraStore == nullptr) {
+        request->send(500, "text/plain", "Cameras unavailable");
+        return;
+    }
+    String typeText;
+    extractJsonString(body.c_str(), "type", typeText);
+    if (typeText.length() == 0) {
+        typeText = "onvif";
+    }
+    if (typeText != "onvif") {
+        request->send(400, "text/plain", "Unsupported camera type");
+        return;
+    }
+    if (!cameraStore->startDiscovery(CAMERA_TYPE_ONVIF)) {
+        request->send(500, "text/plain", "Discover start failed");
+        return;
+    }
+    request->send(200, "text/plain", "Started");
+}
+
+void WebConsole::handleCamerasTestPost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (cameraStore == nullptr) {
+        request->send(500, "text/plain", "Cameras unavailable");
+        return;
+    }
+    String json = cameraStore->testOnvifJson(body.c_str());
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleCamerasTestSnapshotsPost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (cameraStore == nullptr) {
+        request->send(500, "text/plain", "Cameras unavailable");
+        return;
+    }
+    String json = cameraStore->testSnapshotsJson(body.c_str());
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleCamerasDiscoverStopPost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (cameraStore == nullptr) {
+        request->send(500, "text/plain", "Cameras unavailable");
+        return;
+    }
+    cameraStore->stopDiscovery();
+    request->send(200, "text/plain", "Stopped");
+}
+
+void WebConsole::handleCamerasDiscoverClearPost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (cameraStore == nullptr) {
+        request->send(500, "text/plain", "Cameras unavailable");
+        return;
+    }
+    cameraStore->clearDiscoveryResults();
+    request->send(200, "text/plain", "Cleared");
 }
 
 void WebConsole::handleUsersDelete(AsyncWebServerRequest *request) {

@@ -2257,6 +2257,84 @@
             /* edit-only sizing sync; unused on user page */
         }
 
+        var consoleCameraMediaCache = {};
+        var CONSOLE_CAMERA_REFRESH_MS = 3000;
+
+        function consoleCameraFetchMedia(cameraId) {
+            if (!cameraId) {
+                return Promise.resolve(null);
+            }
+            if (!consoleCameraMediaCache[cameraId]) {
+                consoleCameraMediaCache[cameraId] = fetch(
+                    "/api/cameras/media?id=" + encodeURIComponent(cameraId),
+                    { cache: "no-store" }
+                ).then(function (response) {
+                    if (!response.ok) {
+                        return null;
+                    }
+                    return response.json();
+                }).catch(function () {
+                    return null;
+                });
+            }
+            return consoleCameraMediaCache[cameraId];
+        }
+
+        function consoleCameraUrlWithCacheBuster(url) {
+            return url + (url.indexOf("?") >= 0 ? "&" : "?") + "_=" + Date.now();
+        }
+
+        function buildConsoleCameraView(cell) {
+            var host = document.createElement("div");
+            host.className = "console-camera-view";
+            var cameraId = cell && cell.cameraId ? String(cell.cameraId) : "";
+            var mode = cell && cell.cameraMode === "live" ? "live" : "jpegRefresh";
+            var channelIndex = cell && Number(cell.cameraChannel) === 2 ? 1 : 0;
+            function showUnavailable() {
+                host.innerHTML = "";
+                var note = document.createElement("div");
+                note.className = "console-camera-placeholder";
+                note.textContent = "Camera unavailable";
+                host.appendChild(note);
+            }
+            if (!cameraId) {
+                showUnavailable();
+                return host;
+            }
+            consoleCameraFetchMedia(cameraId).then(function (media) {
+                var channels = media && Array.isArray(media.channels) ? media.channels : [];
+                var channel = channels[channelIndex] || null;
+                var url = channel ? (mode === "live" ? channel.liveUrl : channel.snapshotUrl) : "";
+                if (!url) {
+                    showUnavailable();
+                    return;
+                }
+                var img = document.createElement("img");
+                img.className = "console-camera-img";
+                img.alt = "";
+                img.onerror = function () {
+                    if (mode === "live") {
+                        showUnavailable();
+                    }
+                };
+                if (mode === "live") {
+                    img.src = url;
+                } else {
+                    img.src = consoleCameraUrlWithCacheBuster(url);
+                    var timerId = window.setInterval(function () {
+                        if (!img.isConnected) {
+                            window.clearInterval(timerId);
+                            return;
+                        }
+                        img.src = consoleCameraUrlWithCacheBuster(url);
+                    }, CONSOLE_CAMERA_REFRESH_MS);
+                }
+                host.innerHTML = "";
+                host.appendChild(img);
+            });
+            return host;
+        }
+
         function buildCompositeBody(widget, options) {
             options = options || {};
             var isEdit = !!options.isEdit;
@@ -2448,6 +2526,8 @@
                         textSpan.className = "console-composite-text-view";
                         textSpan.textContent = cell.text || "";
                         cellBody.appendChild(textSpan);
+                    } else if (cell.content === "camera") {
+                        cellBody.appendChild(buildConsoleCameraView(cell));
                     } else if (cell.content === "device" && cell.binding) {
                         if (live && typeof placeBuildDeviceRow === "function") {
                             cellBody.appendChild(placeBuildDeviceRow(cell.binding));

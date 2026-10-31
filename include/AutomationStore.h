@@ -46,6 +46,12 @@ struct AutomationEmailParam {
     AutomationEmailParam *next;
 };
 
+struct AutomationEmailCameraAttach {
+    char *cameraId;
+    uint8_t channel;  // 1 or 2 (snapshot channel)
+    AutomationEmailCameraAttach *next;
+};
+
 enum AutomationListenEventType : uint8_t {
     AutomationListenEventChange = 0,
     AutomationListenEventAny = 1
@@ -118,6 +124,7 @@ struct AutomationAction {
     char *emailTheme;
     char *emailMessage;
     AutomationEmailParam *emailParams;
+    AutomationEmailCameraAttach *emailCameraAttaches;
     AutomationAction *next;
 };
 
@@ -183,6 +190,7 @@ public:
     static char *duplicateEmailString(const char *source, size_t maxLength);
     static void *allocateEmailMemory(size_t bytes);
     static void freeEmailParamList(AutomationEmailParam *&head);
+    static void freeEmailCameraAttachList(AutomationEmailCameraAttach *&head);
     static void freeListenerList(AutomationListener *&head);
     static void freeConditionTree(AutomationCondition *&root);
     static void freeActionList(AutomationAction *&head);

@@ -2,6 +2,7 @@
 #include "DeviceCustomCommand.h"
 #include "AutomationParam.h"
 #include "DeviceTopicMap.h"
+#include "CameraStore.h"
 #include "EmailSender.h"
 #include "Logger.h"
 #include "ZigbeeSpiProxy.h"
@@ -25,6 +26,7 @@ AutomationEngine::AutomationEngine()
       topicMap(nullptr),
       deviceCommand(nullptr),
       emailSender(nullptr),
+      cameraStore(nullptr),
       lastTickMs(0),
       actionDepth(0),
       bootStartApplied(false) {
@@ -35,13 +37,15 @@ void AutomationEngine::begin(
     ZigbeeSpiProxy *proxy,
     DeviceTopicMap *map,
     DeviceCommandFn commandFn,
-    EmailSender *sender
+    EmailSender *sender,
+    CameraStore *cameras
 ) {
     store = automationStore;
     spiProxy = proxy;
     topicMap = map;
     deviceCommand = commandFn;
     emailSender = sender;
+    cameraStore = cameras;
     lastTickMs = millis();
     bootStartApplied = false;
 }
@@ -370,11 +374,45 @@ void AutomationEngine::applyAction(const AutomationAction *action) {
             body += liveValue;
             body += '\n';
         }
-        emailSender->enqueue(
-            action->emailReceivers != nullptr ? action->emailReceivers : "",
-            action->emailTheme != nullptr ? action->emailTheme : "",
-            body.c_str()
-        );
+        EmailSender::JpegPart jpegParts[AUTOMATION_EMAIL_CAMERA_ATTACHES_MAX];
+        memset(jpegParts, 0, sizeof(jpegParts));
+        int jpegCount = 0;
+        for (const AutomationEmailCameraAttach *attach = action->emailCameraAttaches;
+             attach != nullptr && jpegCount < AUTOMATION_EMAIL_CAMERA_ATTACHES_MAX;
+             attach = attach->next) {
+            if (cameraStore == nullptr || attach->cameraId == nullptr || attach->cameraId[0] == '\0') {
+                LOGGER.warning("Email camera attach skipped: camera not configured");
+                continue;
+            }
+            size_t jpegSize = 0;
+            uint8_t *jpegAttachment = cameraStore->fetchSnapshotJpeg(
+                attach->cameraId,
+                attach->channel == 2 ? 2 : 1,
+                &jpegSize
+            );
+            if (jpegAttachment == nullptr) {
+                LOGGER.warning(
+                    String("Email camera attach skipped: snapshot fetch failed for ")
+                    + attach->cameraId
+                );
+                continue;
+            }
+            jpegParts[jpegCount].data = jpegAttachment;
+            jpegParts[jpegCount].size = jpegSize;
+            jpegCount++;
+        }
+        if (!emailSender->enqueue(
+                action->emailReceivers != nullptr ? action->emailReceivers : "",
+                action->emailTheme != nullptr ? action->emailTheme : "",
+                body.c_str(),
+                jpegCount > 0 ? jpegParts : nullptr,
+                jpegCount
+            )) {
+            for (int index = 0; index < jpegCount; index++) {
+                free(jpegParts[index].data);
+                jpegParts[index].data = nullptr;
+            }
+        }
         return;
     }
     if (action->target == AutomationTargetDevice) {
