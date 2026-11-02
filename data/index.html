@@ -10662,7 +10662,14 @@
                 var typeCell = document.createElement("td");
                 typeCell.textContent = "ONVIF";
                 var urlCell = document.createElement("td");
-                urlCell.textContent = camera.url || "";
+                var hostIp = (camera.host || "").trim();
+                if (!hostIp && camera.url) {
+                    var hostMatch = String(camera.url).match(/^https?:\/\/([^/:]+)/i);
+                    if (hostMatch) {
+                        hostIp = hostMatch[1];
+                    }
+                }
+                urlCell.textContent = hostIp;
                 var statusCell = document.createElement("td");
                 statusCell.textContent = camera.status || "";
                 tableRow.appendChild(activeCell);
@@ -13710,7 +13717,7 @@
                     return function () {
                         syncConsoleEditorDraftFromDom();
                         var rows = ensureCompositeRows(consoleEditorDraft.widgets[storedIndex]);
-                        if (rows.length >= 8) {
+                        if (rows.length >= 16) {
                             return;
                         }
                         rows.push(makeDefaultCompositeRow());
