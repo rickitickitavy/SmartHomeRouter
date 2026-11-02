@@ -2,11 +2,14 @@
 
 #include <ESPAsyncWebServer.h>
 #include <AsyncWebSocket.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include "SettingsManager.h"
 #include "FoundDeviceList.h"
 #include "UserStore.h"
 #include "ConsoleStore.h"
 #include "AutomationStore.h"
+#include "CameraStore.h"
 #include "PsramJsonBuffer.h"
 
 class WebConsole {
@@ -31,7 +34,8 @@ public:
         SettingsManager *settingsManager,
         UserStore *userStore,
         ConsoleStore *consoleStore,
-        AutomationStore *automationStore
+        AutomationStore *automationStore,
+        CameraStore *cameraStore = nullptr
     );
 
     void begin();
@@ -68,6 +72,7 @@ private:
     UserStore *userStore;
     ConsoleStore *consoleStore;
     AutomationStore *automationStore;
+    CameraStore *cameraStore;
     FoundDeviceList *foundDevices = nullptr;
     SearchStartFn startSearch = nullptr;
     SearchStopFn stopSearch = nullptr;
@@ -159,6 +164,38 @@ private:
     void handleAutomationPut(AsyncWebServerRequest *request);
     void handleAutomationActivePost(AsyncWebServerRequest *request);
     void handleAutomationDelete(AsyncWebServerRequest *request);
+    void handleCamerasGet(AsyncWebServerRequest *request);
+    void handleCamerasPost(AsyncWebServerRequest *request);
+    void handleCamerasStoreGet(AsyncWebServerRequest *request);
+    void handleCamerasRestorePost(AsyncWebServerRequest *request);
+    void handleCameraGet(AsyncWebServerRequest *request);
+    void handleCameraPut(AsyncWebServerRequest *request);
+    void handleCameraDelete(AsyncWebServerRequest *request);
+    void handleCameraMediaGet(AsyncWebServerRequest *request);
+    void handleCamerasDiscoverGet(AsyncWebServerRequest *request);
+    void handleCamerasDiscoverStartPost(AsyncWebServerRequest *request);
+    void handleCamerasDiscoverStopPost(AsyncWebServerRequest *request);
+    void handleCamerasDiscoverClearPost(AsyncWebServerRequest *request);
+    void handleCamerasTestPost(AsyncWebServerRequest *request);
+    void handleCamerasTestSnapshotsPost(AsyncWebServerRequest *request);
+    void handleCamerasTestStatusGet(AsyncWebServerRequest *request);
+    void sendCameraWriteResult(AsyncWebServerRequest *request, CameraWriteResult result);
+    // ONVIF Resolve/Test: never hold AsyncWebServerRequest across the worker (UAF / client gone).
+    // POST accepts the job immediately; UI polls GET /api/cameras/test/status for JSON result.
+    enum CameraHeavyOp : uint8_t {
+        CameraHeavyNone = 0,
+        CameraHeavyResolve,
+        CameraHeavyTestSnapshots
+    };
+    bool queueCameraHeavyOp(CameraHeavyOp op, const String &body, String *errorOut);
+    void clearCameraHeavyOp();
+    static void cameraHeavyWorkerTask(void *param);
+    CameraHeavyOp cameraHeavyOp = CameraHeavyNone;
+    char *cameraHeavyBody = nullptr;
+    char *cameraHeavyResult = nullptr;
+    volatile bool cameraHeavyRunning = false;
+    volatile bool cameraHeavyDone = false;
+    TaskHandle_t cameraHeavyTask = nullptr;
     void fillUserFromJson(const char *json, UserRecord *user);
     void sendUserWriteResult(AsyncWebServerRequest *request, UserWriteResult result);
     void sendConsoleWriteResult(AsyncWebServerRequest *request, ConsoleWriteResult result);

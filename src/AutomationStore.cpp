@@ -113,6 +113,16 @@ char *AutomationStore::duplicateEmailString(const char *source, size_t maxLength
     return copy;
 }
 
+void AutomationStore::freeEmailCameraAttachList(AutomationEmailCameraAttach *&head) {
+    while (head != nullptr) {
+        AutomationEmailCameraAttach *next = head->next;
+        free(head->cameraId);
+        free(head);
+        head = next;
+    }
+    head = nullptr;
+}
+
 void AutomationStore::freeEmailParamList(AutomationEmailParam *&head) {
     while (head != nullptr) {
         AutomationEmailParam *next = head->next;
@@ -220,6 +230,7 @@ void AutomationStore::freeActionList(AutomationAction *&listHead) {
         free(listHead->emailTheme);
         free(listHead->emailMessage);
         freeEmailParamList(listHead->emailParams);
+        freeEmailCameraAttachList(listHead->emailCameraAttaches);
         free(listHead);
         listHead = next;
     }
@@ -1262,6 +1273,148 @@ bool AutomationStore::parseActions(const char *objectJson, AutomationAction **ou
                 free(action);
                 return false;
             }
+            action->emailCameraAttaches = nullptr;
+            String cameraAttachesJson;
+            AutomationEmailCameraAttach *attachTail = nullptr;
+            int attachCount = 0;
+            if (extractJsonKeyedSlice(object.c_str(), "cameraAttaches", '[', cameraAttachesJson)) {
+                const char *attachCursor = cameraAttachesJson.c_str();
+                while (attachCursor != nullptr && *attachCursor != '\0') {
+                    const char *attachObjectStart = strchr(attachCursor, '{');
+                    if (attachObjectStart == nullptr) {
+                        break;
+                    }
+                    int attachDepth = 0;
+                    bool attachInString = false;
+                    bool attachEscape = false;
+                    const char *attachObjectEnd = nullptr;
+                    for (const char *scan = attachObjectStart; *scan != '\0'; scan++) {
+                        const char character = *scan;
+                        if (attachInString) {
+                            if (attachEscape) {
+                                attachEscape = false;
+                                continue;
+                            }
+                            if (character == '\\') {
+                                attachEscape = true;
+                                continue;
+                            }
+                            if (character == '"') {
+                                attachInString = false;
+                            }
+                            continue;
+                        }
+                        if (character == '"') {
+                            attachInString = true;
+                            continue;
+                        }
+                        if (character == '{') {
+                            attachDepth++;
+                        } else if (character == '}') {
+                            attachDepth--;
+                            if (attachDepth == 0) {
+                                attachObjectEnd = scan;
+                                break;
+                            }
+                        }
+                    }
+                    if (attachObjectEnd == nullptr) {
+                        break;
+                    }
+                    if (attachCount >= AUTOMATION_EMAIL_CAMERA_ATTACHES_MAX) {
+                        freeEmailCameraAttachList(action->emailCameraAttaches);
+                        freeActionList(*outActions);
+                        free(action->emailReceivers);
+                        free(action->emailTheme);
+                        free(action->emailMessage);
+                        free(action);
+                        return false;
+                    }
+                    String attachObject = String(attachObjectStart).substring(
+                        0,
+                        (unsigned int)(attachObjectEnd - attachObjectStart + 1)
+                    );
+                    String attachCameraId;
+                    extractJsonString(attachObject.c_str(), "cameraId", attachCameraId);
+                    int attachChannel = 1;
+                    extractJsonInt(attachObject.c_str(), "channel", attachChannel);
+                    if (attachCameraId.length() == 0) {
+                        attachCursor = attachObjectEnd + 1;
+                        continue;
+                    }
+                    AutomationEmailCameraAttach *attachNode =
+                        (AutomationEmailCameraAttach *)allocateEmailMemory(
+                            sizeof(AutomationEmailCameraAttach)
+                        );
+                    if (attachNode == nullptr) {
+                        freeEmailCameraAttachList(action->emailCameraAttaches);
+                        freeActionList(*outActions);
+                        free(action->emailReceivers);
+                        free(action->emailTheme);
+                        free(action->emailMessage);
+                        free(action);
+                        return false;
+                    }
+                    memset(attachNode, 0, sizeof(*attachNode));
+                    attachNode->cameraId =
+                        duplicateEmailString(attachCameraId.c_str(), CAMERA_ID_BUF - 1);
+                    if (attachNode->cameraId == nullptr) {
+                        free(attachNode);
+                        freeEmailCameraAttachList(action->emailCameraAttaches);
+                        freeActionList(*outActions);
+                        free(action->emailReceivers);
+                        free(action->emailTheme);
+                        free(action->emailMessage);
+                        free(action);
+                        return false;
+                    }
+                    attachNode->channel = attachChannel == 2 ? 2 : 1;
+                    if (attachTail == nullptr) {
+                        action->emailCameraAttaches = attachNode;
+                    } else {
+                        attachTail->next = attachNode;
+                    }
+                    attachTail = attachNode;
+                    attachCount++;
+                    attachCursor = attachObjectEnd + 1;
+                }
+            } else {
+                // Legacy single attachCamera / cameraId / cameraChannel.
+                bool attachCamera = false;
+                extractJsonBool(object.c_str(), "attachCamera", attachCamera);
+                String cameraIdText;
+                extractJsonString(object.c_str(), "cameraId", cameraIdText);
+                int cameraChannel = 1;
+                extractJsonInt(object.c_str(), "cameraChannel", cameraChannel);
+                if (attachCamera && cameraIdText.length() > 0) {
+                    AutomationEmailCameraAttach *attachNode =
+                        (AutomationEmailCameraAttach *)allocateEmailMemory(
+                            sizeof(AutomationEmailCameraAttach)
+                        );
+                    if (attachNode == nullptr) {
+                        freeActionList(*outActions);
+                        free(action->emailReceivers);
+                        free(action->emailTheme);
+                        free(action->emailMessage);
+                        free(action);
+                        return false;
+                    }
+                    memset(attachNode, 0, sizeof(*attachNode));
+                    attachNode->cameraId =
+                        duplicateEmailString(cameraIdText.c_str(), CAMERA_ID_BUF - 1);
+                    if (attachNode->cameraId == nullptr) {
+                        free(attachNode);
+                        freeActionList(*outActions);
+                        free(action->emailReceivers);
+                        free(action->emailTheme);
+                        free(action->emailMessage);
+                        free(action);
+                        return false;
+                    }
+                    attachNode->channel = cameraChannel == 2 ? 2 : 1;
+                    action->emailCameraAttaches = attachNode;
+                }
+            }
             String parametersJson;
             if (extractJsonKeyedSlice(object.c_str(), "parameters", '[', parametersJson)) {
                 AutomationEmailParam *paramTail = nullptr;
@@ -2149,6 +2302,26 @@ void AutomationStore::appendActionJson(PsramJsonBuffer &json, const AutomationAc
             json += ",\"title\":\"";
             appendJsonEscaped(json, emailParam->title, AUTOMATION_EMAIL_PARAM_TITLE_MAX);
             json += "\"}";
+        }
+        json += "]";
+        json += ",\"cameraAttaches\":[";
+        bool firstAttach = true;
+        for (const AutomationEmailCameraAttach *attach = action->emailCameraAttaches;
+             attach != nullptr;
+             attach = attach->next) {
+            if (!firstAttach) {
+                json += ",";
+            }
+            firstAttach = false;
+            json += "{\"cameraId\":\"";
+            appendJsonEscaped(
+                json,
+                attach->cameraId != nullptr ? attach->cameraId : "",
+                CAMERA_ID_BUF
+            );
+            json += "\",\"channel\":";
+            json += String((unsigned)(attach->channel == 2 ? 2 : 1));
+            json += "}";
         }
         json += "]}";
         return;

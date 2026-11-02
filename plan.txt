@@ -1,6 +1,14 @@
 1) hardware brownout
-
 --- 8) historical chart
 5) new action: HTTP request
 decrease requirement of minimal width of widget
-recoonect to UI
+
+ 1) ConsoleCompositeCell contains field for all available types of cell. But fields
+        char *cameraId;
+        uint8_t cameraMode;
+        uint8_t cameraChannel;
+       logically must be in ConsoleBinding.
+2) ConsoleBinding should have LOGICALLY field bindingType (empty, device, automation, camera and so on). Now this class contains many fields what are not used (what for is field channel, decimal, automation and so on if cell is empty or text, or camera and so on). You
+    must make config structure for each type of content. Moreover: you may use void* to store single pointer and cast it to required pointer depends on content type.
+
+    all these changes may and must decrease memory usage
