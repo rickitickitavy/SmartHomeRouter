@@ -6174,7 +6174,55 @@
         var consoleDragCompositeCell = null;
         var placeAssignedConsoles = [];
         var placeActiveConsoleIndex = 0;
+        var placeDisplayedConsoleIndex = -1;
+        var placeConsoleScrollByIndex = {};
         var placeAutomationStatusByName = {};
+
+        function captureConsolePanelScroll(panelsHost) {
+            if (!panelsHost) {
+                return { top: 0, left: 0 };
+            }
+            return {
+                top: panelsHost.scrollTop,
+                left: panelsHost.scrollLeft
+            };
+        }
+
+        function restoreConsolePanelScroll(panelsHost, saved) {
+            if (!panelsHost || !saved) {
+                return;
+            }
+            function applyScroll() {
+                panelsHost.scrollTop = saved.top;
+                panelsHost.scrollLeft = saved.left;
+            }
+            applyScroll();
+            window.requestAnimationFrame(function () {
+                applyScroll();
+                window.requestAnimationFrame(applyScroll);
+            });
+            if (panelsHost._consoleScrollRestoreObserver) {
+                panelsHost._consoleScrollRestoreObserver.disconnect();
+                panelsHost._consoleScrollRestoreObserver = null;
+            }
+            if (typeof ResizeObserver === "undefined") {
+                return;
+            }
+            var observer = new ResizeObserver(function () {
+                applyScroll();
+            });
+            panelsHost._consoleScrollRestoreObserver = observer;
+            observer.observe(panelsHost);
+            if (panelsHost.firstElementChild) {
+                observer.observe(panelsHost.firstElementChild);
+            }
+            window.setTimeout(function () {
+                if (panelsHost._consoleScrollRestoreObserver === observer) {
+                    observer.disconnect();
+                    panelsHost._consoleScrollRestoreObserver = null;
+                }
+            }, 2500);
+        }
 
         function refreshPlaceConsolesIfActive() {
             var placeSection = document.getElementById("section-place");
@@ -7513,11 +7561,16 @@
             if (!tabsHost || !panelsHost) {
                 return;
             }
+            if (placeDisplayedConsoleIndex === placeActiveConsoleIndex) {
+                placeConsoleScrollByIndex[placeActiveConsoleIndex] =
+                    captureConsolePanelScroll(panelsHost);
+            }
             tabsHost.innerHTML = "";
             panelsHost.innerHTML = "";
             if (!placeAssignedConsoles.length) {
                 tabsHost.hidden = true;
                 panelsHost.hidden = true;
+                placeDisplayedConsoleIndex = -1;
                 if (emptyState) {
                     emptyState.hidden = false;
                 }
@@ -7539,6 +7592,9 @@
                 tabButton.textContent = placeAssignedConsoles[tabIndex].name || "Console";
                 tabButton.onclick = (function (storedIndex) {
                     return function () {
+                        var scrollPanels = document.getElementById("placeConsolePanels");
+                        placeConsoleScrollByIndex[placeActiveConsoleIndex] =
+                            captureConsolePanelScroll(scrollPanels);
                         placeActiveConsoleIndex = storedIndex;
                         renderPlaceConsoleTabs();
                     };
@@ -7549,6 +7605,11 @@
             panel.className = "tab-content place-console-panel";
             placeRenderGrid(panel, placeAssignedConsoles[placeActiveConsoleIndex]);
             panelsHost.appendChild(panel);
+            placeDisplayedConsoleIndex = placeActiveConsoleIndex;
+            restoreConsolePanelScroll(
+                panelsHost,
+                placeConsoleScrollByIndex[placeActiveConsoleIndex]
+            );
         }
 
         function loadPlaceConsoles() {

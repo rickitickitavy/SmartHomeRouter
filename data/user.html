@@ -147,7 +147,55 @@
 
         var assignedConsoles = [];
         var activeConsoleIndex = 0;
+        var displayedConsoleIndex = -1;
+        var consoleScrollByIndex = {};
         var showingAccountTab = false;
+
+        function captureConsolePanelScroll(panelsHost) {
+            if (!panelsHost) {
+                return { top: 0, left: 0 };
+            }
+            return {
+                top: panelsHost.scrollTop,
+                left: panelsHost.scrollLeft
+            };
+        }
+
+        function restoreConsolePanelScroll(panelsHost, saved) {
+            if (!panelsHost || !saved) {
+                return;
+            }
+            function applyScroll() {
+                panelsHost.scrollTop = saved.top;
+                panelsHost.scrollLeft = saved.left;
+            }
+            applyScroll();
+            window.requestAnimationFrame(function () {
+                applyScroll();
+                window.requestAnimationFrame(applyScroll);
+            });
+            if (panelsHost._consoleScrollRestoreObserver) {
+                panelsHost._consoleScrollRestoreObserver.disconnect();
+                panelsHost._consoleScrollRestoreObserver = null;
+            }
+            if (typeof ResizeObserver === "undefined") {
+                return;
+            }
+            var observer = new ResizeObserver(function () {
+                applyScroll();
+            });
+            panelsHost._consoleScrollRestoreObserver = observer;
+            observer.observe(panelsHost);
+            if (panelsHost.firstElementChild) {
+                observer.observe(panelsHost.firstElementChild);
+            }
+            window.setTimeout(function () {
+                if (panelsHost._consoleScrollRestoreObserver === observer) {
+                    observer.disconnect();
+                    panelsHost._consoleScrollRestoreObserver = null;
+                }
+            }, 2500);
+        }
         var registeredDeviceRows = [];
         var automationStatusByName = {};
         var statusPollTimer = null;
@@ -424,6 +472,11 @@
         }
 
         function selectConsoleTab(index) {
+            var panelsHost = document.getElementById("consolePanels");
+            if (panelsHost && !showingAccountTab) {
+                consoleScrollByIndex[activeConsoleIndex] =
+                    captureConsolePanelScroll(panelsHost);
+            }
             showingAccountTab = false;
             stopStatusPolling();
             activeConsoleIndex = index;
@@ -431,6 +484,11 @@
         }
 
         function selectAccountTab() {
+            var panelsHost = document.getElementById("consolePanels");
+            if (panelsHost && !showingAccountTab) {
+                consoleScrollByIndex[activeConsoleIndex] =
+                    captureConsolePanelScroll(panelsHost);
+            }
             showingAccountTab = true;
             renderConsoleTabs();
         }
@@ -829,6 +887,10 @@
             if (!tabsHost || !panelsHost) {
                 return;
             }
+            if (!showingAccountTab && displayedConsoleIndex === activeConsoleIndex) {
+                consoleScrollByIndex[activeConsoleIndex] =
+                    captureConsolePanelScroll(panelsHost);
+            }
             tabsHost.innerHTML = "";
             panelsHost.innerHTML = "";
             tabsHost.hidden = false;
@@ -848,6 +910,7 @@
             }
             appendUserConsoleAccountTab(tabsHost);
             if (showingAccountTab) {
+                displayedConsoleIndex = -1;
                 if (emptyState) {
                     emptyState.hidden = true;
                 }
@@ -857,6 +920,7 @@
             stopStatusPolling();
             if (!assignedConsoles.length) {
                 panelsHost.hidden = true;
+                displayedConsoleIndex = -1;
                 if (emptyState) {
                     emptyState.hidden = false;
                 }
@@ -870,6 +934,11 @@
             panel.className = "tab-content user-console-tab";
             renderConsoleGrid(panel, assignedConsoles[activeConsoleIndex]);
             panelsHost.appendChild(panel);
+            displayedConsoleIndex = activeConsoleIndex;
+            restoreConsolePanelScroll(
+                panelsHost,
+                consoleScrollByIndex[activeConsoleIndex]
+            );
         }
 
         function loadAutomationStatuses() {
