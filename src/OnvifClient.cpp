@@ -8,6 +8,7 @@
 #include <esp_random.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/sha1.h>
+#include <new>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -415,42 +416,49 @@ char *soapPostOnce(
     if (url == nullptr || url[0] == '\0') {
         return nullptr;
     }
-    HTTPClient http;
-    http.setReuse(false);
-    http.setTimeout(10000);
-    if (!http.begin(url)) {
+    // Heap-allocate HTTPClient — it embeds a large WiFiClient and blows task stacks.
+    HTTPClient *http = new (std::nothrow) HTTPClient();
+    if (http == nullptr) {
+        return nullptr;
+    }
+    http->setReuse(false);
+    http->setTimeout(10000);
+    if (!http->begin(url)) {
+        delete http;
         return nullptr;
     }
     if (username != nullptr && username[0] != '\0') {
-        http.setAuthorization(username, password != nullptr ? password : "");
+        http->setAuthorization(username, password != nullptr ? password : "");
     }
     // SOAP 1.1 — widely accepted by ONVIF cameras (SOAP 1.2 alone often fails).
-    http.addHeader("Content-Type", "text/xml; charset=utf-8");
-    http.addHeader("Accept", "application/soap+xml, application/xml, text/xml, */*");
+    http->addHeader("Content-Type", "text/xml; charset=utf-8");
+    http->addHeader("Accept", "application/soap+xml, application/xml, text/xml, */*");
     if (soapAction != nullptr && soapAction[0] != '\0') {
         String actionHeader = "\"";
         actionHeader += soapAction;
         actionHeader += "\"";
-        http.addHeader("SOAPAction", actionHeader);
+        http->addHeader("SOAPAction", actionHeader);
     }
-    const int status = http.POST(body);
+    const int status = http->POST(body);
     if (httpStatusOut != nullptr) {
         *httpStatusOut = status;
     }
     if (status <= 0) {
-        http.end();
+        http->end();
+        delete http;
         return nullptr;
     }
 
     char *copy = static_cast<char *>(allocatePsram(kOnvifSoapMax));
     if (copy == nullptr) {
-        http.end();
+        http->end();
+        delete http;
         return nullptr;
     }
 
     size_t total = 0;
-    const int contentLength = http.getSize();
-    WiFiClient *stream = http.getStreamPtr();
+    const int contentLength = http->getSize();
+    WiFiClient *stream = http->getStreamPtr();
     if (stream != nullptr) {
         const uint32_t deadlineMs = millis() + 10000;
         while (total + 1 < kOnvifSoapMax && millis() < deadlineMs) {
@@ -459,10 +467,10 @@ char *soapPostOnce(
             }
             const size_t available = stream->available();
             if (available == 0) {
-                if (!http.connected() && (contentLength <= 0 || (int)total >= contentLength)) {
+                if (!http->connected() && (contentLength <= 0 || (int)total >= contentLength)) {
                     break;
                 }
-                if (!http.connected() && total >= kOnvifSoapMin) {
+                if (!http->connected() && total >= kOnvifSoapMin) {
                     break;
                 }
                 delay(2);
@@ -482,8 +490,9 @@ char *soapPostOnce(
         }
     }
     if (total == 0) {
-        const String response = http.getString();
-        http.end();
+        const String response = http->getString();
+        http->end();
+        delete http;
         if (response.length() == 0 || response.length() + 1 > kOnvifSoapMax) {
             free(copy);
             return nullptr;
@@ -492,7 +501,8 @@ char *soapPostOnce(
         copy[response.length()] = '\0';
         return copy;
     }
-    http.end();
+    http->end();
+    delete http;
     copy[total] = '\0';
     if (total < kOnvifSoapMin) {
         free(copy);
@@ -573,35 +583,152 @@ bool extractMediaXaddr(const char *capabilitiesXml, const char *sectionHint, cha
     return extractTagText(resume, "XAddr", out, outMax, &resume) && looksLikeUri(out);
 }
 
-int collectProfileTokens(const char *profilesXml, char tokens[][64], int maxTokens) {
-    if (profilesXml == nullptr || tokens == nullptr || maxTokens <= 0) {
+struct OnvifProfileCandidate {
+    char token[64];
+    uint32_t pixels;
+    char snapshotUrl[CAMERA_URL_MAX];
+    char liveUrl[CAMERA_URL_MAX];
+};
+
+bool isXmlNameBoundaryBefore(const char *xml, const char *match) {
+    if (xml == nullptr || match == nullptr) {
+        return false;
+    }
+    if (match == xml) {
+        return true;
+    }
+    const char before = match[-1];
+    return before == '<' || before == ':';
+}
+
+bool isXmlNameBoundaryAfter(const char *match, size_t nameLength) {
+    if (match == nullptr) {
+        return false;
+    }
+    const char after = match[nameLength];
+    return after == '>' || after == ' ' || after == '\t' || after == '\r' || after == '\n' || after == '/';
+}
+
+const char *findNextProfileTokenStart(const char *from, const char **elementHintOut) {
+    if (from == nullptr) {
+        return nullptr;
+    }
+    const char *cursor = from;
+    while (*cursor != '\0') {
+        const char *profiles = strstr(cursor, "Profiles");
+        const char *profile = strstr(cursor, "Profile");
+        if (profiles == nullptr && profile == nullptr) {
+            return nullptr;
+        }
+        // Prefer Media2 <...:Profiles token=...> when both exist at the same place.
+        if (profiles != nullptr
+            && (profile == nullptr || profiles <= profile)
+            && isXmlNameBoundaryBefore(from, profiles)
+            && isXmlNameBoundaryAfter(profiles, 8)) {
+            if (elementHintOut != nullptr) {
+                *elementHintOut = "Profiles";
+            }
+            return profiles;
+        }
+        if (profile != nullptr) {
+            // Skip "Profiles" and names like ProfileToken.
+            if (strncmp(profile, "Profiles", 8) == 0) {
+                cursor = profile + 8;
+                continue;
+            }
+            if (isXmlNameBoundaryBefore(from, profile) && isXmlNameBoundaryAfter(profile, 7)) {
+                if (elementHintOut != nullptr) {
+                    *elementHintOut = "Profile";
+                }
+                return profile;
+            }
+            cursor = profile + 7;
+            continue;
+        }
+        cursor = profiles + 8;
+    }
+    return nullptr;
+}
+
+uint32_t parseProfilePixels(const char *regionStart, const char *regionEnd) {
+    if (regionStart == nullptr || regionEnd == nullptr || regionEnd <= regionStart) {
+        return 0;
+    }
+    // Bound scan to this profile region so we do not borrow the next profile's encoder size.
+    const size_t regionLength = (size_t)(regionEnd - regionStart);
+    char *regionCopy = static_cast<char *>(allocatePsram(regionLength + 1));
+    if (regionCopy == nullptr) {
+        return 0;
+    }
+    memcpy(regionCopy, regionStart, regionLength);
+    regionCopy[regionLength] = '\0';
+    char widthText[16];
+    char heightText[16];
+    widthText[0] = '\0';
+    heightText[0] = '\0';
+    extractTagText(regionCopy, "Width", widthText, sizeof(widthText));
+    extractTagText(regionCopy, "Height", heightText, sizeof(heightText));
+    free(regionCopy);
+    const unsigned long width = strtoul(widthText, nullptr, 10);
+    const unsigned long height = strtoul(heightText, nullptr, 10);
+    if (width == 0UL || height == 0UL || width > 10000UL || height > 10000UL) {
+        return 0;
+    }
+    return (uint32_t)(width * height);
+}
+
+int collectProfileCandidates(const char *profilesXml, OnvifProfileCandidate *out, int maxOut) {
+    if (profilesXml == nullptr || out == nullptr || maxOut <= 0) {
         return 0;
     }
     int count = 0;
-    const char *resume = profilesXml;
-    while (count < maxTokens) {
-        char token[64];
-        if (!extractAttribute(resume, "Profiles", "token", token, sizeof(token), &resume)) {
-            if (!extractAttribute(resume, "Profile", "token", token, sizeof(token), &resume)) {
-                break;
-            }
+    const char *searchFrom = profilesXml;
+    while (count < maxOut) {
+        const char *elementHint = nullptr;
+        const char *tokenAt = findNextProfileTokenStart(searchFrom, &elementHint);
+        if (tokenAt == nullptr || elementHint == nullptr) {
+            break;
         }
-        // Skip duplicates.
+        const char *resume = tokenAt;
+        char token[64];
+        if (!extractAttribute(resume, elementHint, "token", token, sizeof(token), &resume)) {
+            searchFrom = tokenAt + strlen(elementHint);
+            continue;
+        }
+        const char *nextHint = nullptr;
+        const char *nextStart = findNextProfileTokenStart(resume, &nextHint);
+        const char *regionEnd = nextStart != nullptr ? nextStart : (profilesXml + strlen(profilesXml));
         bool duplicate = false;
         for (int index = 0; index < count; index++) {
-            if (strcmp(tokens[index], token) == 0) {
+            if (strcmp(out[index].token, token) == 0) {
                 duplicate = true;
                 break;
             }
         }
-        if (duplicate) {
-            continue;
+        if (!duplicate) {
+            memset(&out[count], 0, sizeof(out[count]));
+            strncpy(out[count].token, token, sizeof(out[count].token) - 1);
+            out[count].pixels = parseProfilePixels(resume, regionEnd);
+            count++;
         }
-        strncpy(tokens[count], token, 63);
-        tokens[count][63] = '\0';
-        count++;
+        searchFrom = resume;
     }
     return count;
+}
+
+void sortProfileCandidatesByPixelsDesc(OnvifProfileCandidate *candidates, int count) {
+    if (candidates == nullptr || count <= 1) {
+        return;
+    }
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (candidates[j].pixels > candidates[i].pixels) {
+                OnvifProfileCandidate swap = candidates[i];
+                candidates[i] = candidates[j];
+                candidates[j] = swap;
+            }
+        }
+    }
 }
 
 bool fillUrisForProfiles(
@@ -612,32 +739,32 @@ bool fillUrisForProfiles(
     const char *mediaXmlns,
     const char *snapshotAction,
     const char *streamAction,
-    const char profileTokens[][64],
+    OnvifProfileCandidate *candidates,
     int profileCount,
     OnvifResolvedMedia *out
 ) {
-    if (mediaXaddr == nullptr || out == nullptr || profileCount <= 0) {
+    if (mediaXaddr == nullptr || out == nullptr || candidates == nullptr || profileCount <= 0) {
         return false;
     }
-    bool anyUrl = false;
-    for (int channelIndex = 0; channelIndex < profileCount && channelIndex < CAMERA_CHANNELS;
-         channelIndex++) {
+    const bool media2 = mediaXmlns != nullptr && strstr(mediaXmlns, "ver20/media") != nullptr;
+    for (int profileIndex = 0; profileIndex < profileCount; profileIndex++) {
+        OnvifProfileCandidate &candidate = candidates[profileIndex];
         char snapshotBody[256];
-        snprintf(
-            snapshotBody,
-            sizeof(snapshotBody),
-            "<trt:GetSnapshotUri xmlns:trt=\"http://www.onvif.org/ver10/media/wsdl\">"
-            "<trt:ProfileToken>%s</trt:ProfileToken></trt:GetSnapshotUri>",
-            profileTokens[channelIndex]
-        );
-        // Media2 uses tr2 prefix in some firmwares; keep trt namespaced by xmlns on the element.
-        if (mediaXmlns != nullptr && strstr(mediaXmlns, "ver20/media") != nullptr) {
+        if (media2) {
             snprintf(
                 snapshotBody,
                 sizeof(snapshotBody),
                 "<tr2:GetSnapshotUri xmlns:tr2=\"http://www.onvif.org/ver20/media/wsdl\">"
                 "<tr2:ProfileToken>%s</tr2:ProfileToken></tr2:GetSnapshotUri>",
-                profileTokens[channelIndex]
+                candidate.token
+            );
+        } else {
+            snprintf(
+                snapshotBody,
+                sizeof(snapshotBody),
+                "<trt:GetSnapshotUri xmlns:trt=\"http://www.onvif.org/ver10/media/wsdl\">"
+                "<trt:ProfileToken>%s</trt:ProfileToken></trt:GetSnapshotUri>",
+                candidate.token
             );
         }
         int status = 0;
@@ -655,58 +782,158 @@ bool fillUrisForProfiles(
             char uri[CAMERA_URL_MAX];
             uri[0] = '\0';
             if (extractTagText(snapshotXml, "Uri", uri, sizeof(uri)) && looksLikeUri(uri)) {
-                strncpy(out->snapshotUrl[channelIndex], uri, CAMERA_URL_MAX - 1);
-                anyUrl = true;
+                strncpy(candidate.snapshotUrl, uri, CAMERA_URL_MAX - 1);
             }
         }
         if (snapshotXml != nullptr) {
             free(snapshotXml);
         }
 
-        char streamBody[512];
-        if (mediaXmlns != nullptr && strstr(mediaXmlns, "ver20/media") != nullptr) {
-            snprintf(
-                streamBody,
-                sizeof(streamBody),
-                "<tr2:GetStreamUri xmlns:tr2=\"http://www.onvif.org/ver20/media/wsdl\">"
-                "<tr2:Protocol>RTSP</tr2:Protocol>"
-                "<tr2:ProfileToken>%s</tr2:ProfileToken></tr2:GetStreamUri>",
-                profileTokens[channelIndex]
-            );
-        } else {
-            snprintf(
-                streamBody,
-                sizeof(streamBody),
-                "<trt:GetStreamUri xmlns:trt=\"http://www.onvif.org/ver10/media/wsdl\" "
-                "xmlns:tt=\"http://www.onvif.org/ver10/schema\">"
-                "<trt:StreamSetup><tt:Stream>RTP-Unicast</tt:Stream>"
-                "<tt:Transport><tt:Protocol>RTSP</tt:Protocol></tt:Transport></trt:StreamSetup>"
-                "<trt:ProfileToken>%s</trt:ProfileToken></trt:GetStreamUri>",
-                profileTokens[channelIndex]
-            );
-        }
-        char *streamXml = soapCall(
-            mediaXaddr,
-            username,
-            password,
-            authMode,
-            streamAction,
-            streamBody,
-            nullptr,
-            &status
-        );
-        if (streamXml != nullptr && !xmlHasFault(streamXml)) {
-            char uri[CAMERA_URL_MAX];
-            uri[0] = '\0';
-            if (extractTagText(streamXml, "Uri", uri, sizeof(uri)) && looksLikeUri(uri)) {
-                strncpy(out->liveUrl[channelIndex], uri, CAMERA_URL_MAX - 1);
-                anyUrl = true;
+        // Prefer browser-playable HTTP(S) live URIs; keep RTSP only if no HTTP stream exists.
+        static const char *kMedia1Protocols[] = {"HTTP", "HTTPS", "RTSP"};
+        static const char *kMedia2Protocols[] = {"Http", "Https", "Rtsp"};
+        const char **protocols = media2 ? kMedia2Protocols : kMedia1Protocols;
+        const int protocolCount = media2
+            ? (int)(sizeof(kMedia2Protocols) / sizeof(kMedia2Protocols[0]))
+            : (int)(sizeof(kMedia1Protocols) / sizeof(kMedia1Protocols[0]));
+        char rtspFallback[CAMERA_URL_MAX];
+        rtspFallback[0] = '\0';
+        for (int protocolIndex = 0; protocolIndex < protocolCount; protocolIndex++) {
+            const char *protocol = protocols[protocolIndex];
+            char streamBody[512];
+            if (media2) {
+                snprintf(
+                    streamBody,
+                    sizeof(streamBody),
+                    "<tr2:GetStreamUri xmlns:tr2=\"http://www.onvif.org/ver20/media/wsdl\">"
+                    "<tr2:Protocol>%s</tr2:Protocol>"
+                    "<tr2:ProfileToken>%s</tr2:ProfileToken></tr2:GetStreamUri>",
+                    protocol,
+                    candidate.token
+                );
+            } else {
+                snprintf(
+                    streamBody,
+                    sizeof(streamBody),
+                    "<trt:GetStreamUri xmlns:trt=\"http://www.onvif.org/ver10/media/wsdl\" "
+                    "xmlns:tt=\"http://www.onvif.org/ver10/schema\">"
+                    "<trt:StreamSetup><tt:Stream>RTP-Unicast</tt:Stream>"
+                    "<tt:Transport><tt:Protocol>%s</tt:Protocol></tt:Transport></trt:StreamSetup>"
+                    "<trt:ProfileToken>%s</trt:ProfileToken></trt:GetStreamUri>",
+                    protocol,
+                    candidate.token
+                );
             }
+            char *streamXml = soapCall(
+                mediaXaddr,
+                username,
+                password,
+                authMode,
+                streamAction,
+                streamBody,
+                nullptr,
+                &status
+            );
+            if (streamXml != nullptr && !xmlHasFault(streamXml)) {
+                char uri[CAMERA_URL_MAX];
+                uri[0] = '\0';
+                if (extractTagText(streamXml, "Uri", uri, sizeof(uri)) && looksLikeUri(uri)) {
+                    const bool isHttp = strncmp(uri, "http://", 7) == 0 || strncmp(uri, "https://", 8) == 0;
+                    const bool isRtsp = strncmp(uri, "rtsp://", 7) == 0 || strncmp(uri, "rtsps://", 8) == 0;
+                    if (isHttp) {
+                        strncpy(candidate.liveUrl, uri, CAMERA_URL_MAX - 1);
+                        free(streamXml);
+                        break;
+                    }
+                    if (isRtsp && rtspFallback[0] == '\0') {
+                        strncpy(rtspFallback, uri, CAMERA_URL_MAX - 1);
+                    }
+                }
+            }
+            if (streamXml != nullptr) {
+                free(streamXml);
+            }
+            yield();
         }
-        if (streamXml != nullptr) {
-            free(streamXml);
+        if (candidate.liveUrl[0] == '\0' && rtspFallback[0] != '\0') {
+            strncpy(candidate.liveUrl, rtspFallback, CAMERA_URL_MAX - 1);
         }
         yield();
+    }
+
+    sortProfileCandidatesByPixelsDesc(candidates, profileCount);
+
+    int channelFilled = 0;
+    bool anyUrl = false;
+    for (int profileIndex = 0; profileIndex < profileCount && channelFilled < CAMERA_CHANNELS;
+         profileIndex++) {
+        const OnvifProfileCandidate &candidate = candidates[profileIndex];
+        if (candidate.snapshotUrl[0] == '\0' && candidate.liveUrl[0] == '\0') {
+            continue;
+        }
+        if (channelFilled == 0) {
+            if (candidate.snapshotUrl[0] != '\0') {
+                strncpy(out->snapshotUrl[0], candidate.snapshotUrl, CAMERA_URL_MAX - 1);
+                anyUrl = true;
+            }
+            if (candidate.liveUrl[0] != '\0') {
+                strncpy(out->liveUrl[0], candidate.liveUrl, CAMERA_URL_MAX - 1);
+                anyUrl = true;
+            }
+            channelFilled = 1;
+            continue;
+        }
+        // Channel 2: require a distinct snapshot URL when possible.
+        if (candidate.snapshotUrl[0] != '\0'
+            && (out->snapshotUrl[0][0] == '\0'
+                || strcmp(candidate.snapshotUrl, out->snapshotUrl[0]) != 0)) {
+            strncpy(out->snapshotUrl[1], candidate.snapshotUrl, CAMERA_URL_MAX - 1);
+            if (candidate.liveUrl[0] != '\0') {
+                strncpy(out->liveUrl[1], candidate.liveUrl, CAMERA_URL_MAX - 1);
+            }
+            anyUrl = true;
+            channelFilled = 2;
+            break;
+        }
+    }
+
+    // If every profile shared one snapshot URL, keep Ch2 snapshot empty and still try a
+    // different live URL from the next-highest profile.
+    if (channelFilled == 1) {
+        for (int profileIndex = 0; profileIndex < profileCount; profileIndex++) {
+            const OnvifProfileCandidate &candidate = candidates[profileIndex];
+            if (candidate.liveUrl[0] == '\0') {
+                continue;
+            }
+            if (out->liveUrl[0][0] != '\0' && strcmp(candidate.liveUrl, out->liveUrl[0]) == 0) {
+                continue;
+            }
+            strncpy(out->liveUrl[1], candidate.liveUrl, CAMERA_URL_MAX - 1);
+            anyUrl = true;
+            break;
+        }
+        if (out->snapshotUrl[0][0] != '\0' && out->snapshotUrl[1][0] == '\0') {
+            strncpy(
+                out->hint,
+                "only one distinct snapshot URL; Ch2 snapshot left empty",
+                sizeof(out->hint) - 1
+            );
+        }
+    }
+
+    auto isBrowserLive = [](const char *url) -> bool {
+        return url != nullptr
+            && (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0);
+    };
+    const bool hasRtspLive = (out->liveUrl[0][0] != '\0' && !isBrowserLive(out->liveUrl[0]))
+        || (out->liveUrl[1][0] != '\0' && !isBrowserLive(out->liveUrl[1]));
+    const bool hasHttpLive = isBrowserLive(out->liveUrl[0]) || isBrowserLive(out->liveUrl[1]);
+    if (hasRtspLive && !hasHttpLive && out->hint[0] == '\0') {
+        strncpy(
+            out->hint,
+            "live is RTSP only; set an HTTP MJPEG URL for Live widgets",
+            sizeof(out->hint) - 1
+        );
     }
     return anyUrl;
 }
@@ -816,8 +1043,15 @@ bool resolveWithAuth(
         }
     }
 
-    char profileTokens[CAMERA_CHANNELS][64];
-    memset(profileTokens, 0, sizeof(profileTokens));
+    // Keep the profile table off the worker/async stack (several KB).
+    OnvifProfileCandidate *profileCandidates = static_cast<OnvifProfileCandidate *>(
+        allocatePsram(sizeof(OnvifProfileCandidate) * CAMERA_ONVIF_PROFILES_MAX)
+    );
+    if (profileCandidates == nullptr) {
+        setError(errorText, errorMax, "out of PSRAM");
+        return false;
+    }
+    memset(profileCandidates, 0, sizeof(OnvifProfileCandidate) * CAMERA_ONVIF_PROFILES_MAX);
     int profileCount = 0;
     const char *usedMediaXaddr = nullptr;
     const char *usedMediaXmlns = nullptr;
@@ -855,7 +1089,11 @@ bool resolveWithAuth(
             }
             return false;
         }
-        profileCount = collectProfileTokens(profilesXml, profileTokens, CAMERA_CHANNELS);
+        profileCount = collectProfileCandidates(
+            profilesXml,
+            profileCandidates,
+            CAMERA_ONVIF_PROFILES_MAX
+        );
         free(profilesXml);
         if (profileCount <= 0) {
             return false;
@@ -879,7 +1117,25 @@ bool resolveWithAuth(
         if (errorText != nullptr && errorMax > 0 && errorText[0] == '\0') {
             setError(errorText, errorMax, "no media profiles");
         }
+        LOGGER.warning(
+            String("ONVIF: no media profiles for ")
+            + (out->host[0] != '\0' ? out->host : deviceServiceUrl)
+        );
+        free(profileCandidates);
         return false;
+    }
+
+    LOGGER.info(
+        String("ONVIF: ") + String(profileCount) + " profile(s) via "
+        + (usedMediaXmlns != nullptr ? usedMediaXmlns : "?")
+        + " @ " + (usedMediaXaddr != nullptr ? usedMediaXaddr : "")
+    );
+    for (int profileIndex = 0; profileIndex < profileCount; profileIndex++) {
+        LOGGER.info(
+            String("ONVIF: profile[") + String(profileIndex) + "] token="
+            + profileCandidates[profileIndex].token
+            + " pixels=" + String((unsigned)profileCandidates[profileIndex].pixels)
+        );
     }
 
     const bool anyUrl = fillUrisForProfiles(
@@ -890,19 +1146,21 @@ bool resolveWithAuth(
         usedMediaXmlns,
         snapshotAction,
         streamAction,
-        profileTokens,
+        profileCandidates,
         profileCount,
         out
     );
+    free(profileCandidates);
     if (!anyUrl) {
         setError(errorText, errorMax, "ONVIF returned no media URLs");
+        LOGGER.warning(
+            String("ONVIF: no snapshot/live URIs for ")
+            + (out->host[0] != '\0' ? out->host : deviceServiceUrl)
+        );
         return false;
     }
-    if (out->snapshotUrl[0][0] != '\0') {
-        strncpy(out->url, out->snapshotUrl[0], sizeof(out->url) - 1);
-    } else if (out->liveUrl[0][0] != '\0') {
-        strncpy(out->url, out->liveUrl[0], sizeof(out->url) - 1);
-    }
+    // Keep out->url as the ONVIF device XAddr (set earlier). Do not replace it with a
+    // snapshot CGI — the dialog URL field is what Resolve uses on the next click.
     if (out->name[0] == '\0') {
         strncpy(out->name, out->host, sizeof(out->name) - 1);
     }
@@ -949,29 +1207,63 @@ bool onvifResolveMedia(
 
     char lastError[CAMERA_STATUS_ERROR_MAX];
     lastError[0] = '\0';
+    auto authModeName = [](OnvifAuthMode mode) -> const char * {
+        switch (mode) {
+            case OnvifAuthPasswordDigest:
+                return "digest";
+            case OnvifAuthPasswordText:
+                return "text";
+            case OnvifAuthNone:
+            default:
+                return "none";
+        }
+    };
+    OnvifResolvedMedia *attempt = static_cast<OnvifResolvedMedia *>(
+        allocatePsram(sizeof(OnvifResolvedMedia))
+    );
+    if (attempt == nullptr) {
+        setError(errorText, errorMax, "out of PSRAM");
+        return false;
+    }
+    LOGGER.info(
+        String("ONVIF resolve: ") + deviceServiceUrl
+        + " auth-modes=" + String(modeCount)
+    );
     for (int modeIndex = 0; modeIndex < modeCount; modeIndex++) {
-        OnvifResolvedMedia attempt;
-        memset(&attempt, 0, sizeof(attempt));
-        strncpy(attempt.host, out->host, sizeof(attempt.host) - 1);
-        attempt.port = out->port;
-        strncpy(attempt.url, out->url, sizeof(attempt.url) - 1);
+        memset(attempt, 0, sizeof(*attempt));
+        strncpy(attempt->host, out->host, sizeof(attempt->host) - 1);
+        attempt->port = out->port;
+        strncpy(attempt->url, out->url, sizeof(attempt->url) - 1);
         char attemptError[CAMERA_STATUS_ERROR_MAX];
         attemptError[0] = '\0';
+        LOGGER.info(
+            String("ONVIF resolve: auth=") + authModeName(modes[modeIndex])
+            + " host=" + out->host
+        );
         if (resolveWithAuth(
                 deviceServiceUrl,
                 username,
                 password,
                 modes[modeIndex],
-                &attempt,
+                attempt,
                 attemptError,
                 sizeof(attemptError)
             )) {
-            *out = attempt;
+            *out = *attempt;
+            free(attempt);
             setError(errorText, errorMax, "");
-            LOGGER.info(String("ONVIF media OK for ") + out->host);
+            LOGGER.info(
+                String("ONVIF media OK for ") + out->host
+                + " via auth=" + authModeName(modes[modeIndex])
+                + (out->hint[0] != '\0' ? String(" hint=") + out->hint : String(""))
+            );
             return true;
         }
         strncpy(lastError, attemptError, sizeof(lastError) - 1);
+        LOGGER.warning(
+            String("ONVIF resolve: auth=") + authModeName(modes[modeIndex])
+            + " failed: " + attemptError
+        );
         // Only retry other auth modes on auth failures; hard transport errors stop early.
         if (strcmp(attemptError, "GetCapabilities failed") == 0) {
             break;
@@ -982,6 +1274,7 @@ bool onvifResolveMedia(
         yield();
     }
 
+    free(attempt);
     setError(errorText, errorMax, lastError[0] != '\0' ? lastError : "ONVIF resolve failed");
     LOGGER.warning(
         String("ONVIF media resolve failed for ") + out->host + ": "

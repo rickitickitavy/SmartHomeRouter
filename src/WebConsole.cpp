@@ -17,6 +17,9 @@
 #include <AsyncWebSocket.h>
 #include <Update.h>
 #include <IPAddress.h>
+#include <esp_heap_caps.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -341,7 +344,12 @@ void WebConsole::begin() {
     server.on("/api/cameras/item", HTTP_GET, [this](AsyncWebServerRequest *request) { handleCameraGet(request); });
     server.on("/api/cameras/media", HTTP_GET, [this](AsyncWebServerRequest *request) { handleCameraMediaGet(request); });
     server.on(
-        "/api/cameras/test",
+        AsyncURIMatcher::exact("/api/cameras/test/status"),
+        HTTP_GET,
+        [this](AsyncWebServerRequest *request) { handleCamerasTestStatusGet(request); }
+    );
+    server.on(
+        AsyncURIMatcher::exact("/api/cameras/test"),
         HTTP_POST,
         [this](AsyncWebServerRequest *request) { handleCamerasTestPost(request); },
         nullptr,
@@ -350,7 +358,7 @@ void WebConsole::begin() {
         }
     );
     server.on(
-        "/api/cameras/test-snapshots",
+        AsyncURIMatcher::exact("/api/cameras/test-snapshots"),
         HTTP_POST,
         [this](AsyncWebServerRequest *request) { handleCamerasTestSnapshotsPost(request); },
         nullptr,
@@ -549,10 +557,143 @@ void WebConsole::begin() {
 
 void WebConsole::rebind() {
     LOGGER.info("Rebinding web console after Wi-Fi change");
+    clearCameraHeavyOp();
     server.end();
     delay(50);
     server.begin();
     LOGGER.info("Web console rebound on port 80");
+}
+
+void WebConsole::clearCameraHeavyOp() {
+    cameraHeavyOp = CameraHeavyNone;
+    cameraHeavyRunning = false;
+    cameraHeavyDone = false;
+    if (cameraHeavyBody != nullptr) {
+        free(cameraHeavyBody);
+        cameraHeavyBody = nullptr;
+    }
+    if (cameraHeavyResult != nullptr) {
+        free(cameraHeavyResult);
+        cameraHeavyResult = nullptr;
+    }
+    // Do not delete the worker here if it is still running; it self-deletes.
+    cameraHeavyTask = nullptr;
+}
+
+bool WebConsole::queueCameraHeavyOp(CameraHeavyOp op, const String &body, String *errorOut) {
+    if (op == CameraHeavyNone) {
+        if (errorOut != nullptr) {
+            *errorOut = "bad op";
+        }
+        return false;
+    }
+    if (cameraHeavyRunning) {
+        LOGGER.warning("Camera operation busy (worker running)");
+        if (errorOut != nullptr) {
+            *errorOut = "Camera operation busy";
+        }
+        return false;
+    }
+    // Drop an unread prior result so a new Resolve can start.
+    if (cameraHeavyDone || cameraHeavyResult != nullptr) {
+        if (cameraHeavyResult != nullptr) {
+            free(cameraHeavyResult);
+            cameraHeavyResult = nullptr;
+        }
+        cameraHeavyDone = false;
+        cameraHeavyOp = CameraHeavyNone;
+    }
+    const size_t bodyBytes = body.length() + 1;
+    char *copy = static_cast<char *>(
+        heap_caps_malloc(bodyBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+    );
+    if (copy == nullptr) {
+        copy = static_cast<char *>(ps_malloc(bodyBytes));
+    }
+    if (copy == nullptr) {
+        if (errorOut != nullptr) {
+            *errorOut = "Out of memory";
+        }
+        return false;
+    }
+    memcpy(copy, body.c_str(), bodyBytes);
+    cameraHeavyBody = copy;
+    cameraHeavyResult = nullptr;
+    cameraHeavyOp = op;
+    cameraHeavyDone = false;
+    cameraHeavyRunning = true;
+    // HTTPClient + SOAP locals are large; keep well above async_tcp / loop stacks.
+    constexpr uint32_t kCameraHeavyStackWords = 16384;  // 64 KB
+    const BaseType_t created = xTaskCreatePinnedToCore(
+        cameraHeavyWorkerTask,
+        "camOnvif",
+        kCameraHeavyStackWords,
+        this,
+        1,
+        &cameraHeavyTask,
+        1
+    );
+    if (created != pdPASS) {
+        cameraHeavyRunning = false;
+        cameraHeavyTask = nullptr;
+        free(cameraHeavyBody);
+        cameraHeavyBody = nullptr;
+        cameraHeavyOp = CameraHeavyNone;
+        if (errorOut != nullptr) {
+            *errorOut = "Camera worker start failed";
+        }
+        return false;
+    }
+    LOGGER.info(
+        String("Camera ")
+        + (op == CameraHeavyResolve ? "resolve" : "test")
+        + ": queued on camOnvif worker (poll /api/cameras/test/status)"
+    );
+    return true;
+}
+
+void WebConsole::cameraHeavyWorkerTask(void *param) {
+    WebConsole *self = static_cast<WebConsole *>(param);
+    if (self == nullptr) {
+        vTaskDelete(nullptr);
+        return;
+    }
+    char *body = self->cameraHeavyBody;
+    self->cameraHeavyBody = nullptr;
+    const CameraHeavyOp op = self->cameraHeavyOp;
+    String json;
+    if (self->cameraStore == nullptr) {
+        json = "{\"ok\":false,\"error\":\"Cameras unavailable\"}";
+    } else if (op == CameraHeavyResolve) {
+        json = self->cameraStore->testOnvifJson(body);
+    } else if (op == CameraHeavyTestSnapshots) {
+        json = self->cameraStore->testSnapshotsJson(body);
+    } else {
+        json = "{\"ok\":false,\"error\":\"bad op\"}";
+    }
+    if (body != nullptr) {
+        free(body);
+    }
+    const size_t resultBytes = json.length() + 1;
+    char *result = static_cast<char *>(
+        heap_caps_malloc(resultBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+    );
+    if (result == nullptr) {
+        result = static_cast<char *>(ps_malloc(resultBytes));
+    }
+    if (result != nullptr) {
+        memcpy(result, json.c_str(), resultBytes);
+    }
+    self->cameraHeavyResult = result;
+    self->cameraHeavyRunning = false;
+    self->cameraHeavyDone = true;
+    self->cameraHeavyTask = nullptr;
+    LOGGER.info(
+        String("Camera ")
+        + (op == CameraHeavyResolve ? "resolve" : "test")
+        + ": worker done (waiting for status poll)"
+    );
+    vTaskDelete(nullptr);
 }
 
 void WebConsole::loop() {
@@ -1844,10 +1985,12 @@ void WebConsole::handleCamerasTestPost(AsyncWebServerRequest *request) {
         request->send(500, "text/plain", "Cameras unavailable");
         return;
     }
-    String json = cameraStore->testOnvifJson(body.c_str());
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    String errorText;
+    if (!queueCameraHeavyOp(CameraHeavyResolve, body, &errorText)) {
+        request->send(503, "text/plain", errorText.length() > 0 ? errorText : "Camera operation busy");
+        return;
+    }
+    request->send(200, "application/json", "{\"accepted\":true,\"op\":\"resolve\"}");
 }
 
 void WebConsole::handleCamerasTestSnapshotsPost(AsyncWebServerRequest *request) {
@@ -1862,10 +2005,54 @@ void WebConsole::handleCamerasTestSnapshotsPost(AsyncWebServerRequest *request) 
         request->send(500, "text/plain", "Cameras unavailable");
         return;
     }
-    String json = cameraStore->testSnapshotsJson(body.c_str());
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    String errorText;
+    if (!queueCameraHeavyOp(CameraHeavyTestSnapshots, body, &errorText)) {
+        request->send(503, "text/plain", errorText.length() > 0 ? errorText : "Camera operation busy");
+        return;
+    }
+    request->send(200, "application/json", "{\"accepted\":true,\"op\":\"test\"}");
+}
+
+void WebConsole::handleCamerasTestStatusGet(AsyncWebServerRequest *request) {
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (cameraHeavyRunning) {
+        AsyncWebServerResponse *response = request->beginResponse(
+            200,
+            "application/json",
+            "{\"done\":false,\"running\":true}"
+        );
+        response->addHeader("Cache-Control", "no-store");
+        request->send(response);
+        return;
+    }
+    if (!cameraHeavyDone) {
+        AsyncWebServerResponse *response = request->beginResponse(
+            200,
+            "application/json",
+            "{\"done\":false,\"running\":false}"
+        );
+        response->addHeader("Cache-Control", "no-store");
+        request->send(response);
+        return;
+    }
+    char *result = cameraHeavyResult;
+    cameraHeavyResult = nullptr;
+    cameraHeavyDone = false;
+    cameraHeavyOp = CameraHeavyNone;
+    const char *payload =
+        result != nullptr ? result : "{\"ok\":false,\"error\":\"out of memory\",\"done\":true}";
+    // Wrap/ensure done:true for the UI — result JSON already has ok/error/channels.
+    String wrapped = "{\"done\":true,\"result\":";
+    wrapped += payload;
+    wrapped += "}";
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", wrapped);
     response->addHeader("Cache-Control", "no-store");
     request->send(response);
+    if (result != nullptr) {
+        free(result);
+    }
 }
 
 void WebConsole::handleCamerasDiscoverStopPost(AsyncWebServerRequest *request) {

@@ -1160,6 +1160,23 @@ html, body {
     white-space: nowrap;
 }
 
+/* Cameras Active: compact checkbox column (display-only; edit via dialog). */
+#section-cameras .data-table th.col-check,
+#section-cameras .data-table td.col-check {
+    width: 1%;
+    min-width: 3rem;
+    max-width: 4rem;
+    text-align: left;
+    padding-left: 0.45rem;
+    padding-right: 0.45rem;
+    vertical-align: middle;
+}
+
+#section-cameras .data-table td.col-check input[type="checkbox"] {
+    margin: 0;
+    vertical-align: middle;
+}
+
 .user-data-field-actions {
     white-space: nowrap;
     width: 1%;

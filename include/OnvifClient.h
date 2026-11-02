@@ -14,10 +14,13 @@ struct OnvifResolvedMedia {
     uint16_t port;
     char snapshotUrl[CAMERA_CHANNELS][CAMERA_URL_MAX];
     char liveUrl[CAMERA_CHANNELS][CAMERA_URL_MAX];
+    // Non-fatal Resolve note (e.g. only one distinct snapshot URL).
+    char hint[CAMERA_SNAPSHOT_HINT_MAX];
 };
 
 // deviceServiceUrl: ONVIF device XAddr (from WS-Discovery).
-// username/password may be empty. Fills up to CAMERA_CHANNELS media profiles.
+// username/password may be empty. Fills up to CAMERA_CHANNELS media URLs:
+// ranks ONVIF profiles by encoder resolution and prefers distinct snapshot URLs.
 bool onvifResolveMedia(
     const char *deviceServiceUrl,
     const char *username,

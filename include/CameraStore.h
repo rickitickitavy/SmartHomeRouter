@@ -118,8 +118,10 @@ public:
     void refreshAllStatus();
     static const char *statusText(const CameraRecord *camera);  // "offline" | "online" | error text
 
-    // ONVIF WS-Discovery only (UDP multicast). Does not resolve snapshot/live URLs.
-    // Discovered list is PSRAM-only; Start clears it. tickDiscovery must run on the host loop.
+    // ONVIF discover: WS-Discovery then a light HTTP subnet sweep for device_service.
+    // Discovered list is PSRAM-only; Start clears it.
+    // start/stop/clear only queue work — WiFiUDP is touched solely from tickDiscovery (host loop)
+    // to avoid LoadProhibited races with AsyncWebServer.
     bool startDiscovery(uint8_t cameraType);
     void stopDiscovery();
     // Stop any in-flight discover and drop the discovered table (open-dialog reset).
@@ -162,12 +164,20 @@ private:
     int discoveredStoredCount;
     bool discovering;
     bool discoveryUdpPhase;
+    bool discoveryHttpPhase;
     uint8_t discoveryType;
     uint32_t discoveryStartedMs;
     uint32_t discoveryLastProbeMs;
     uint8_t discoveryProbeRound;
     WiFiUDP discoveryUdp;
     bool discoveryUdpOpen;
+    // 0=none, 1=start, 2=stop, 3=clear — set by web handlers, consumed in tickDiscovery.
+    volatile uint8_t discoveryCommand;
+    uint8_t discoveryCommandType;
+    uint8_t discoveryScanOctet;
+    IPAddress discoveryScanBase;
+    uint8_t discoveryScanSelfOctet;
+    uint8_t discoveryHttpPortIndex;
 
     bool loadFromFile();
     bool saveToFile() const;
@@ -181,6 +191,13 @@ private:
     bool sendDiscoveryProbe(uint8_t probeKind);
     void sendDiscoveryProbeRound();
     void drainDiscoveryUdp();
+    void applyDiscoveryCommand();
+    bool beginDiscoveryUdp();
+    void endDiscoveryUdp();
+    void beginDiscoveryHttpScan();
+    void tickDiscoveryHttpScan();
+    bool probeOnvifHttpHost(const char *host, uint16_t port, char *xaddrOut, size_t xaddrMax);
+    bool addDiscoveredCamera(const char *name, const char *host, uint16_t port, const char *xaddr);
 
     static CameraRecord *allocateRecord();
     static DiscoveredCamera *allocateDiscovered();

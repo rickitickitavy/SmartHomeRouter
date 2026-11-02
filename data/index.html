@@ -296,10 +296,6 @@
                 "statusMqttTopics",
                 payload && payload.mqttTopicCount != null ? String(payload.mqttTopicCount) : "—"
             );
-            setStatusText(
-                "statusMqttConnections",
-                payload && payload.mqttConnectionCount != null ? String(payload.mqttConnectionCount) : "—"
-            );
             setStatusText("statusWifiMode", payload && payload.wifiMode ? payload.wifiMode : "—");
             setStatusText("statusWifiBssid", payload && payload.wifiBssid ? payload.wifiBssid : "—");
             setStatusText("statusWifiStaMac", payload && payload.wifiStaMac ? payload.wifiStaMac : "—");
@@ -10652,7 +10648,15 @@
                     };
                 })(camera);
                 var activeCell = document.createElement("td");
-                activeCell.textContent = camera.active ? "yes" : "no";
+                activeCell.className = "col-check";
+                var activeCheck = document.createElement("input");
+                activeCheck.type = "checkbox";
+                activeCheck.checked = !!camera.active;
+                activeCheck.disabled = true;
+                activeCheck.tabIndex = -1;
+                activeCheck.title = camera.active ? "Active" : "Inactive";
+                activeCheck.setAttribute("aria-label", camera.active ? "Active" : "Inactive");
+                activeCell.appendChild(activeCheck);
                 var nameCell = document.createElement("td");
                 nameCell.textContent = camera.name || "";
                 var typeCell = document.createElement("td");
@@ -10668,6 +10672,47 @@
                 tableRow.appendChild(statusCell);
                 body.appendChild(tableRow);
             }
+        }
+
+        function cameraUrlLooksOnvif(url) {
+            if (!url) {
+                return false;
+            }
+            return /\/onvif\//i.test(url)
+                || /device_service/i.test(url)
+                || /media_service/i.test(url);
+        }
+
+        /* ONVIF device URL is never typed by the operator — filled from Discover, Host/Port, or Resolve. */
+        function syncCameraDialogDeviceUrl() {
+            var hostEl = document.getElementById("cameraHost");
+            var portEl = document.getElementById("cameraPort");
+            var urlEl = document.getElementById("cameraUrl");
+            if (!hostEl || !portEl || !urlEl) {
+                return;
+            }
+            var host = hostEl.value.trim();
+            if (!host) {
+                return;
+            }
+            var portValue = parseInt(portEl.value, 10);
+            if (isNaN(portValue) || portValue < 1 || portValue > 65535) {
+                portValue = 80;
+            }
+            var current = urlEl.value.trim();
+            if (cameraUrlLooksOnvif(current)) {
+                var match = current.match(/^https?:\/\/([^/:]+)(?::(\d+))?(\/.*)?$/i);
+                if (match && match[1].toLowerCase() === host.toLowerCase()) {
+                    var urlPort = match[2] ? parseInt(match[2], 10) : 80;
+                    if (urlPort === portValue) {
+                        return;
+                    }
+                    var path = match[3] || "/onvif/device_service";
+                    urlEl.value = "http://" + host + ":" + portValue + path;
+                    return;
+                }
+            }
+            urlEl.value = "http://" + host + ":" + portValue + "/onvif/device_service";
         }
 
         function fillCameraDialog(camera) {
@@ -10687,6 +10732,7 @@
             document.getElementById("cameraChannel1Live").value = channel1.liveUrl || "";
             document.getElementById("cameraChannel2Snapshot").value = channel2.snapshotUrl || "";
             document.getElementById("cameraChannel2Live").value = channel2.liveUrl || "";
+            syncCameraDialogDeviceUrl();
         }
 
         function readCameraDialogBody() {
@@ -10713,21 +10759,66 @@
             };
         }
 
+        function clearCameraDialogMessages() {
+            var errorLine = document.getElementById("cameraDialogError");
+            var successLine = document.getElementById("cameraDialogSuccess");
+            if (errorLine) {
+                errorLine.hidden = true;
+                errorLine.textContent = "";
+            }
+            if (successLine) {
+                successLine.hidden = true;
+                successLine.textContent = "";
+            }
+        }
+
         function showCameraDialogError(message) {
             var errorLine = document.getElementById("cameraDialogError");
+            var successLine = document.getElementById("cameraDialogSuccess");
+            if (successLine) {
+                successLine.hidden = true;
+                successLine.textContent = "";
+            }
             if (!errorLine) {
+                return;
+            }
+            if (!message) {
+                errorLine.hidden = true;
+                errorLine.textContent = "";
                 return;
             }
             errorLine.hidden = false;
             errorLine.textContent = message;
+            if (typeof errorLine.scrollIntoView === "function") {
+                errorLine.scrollIntoView({ block: "nearest", behavior: "smooth" });
+            }
+        }
+
+        function showCameraDialogSuccess(message) {
+            var errorLine = document.getElementById("cameraDialogError");
+            var successLine = document.getElementById("cameraDialogSuccess");
+            if (errorLine) {
+                errorLine.hidden = true;
+                errorLine.textContent = "";
+            }
+            if (!successLine) {
+                return;
+            }
+            if (!message) {
+                successLine.hidden = true;
+                successLine.textContent = "";
+                return;
+            }
+            successLine.hidden = false;
+            successLine.textContent = message;
+            if (typeof successLine.scrollIntoView === "function") {
+                successLine.scrollIntoView({ block: "nearest", behavior: "smooth" });
+            }
         }
 
         /* Add opens an in-memory draft only; the camera exists after the first successful Save. */
         function openCameraDialog(cameraId, draftCamera) {
-            var errorLine = document.getElementById("cameraDialogError");
-            if (errorLine) {
-                errorLine.hidden = true;
-            }
+            clearCameraDialogMessages();
             setCamerasSuccess("");
             var isEdit = !!cameraId;
             var loadCamera = isEdit
@@ -10950,14 +11041,47 @@
             openCameraDialog("", draft);
         }
 
-        function resolveCameraDialogOnvif() {
-            var errorLine = document.getElementById("cameraDialogError");
-            if (errorLine) {
-                errorLine.hidden = true;
+        function pollCameraHeavyStatus(deadlineMs) {
+            function once() {
+                if (Date.now() > deadlineMs) {
+                    return Promise.reject(new Error("timed out — check camera credentials/network"));
+                }
+                return fetch("/api/cameras/test/status", { cache: "no-store" }).then(function (response) {
+                    return response.text().then(function (text) {
+                        if (!response.ok) {
+                            throw new Error(text || ("HTTP " + response.status));
+                        }
+                        return JSON.parse(text || "{}");
+                    });
+                }).then(function (status) {
+                    if (status && status.done) {
+                        return status.result || status;
+                    }
+                    return new Promise(function (resolve) {
+                        window.setTimeout(resolve, 300);
+                    }).then(once);
+                });
             }
+            return once();
+        }
+
+        function resolveCameraDialogOnvif() {
+            clearCameraDialogMessages();
+            syncCameraDialogDeviceUrl();
             var body = readCameraDialogBody();
+            if (!body.host) {
+                showCameraDialogError("Enter Host (or Add from Discover), then Resolve");
+                return;
+            }
+            if (!body.username) {
+                showCameraDialogError("Enter Username/Password, then Resolve");
+                return;
+            }
             var resolveBtn = document.getElementById("cameraResolveBtn");
             if (resolveBtn) {
+                if (resolveBtn.disabled) {
+                    return;
+                }
                 resolveBtn.disabled = true;
             }
             fetch("/api/cameras/test", {
@@ -10973,10 +11097,15 @@
             }).then(function (response) {
                 return response.text().then(function (text) {
                     if (!response.ok) {
+                        if (response.status === 503 && /busy/i.test(text || "")) {
+                            throw new Error("Resolve still running — wait and try again");
+                        }
                         throw new Error(text || ("HTTP " + response.status));
                     }
                     return JSON.parse(text || "{}");
                 });
+            }).then(function () {
+                return pollCameraHeavyStatus(Date.now() + 120000);
             }).then(function (result) {
                 if (!result || !result.ok) {
                     throw new Error((result && result.error) ? result.error : "ONVIF resolve failed");
@@ -10987,19 +11116,30 @@
                 if (result.name && !document.getElementById("cameraName").value.trim()) {
                     document.getElementById("cameraName").value = result.name;
                 }
-                if (result.url) {
-                    document.getElementById("cameraUrl").value = result.url;
-                }
                 if (result.host) {
                     document.getElementById("cameraHost").value = result.host;
                 }
                 if (result.port) {
                     document.getElementById("cameraPort").value = String(result.port);
                 }
-                document.getElementById("cameraChannel1Snapshot").value = channel1.snapshotUrl || "";
+                // Always store the working ONVIF device XAddr (never a snapshot CGI).
+                if (result.url && cameraUrlLooksOnvif(result.url)) {
+                    document.getElementById("cameraUrl").value = result.url;
+                } else {
+                    syncCameraDialogDeviceUrl();
+                }
+                var ch1Snap = channel1.snapshotUrl || "";
+                var ch2Snap = channel2.snapshotUrl || "";
+                if (ch2Snap && ch1Snap && ch2Snap === ch1Snap) {
+                    ch2Snap = "";
+                }
+                document.getElementById("cameraChannel1Snapshot").value = ch1Snap;
                 document.getElementById("cameraChannel1Live").value = channel1.liveUrl || "";
-                document.getElementById("cameraChannel2Snapshot").value = channel2.snapshotUrl || "";
+                document.getElementById("cameraChannel2Snapshot").value = ch2Snap;
                 document.getElementById("cameraChannel2Live").value = channel2.liveUrl || "";
+                if (result.hint) {
+                    showCameraDialogError(result.hint);
+                }
             }).catch(function (error) {
                 showCameraDialogError(error && error.message ? error.message : "ONVIF resolve failed");
             }).then(function () {
@@ -11009,14 +11149,29 @@
             });
         }
 
-        function testCameraDialogSnapshots() {
-            var errorLine = document.getElementById("cameraDialogError");
-            if (errorLine) {
-                errorLine.hidden = true;
+        function formatCameraTestBytes(bytes) {
+            var size = typeof bytes === "number" ? bytes : parseInt(bytes, 10);
+            if (isNaN(size) || size < 0) {
+                size = 0;
             }
+            // Test probe buffer is 64 KiB — hitting the cap means JPEG is at least that large.
+            if (size >= 65536) {
+                return "≥64 KiB JPEG (probe cap)";
+            }
+            if (size >= 1024) {
+                return Math.round(size / 1024) + " KiB JPEG";
+            }
+            return size + " B JPEG";
+        }
+
+        function testCameraDialogSnapshots() {
+            clearCameraDialogMessages();
             var body = readCameraDialogBody();
             var testBtn = document.getElementById("cameraTestBtn");
             if (testBtn) {
+                if (testBtn.disabled) {
+                    return;
+                }
                 testBtn.disabled = true;
             }
             fetch("/api/cameras/test-snapshots", {
@@ -11031,10 +11186,15 @@
             }).then(function (response) {
                 return response.text().then(function (text) {
                     if (!response.ok) {
+                        if (response.status === 503 && /busy/i.test(text || "")) {
+                            throw new Error("Test still running — wait and try again");
+                        }
                         throw new Error(text || ("HTTP " + response.status));
                     }
                     return JSON.parse(text || "{}");
                 });
+            }).then(function () {
+                return pollCameraHeavyStatus(Date.now() + 120000);
             }).then(function (result) {
                 var channels = Array.isArray(result.channels) ? result.channels : [];
                 var parts = [];
@@ -11045,15 +11205,17 @@
                     if (channel.skipped) {
                         parts.push(label + " skipped");
                     } else if (channel.ok) {
-                        parts.push(label + " OK (" + (channel.bytes || 0) + " B JPEG)");
+                        parts.push(label + " OK (" + formatCameraTestBytes(channel.bytes) + ")");
                     } else {
                         parts.push(label + " FAIL: " + (channel.error || "error"));
                     }
                 }
+                var summary = parts.length ? parts.join("; ") : (result && result.error) || "Snapshot test failed";
                 if (!result || !result.ok) {
-                    throw new Error(parts.length ? parts.join("; ") : (result.error || "Snapshot test failed"));
+                    throw new Error(summary);
                 }
-                setCamerasSuccess(parts.length ? ("Snapshots: " + parts.join("; ")) : "Snapshots OK");
+                showCameraDialogSuccess("Test OK: " + summary);
+                setCamerasSuccess("Snapshots: " + summary);
             }).catch(function (error) {
                 showCameraDialogError(error && error.message ? error.message : "Snapshot test failed");
             }).then(function () {
@@ -11091,10 +11253,7 @@
         }
 
         function saveCameraDialog() {
-            var errorLine = document.getElementById("cameraDialogError");
-            if (errorLine) {
-                errorLine.hidden = true;
-            }
+            clearCameraDialogMessages();
             var body = readCameraDialogBody();
             if (!body.name) {
                 showCameraDialogError("Camera name is required");
@@ -12484,6 +12643,17 @@
                 if (!url) {
                     showUnavailable();
                     return;
+                }
+                if (mode === "live") {
+                    var liveHttp = /^https?:\/\//i.test(url);
+                    if (!liveHttp) {
+                        host.innerHTML = "";
+                        var liveNote = document.createElement("div");
+                        liveNote.className = "console-camera-placeholder";
+                        liveNote.textContent = "Live needs an HTTP URL";
+                        host.appendChild(liveNote);
+                        return;
+                    }
                 }
                 var img = document.createElement("img");
                 img.className = "console-camera-img";
@@ -16209,11 +16379,11 @@
                                 <p id="statusOnlineTime" class="status-value">—</p>
                             </div>
                             <div class="status-row">
-                                <span class="status-row-label">Master</span>
+                                <span class="status-row-label">Version</span>
                                 <p id="statusMasterFirmwareVersion" class="status-value">—</p>
                             </div>
                             <div class="status-row">
-                                <span class="status-row-label">Slave</span>
+                                <span class="status-row-label">RF f/w version</span>
                                 <p id="statusSlaveFirmwareVersion" class="status-value">—</p>
                             </div>
                         </div>
@@ -16264,10 +16434,6 @@
                             <div class="status-row">
                                 <span class="status-row-label">Active topics</span>
                                 <p id="statusMqttTopics" class="status-value">—</p>
-                            </div>
-                            <div class="status-row">
-                                <span class="status-row-label">Connections</span>
-                                <p id="statusMqttConnections" class="status-value">—</p>
                             </div>
                         </div>
                     </div>
@@ -16650,7 +16816,7 @@
                 <table class="data-table selectable">
                     <thead>
                         <tr>
-                            <th>Active</th>
+                            <th class="col-check">Active</th>
                             <th>Name</th>
                             <th>Type</th>
                             <th>URL</th>
@@ -17332,6 +17498,7 @@
     <div class="dialog-panel user-dialog-panel" role="dialog" aria-label="Camera">
         <h3 id="cameraDialogTitle" class="upload-title">Add camera</h3>
         <p id="cameraDialogError" class="save-error" hidden></p>
+        <p id="cameraDialogSuccess" class="save-success" hidden></p>
         <div class="user-dialog-body">
             <div class="field">
                 <label for="cameraName">Name</label>
@@ -17348,16 +17515,19 @@
                 </select>
             </div>
             <div class="field">
-                <label for="cameraUrl">URL</label>
-                <input id="cameraUrl" type="text" autocomplete="off">
+                <label for="cameraUrl">ONVIF device URL</label>
+                <input id="cameraUrl" type="text" autocomplete="off" readonly
+                    title="Filled automatically from Discover, Host/Port, or Resolve">
             </div>
             <div class="field">
                 <label for="cameraHost">Host</label>
-                <input id="cameraHost" type="text" autocomplete="off">
+                <input id="cameraHost" type="text" autocomplete="off"
+                    oninput="syncCameraDialogDeviceUrl()">
             </div>
             <div class="field">
                 <label for="cameraPort">Port</label>
-                <input id="cameraPort" type="number" min="1" max="65535" step="1" value="80">
+                <input id="cameraPort" type="number" min="1" max="65535" step="1" value="80"
+                    oninput="syncCameraDialogDeviceUrl()">
             </div>
             <div class="field">
                 <label for="cameraUsername">Username</label>

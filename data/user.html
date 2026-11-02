@@ -2309,6 +2309,17 @@
                     showUnavailable();
                     return;
                 }
+                if (mode === "live") {
+                    var liveHttp = /^https?:\/\//i.test(url);
+                    if (!liveHttp) {
+                        host.innerHTML = "";
+                        var liveNote = document.createElement("div");
+                        liveNote.className = "console-camera-placeholder";
+                        liveNote.textContent = "Live needs an HTTP URL";
+                        host.appendChild(liveNote);
+                        return;
+                    }
+                }
                 var img = document.createElement("img");
                 img.className = "console-camera-img";
                 img.alt = "";

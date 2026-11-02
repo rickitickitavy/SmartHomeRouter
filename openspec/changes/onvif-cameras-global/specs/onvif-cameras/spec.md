@@ -35,6 +35,23 @@ For type ONVIF, settings MUST include credentials/endpoint fields needed to reac
 - **WHEN** the operator opens the camera dialog
 - **THEN** Type offers ONVIF and does not accept a typed custom type string
 
+### Requirement: ONVIF Resolve prefers distinct high-res snapshots
+Resolve MUST collect multiple media profiles (not only two), rank them by video encoder Width×Height when present, request snapshot/live URIs per profile, and assign channel 1 / channel 2 from the highest-resolution profiles that yield **distinct** snapshot URLs. When every profile returns the same snapshot URL, channel 1 MUST keep that snapshot, channel 2 snapshot MUST stay empty, Resolve MUST return a short non-fatal hint, and channel 2 live MAY still use a different stream URI when available. Resolve MUST fill the dialog from those ONVIF URIs and MUST NOT HTTP-GET/probe snapshot URLs during Resolve; snapshot fetch checks are only via explicit Test.
+
+### Requirement: Discover uses WS-Discovery then HTTP sweep
+Discover MUST run ONVIF WS-Discovery on the host loop only (no WiFiUDP from AsyncWebServer tasks). After the multicast window, Discover MUST sweep the local /24 for HTTP `POST /onvif/device_service` on ports 80 and 8080 with short connect timeouts. A host MUST be added only when the HTTP response body shows ONVIF/SOAP markers (not a generic HTTP 200 or HTML login page). Discover MUST NOT block the host loop with multi-hundred-millisecond drain delay loops.
+
+### Requirement: ONVIF Resolve prefers HTTP live streams
+For each profile, Resolve MUST try GetStreamUri with HTTP/HTTPS protocols before RTSP and MUST store a browser-playable `http(s)://` live URL when the camera returns one. When only RTSP is available, Resolve MAY store the RTSP URI and MUST return a short non-fatal hint that Live widgets need an HTTP MJPEG URL. Console Live mode MUST NOT fall back to the snapshot URL.
+
+#### Scenario: Distinct snapshots map to both channels
+- **WHEN** Resolve finds two profiles with different snapshot URIs
+- **THEN** channel 1 is the higher-resolution profile’s URLs and channel 2 is the next distinct-snapshot profile
+
+#### Scenario: Shared snapshot leaves Ch2 snapshot empty
+- **WHEN** Resolve finds profiles but only one distinct snapshot URI
+- **THEN** channel 2 snapshot URL is empty and the Resolve response includes a hint explaining that
+
 ### Requirement: Camera status values
 Status MUST be Offline when the camera is not active. When active, status MUST be Online when a lightweight reachability check succeeds, or a short error string when it fails. Reachability MUST NOT store a captured image in internal RAM.
 

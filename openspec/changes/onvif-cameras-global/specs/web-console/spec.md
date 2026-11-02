@@ -14,11 +14,19 @@ The operator console MUST include a main sidebar section **Cameras** visible onl
 - **THEN** Cameras is not shown
 
 ### Requirement: Camera dialog fields
-Add and row edit MUST open a camera dialog with Name, Active, Type (dropdown; ONVIF only), and ONVIF settings including two channels (snapshot URL and live URL each). Save MUST be the first persist of a new camera. Closing MUST follow the same dirty-check and dismiss rules as other dialogs. Delete MUST ask for confirmation.
+Add and row edit MUST open a camera dialog with Name, Active, Type (dropdown; ONVIF only), and ONVIF settings including two channels (snapshot URL and live URL each). The ONVIF device URL field MUST be readonly and auto-filled from Discover XAddr, Host/Port (`http://host:port/onvif/device_service`), or a successful Resolve — the operator MUST NOT have to type a device-service path. Save MUST be the first persist of a new camera. Closing MUST follow the same dirty-check and dismiss rules as other dialogs. Delete MUST ask for confirmation.
 
 #### Scenario: Add then Save
 - **WHEN** the operator clicks Add, fills Name and ONVIF URLs, and Saves
 - **THEN** the table shows the new camera and a reload still shows it
+
+#### Scenario: Device URL auto-fill from Host
+- **WHEN** the operator enters Host and Port with an empty or non-ONVIF URL
+- **THEN** the ONVIF device URL field is filled with `http://{host}:{port}/onvif/device_service`
+
+#### Scenario: Device URL from Discover
+- **WHEN** the operator Adds a discovered camera
+- **THEN** the ONVIF device URL field is filled with that camera’s discovery XAddr
 
 #### Scenario: Type dropdown
 - **WHEN** the operator opens the dialog
@@ -41,6 +49,10 @@ Place view-mode and the simple-user page MUST render camera cells the same way: 
 #### Scenario: Live mode uses live URL
 - **WHEN** the cell mode is live video and channel 1 has an HTTP live URL
 - **THEN** the browser loads that live URL (not the snapshot URL) for display
+
+#### Scenario: Live mode rejects non-HTTP URL
+- **WHEN** the cell mode is live video and the channel live URL is RTSP or otherwise not http(s)
+- **THEN** the console shows that Live needs an HTTP URL and MUST NOT load the snapshot URL instead
 
 ### Requirement: Email action camera attachment controls
 When an action target is **e-mail**, the Actions row MUST offer a camera-snapshot attach list using the same Add/row/remove controls pattern as email device parameters: each row picks a camera and channel (1 or 2); the operator MAY add multiple rows (at most eight). Switching target away from e-mail MUST hide those controls.

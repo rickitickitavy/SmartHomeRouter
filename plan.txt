@@ -1,6 +1,4 @@
 1) hardware brownout
-
 --- 8) historical chart
 5) new action: HTTP request
 decrease requirement of minimal width of widget
-recoonect to UI

@@ -2,6 +2,8 @@
 
 #include <ESPAsyncWebServer.h>
 #include <AsyncWebSocket.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include "SettingsManager.h"
 #include "FoundDeviceList.h"
 #include "UserStore.h"
@@ -176,7 +178,24 @@ private:
     void handleCamerasDiscoverClearPost(AsyncWebServerRequest *request);
     void handleCamerasTestPost(AsyncWebServerRequest *request);
     void handleCamerasTestSnapshotsPost(AsyncWebServerRequest *request);
+    void handleCamerasTestStatusGet(AsyncWebServerRequest *request);
     void sendCameraWriteResult(AsyncWebServerRequest *request, CameraWriteResult result);
+    // ONVIF Resolve/Test: never hold AsyncWebServerRequest across the worker (UAF / client gone).
+    // POST accepts the job immediately; UI polls GET /api/cameras/test/status for JSON result.
+    enum CameraHeavyOp : uint8_t {
+        CameraHeavyNone = 0,
+        CameraHeavyResolve,
+        CameraHeavyTestSnapshots
+    };
+    bool queueCameraHeavyOp(CameraHeavyOp op, const String &body, String *errorOut);
+    void clearCameraHeavyOp();
+    static void cameraHeavyWorkerTask(void *param);
+    CameraHeavyOp cameraHeavyOp = CameraHeavyNone;
+    char *cameraHeavyBody = nullptr;
+    char *cameraHeavyResult = nullptr;
+    volatile bool cameraHeavyRunning = false;
+    volatile bool cameraHeavyDone = false;
+    TaskHandle_t cameraHeavyTask = nullptr;
     void fillUserFromJson(const char *json, UserRecord *user);
     void sendUserWriteResult(AsyncWebServerRequest *request, UserWriteResult result);
     void sendConsoleWriteResult(AsyncWebServerRequest *request, ConsoleWriteResult result);
