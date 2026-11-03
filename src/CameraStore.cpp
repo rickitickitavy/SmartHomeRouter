@@ -1653,6 +1653,8 @@ void CameraStore::appendCameraListItemJson(PsramJsonBuffer &json, const CameraRe
     json += camera->active ? "true" : "false";
     json += ",\"type\":\"onvif\",\"url\":\"";
     appendJsonEscaped(json, camera->url, CAMERA_URL_MAX);
+    json += "\",\"host\":\"";
+    appendJsonEscaped(json, camera->onvif.host, CAMERA_HOST_MAX);
     json += "\",\"status\":\"";
     appendJsonEscaped(json, statusText(camera), CAMERA_STATUS_ERROR_MAX);
     json += "\"}";

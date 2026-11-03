@@ -99,7 +99,7 @@ public:
     CameraWriteResult replaceAllFromJson(const char *arrayJson);
     CameraWriteResult replaceAllFromJson(const String &arrayJson);
 
-    // includeSecrets=false -> list shape: id,name,active,type,url,status.
+    // includeSecrets=false -> list shape: id,name,active,type,url,host,status.
     // includeSecrets=true  -> full shape incl. host,port,username,password,channels.
     // Returns an empty String on allocation failure.
     String listJson(bool includeSecrets) const;
