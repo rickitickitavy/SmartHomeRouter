@@ -1,4 +1,5 @@
 #include "ZigbeeSpiProxy.h"
+#include "AutomationParam.h"
 #include "BoundDeviceJson.h"
 #include "InterChipHost.h"
 #include "JsonField.h"
@@ -284,6 +285,8 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
     unsigned long parsedValue = 0;
     char reportableConverted[kReportableValueTextMaxLen];
     reportableConverted[0] = '\0';
+    // Converted reportable text is a plain number/string with no cl=; keep cluster for notify.
+    uint16_t convertedReportableCluster = 0;
     const bool haveClAttrVal =
         sscanf(message, "cl=0x%X,attr=0x%X,val=0x%lX", &parsedCluster, &parsedAttr, &parsedValue) == 3
         || sscanf(
@@ -326,6 +329,7 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
                         (uint16_t)parsedAttr,
                         reportableConverted
                     );
+                    convertedReportableCluster = (uint16_t)parsedCluster;
                     if ((uint16_t)parsedCluster == kZigbeeClusterPowerConfig
                         && (uint16_t)parsedAttr == kZigbeeAttrBatteryPercentageRemaining) {
                         unsigned batteryFromConverted = 0;
@@ -528,6 +532,10 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
             if (clusterMark != nullptr) {
                 clusterOr0 = (uint16_t)strtoul(clusterMark + 3, nullptr, 0);
             }
+        }
+        if (clusterOr0 == 0 && convertedReportableCluster != 0) {
+            // Converted reportable text has no cl=; reportable listeners need the real cluster.
+            clusterOr0 = convertedReportableCluster;
         }
         if (clusterOr0 == 0) {
             if (isOnOffOrZone) {
@@ -897,6 +905,42 @@ bool ZigbeeSpiProxy::copyEndpointStateForParam(
     const CachedDevice *slot = findByIeee(ieee);
     if (slot == nullptr) {
         return false;
+    }
+    uint16_t reportableCluster = 0;
+    uint16_t reportableAttr = 0;
+    if (automationParamParseReportable(param, &reportableCluster, &reportableAttr)) {
+        if (slot->reportableValues == nullptr || slot->reportableValueCount == 0) {
+            return false;
+        }
+        const ReportableValueSlot *best = nullptr;
+        for (uint8_t index = 0; index < slot->reportableValueCount; index++) {
+            const ReportableValueSlot &candidate = slot->reportableValues[index];
+            if (candidate.value == nullptr || candidate.value[0] == '\0') {
+                continue;
+            }
+            if (!automationClusterIdMatches(reportableCluster, candidate.cluster)) {
+                continue;
+            }
+            if (!automationAttrIdMatches(reportableAttr, candidate.attribute)) {
+                continue;
+            }
+            if (endpoint != 0 && candidate.endpoint != endpoint) {
+                continue;
+            }
+            if (best == nullptr
+                || (endpoint == 0 && candidate.endpoint < best->endpoint)) {
+                best = &candidate;
+                if (endpoint != 0) {
+                    break;
+                }
+            }
+        }
+        if (best == nullptr) {
+            return false;
+        }
+        strncpy(out, best->value, outLen - 1);
+        out[outLen - 1] = '\0';
+        return out[0] != '\0';
     }
     if (param != nullptr && strcmp(param, "battery") == 0) {
         if (!slot->hasBattery) {

@@ -10,7 +10,9 @@
 #include <ctype.h>
 #include <stdlib.h>
 
-constexpr size_t AUTOMATION_PARAM_KEY_MAX = 24;
+// Fits catalog keys and reportable:0xXXXX/0xXXXX (24 chars) without truncation.
+constexpr size_t AUTOMATION_PARAM_KEY_MAX = 40;
+constexpr char kAutomationReportablePrefix[] = "reportable:";
 
 inline bool automationParamIsCustom(const char *param) {
     return param != nullptr && strcmp(param, "custom") == 0;
@@ -20,9 +22,62 @@ inline bool automationParamIsDeviceCmd(const char *param) {
     return param != nullptr && strcmp(param, "deviceCmd") == 0;
 }
 
+inline uint16_t automationParseHexOrDecToken(const char *text) {
+    if (text == nullptr) {
+        return 0;
+    }
+    while (*text == ' ' || *text == '\t') {
+        text++;
+    }
+    return (uint16_t)strtoul(text, nullptr, 0);
+}
+
+inline bool automationParamParseReportable(
+    const char *param,
+    uint16_t *clusterOut,
+    uint16_t *attrOut
+) {
+    if (param == nullptr) {
+        return false;
+    }
+    const size_t prefixLen = sizeof(kAutomationReportablePrefix) - 1;
+    if (strncmp(param, kAutomationReportablePrefix, prefixLen) != 0) {
+        return false;
+    }
+    const char *rest = param + prefixLen;
+    if (rest[0] == '\0') {
+        return false;
+    }
+    const char *slash = strchr(rest, '/');
+    if (slash == nullptr || slash == rest || slash[1] == '\0') {
+        return false;
+    }
+    char clusterBuf[16];
+    const size_t clusterLen = (size_t)(slash - rest);
+    if (clusterLen == 0 || clusterLen >= sizeof(clusterBuf)) {
+        return false;
+    }
+    memcpy(clusterBuf, rest, clusterLen);
+    clusterBuf[clusterLen] = '\0';
+    if (clusterOut != nullptr) {
+        *clusterOut = automationParseHexOrDecToken(clusterBuf);
+    }
+    if (attrOut != nullptr) {
+        *attrOut = automationParseHexOrDecToken(slash + 1);
+    }
+    return true;
+}
+
+inline bool automationParamIsReportable(const char *param) {
+    return automationParamParseReportable(param, nullptr, nullptr);
+}
+
 inline bool automationParamIsKnownKey(const char *param) {
     if (param == nullptr || param[0] == '\0' || automationParamIsCustom(param)) {
         return false;
+    }
+    if (automationParamIsReportable(param)) {
+        return true;
     }
     return strcmp(param, "status") == 0
         || strcmp(param, "position") == 0
@@ -70,6 +125,15 @@ inline bool automationParamResolve(
     AutomationParamBinding &out
 ) {
     memset(&out, 0, sizeof(out));
+    uint16_t reportableCluster = 0;
+    uint16_t reportableAttr = 0;
+    if (automationParamParseReportable(param, &reportableCluster, &reportableAttr)) {
+        out.hasCluster = true;
+        out.cluster = reportableCluster;
+        out.hasAttrId = true;
+        out.attrId = reportableAttr;
+        return true;
+    }
     if (!automationParamIsKnownKey(param)) {
         return false;
     }
@@ -132,6 +196,9 @@ inline bool automationParamKeyAllowedForType(const char *param, ZigbeeDeviceType
     if (automationParamIsCustom(param)) {
         return true;
     }
+    if (automationParamIsReportable(param)) {
+        return true;
+    }
     if (!automationParamIsKnownKey(param)) {
         return false;
     }
@@ -152,16 +219,6 @@ inline bool automationParamKeyAllowedForType(const char *param, ZigbeeDeviceType
         return true;
     }
     return false;
-}
-
-inline uint16_t automationParseHexOrDecToken(const char *text) {
-    if (text == nullptr) {
-        return 0;
-    }
-    while (*text == ' ' || *text == '\t') {
-        text++;
-    }
-    return (uint16_t)strtoul(text, nullptr, 0);
 }
 
 inline uint16_t automationParseAttrIdFromState(const char *state) {
@@ -258,6 +315,21 @@ inline bool automationStateMatchesParam(const char *param, uint16_t clusterOr0, 
     }
     if (newState == nullptr) {
         return false;
+    }
+    uint16_t reportableCluster = 0;
+    uint16_t reportableAttr = 0;
+    if (automationParamParseReportable(param, &reportableCluster, &reportableAttr)) {
+        if (clusterOr0 != 0 && !automationClusterIdMatches(reportableCluster, clusterOr0)) {
+            return false;
+        }
+        if (clusterOr0 == 0) {
+            return false;
+        }
+        const uint16_t attrFromState = automationParseAttrIdFromState(newState);
+        if (attrFromState != 0 && !automationAttrIdMatches(reportableAttr, attrFromState)) {
+            return false;
+        }
+        return true;
     }
     if (strcmp(param, "battery") == 0) {
         if (clusterOr0 == kZigbeeClusterPowerConfig) {
