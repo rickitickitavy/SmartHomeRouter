@@ -4659,6 +4659,10 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     overflow: hidden;
 }
 
+.console-camera-view.is-jpeg-stack {
+    position: relative;
+}
+
 .console-camera-img {
     display: block;
     width: 100%;
@@ -4666,6 +4670,21 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     max-width: none;
     max-height: none;
     object-fit: fill;
+}
+
+.console-camera-view.is-jpeg-stack .console-camera-img {
+    position: absolute;
+    inset: 0;
+}
+
+.console-camera-view.is-jpeg-stack .console-camera-img.is-front {
+    opacity: 1;
+    z-index: 1;
+}
+
+.console-camera-view.is-jpeg-stack .console-camera-img.is-back {
+    opacity: 0;
+    z-index: 0;
 }
 
 .console-camera-placeholder {

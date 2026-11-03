@@ -7607,7 +7607,11 @@
                     card.appendChild(header);
                 }
                 if (widget && widget.viewport === "composite") {
-                    card.appendChild(buildCompositeBody(widget, { live: true }));
+                    card.appendChild(buildCompositeBody(widget, {
+                        live: true,
+                        widgetIndex: widgetIndex,
+                        consoleKey: (consoleLayout && (consoleLayout.id || consoleLayout.name)) || ""
+                    }));
                 } else {
                     var list = document.createElement("div");
                     applyWidgetViewportListClass(list, widget);
@@ -12741,6 +12745,7 @@
         }
 
         var consoleCameraMediaCache = {};
+        var consoleCameraLiveViewCache = {};
         var CONSOLE_CAMERA_REFRESH_MS = 3000;
 
         function consoleCameraFetchMedia(cameraId) {
@@ -12767,14 +12772,89 @@
             return url + (url.indexOf("?") >= 0 ? "&" : "?") + "_=" + Date.now();
         }
 
-        function buildConsoleCameraView(cell) {
-            var host = document.createElement("div");
-            host.className = "console-camera-view";
+        function consoleCameraStaggerMs(cacheKey) {
+            var hash = 0;
+            var text = String(cacheKey || "");
+            var index;
+            for (index = 0; index < text.length; index++) {
+                hash = ((hash << 5) - hash) + text.charCodeAt(index);
+                hash |= 0;
+            }
+            return Math.abs(hash) % CONSOLE_CAMERA_REFRESH_MS;
+        }
+
+        function consoleCameraSwapJpeg(host) {
+            var url = host && host._cameraSnapshotUrl;
+            var front = host && host._cameraFrontImg;
+            var back = host && host._cameraBackImg;
+            if (!url || !front || !back) {
+                return;
+            }
+            var generation = (host._cameraJpegGeneration || 0) + 1;
+            host._cameraJpegGeneration = generation;
+            var bustedUrl = consoleCameraUrlWithCacheBuster(url);
+            back.onload = function () {
+                if (!host.isConnected || host._cameraJpegGeneration !== generation) {
+                    return;
+                }
+                back.classList.add("is-front");
+                back.classList.remove("is-back");
+                front.classList.add("is-back");
+                front.classList.remove("is-front");
+                host._cameraFrontImg = back;
+                host._cameraBackImg = front;
+            };
+            back.onerror = function () {
+                /* Keep the front frame visible. */
+            };
+            back.src = bustedUrl;
+        }
+
+        function consoleCameraArmJpegRefresh(host) {
+            if (!host || !host._cameraSnapshotUrl || host._cameraJpegArmed) {
+                return;
+            }
+            host._cameraJpegArmed = true;
+            function tick() {
+                host._cameraJpegTimer = null;
+                if (!host.isConnected) {
+                    host._cameraJpegArmed = false;
+                    return;
+                }
+                consoleCameraSwapJpeg(host);
+                host._cameraJpegTimer = window.setTimeout(tick, CONSOLE_CAMERA_REFRESH_MS);
+            }
+            var delay = host._cameraJpegInitialDelay != null
+                ? host._cameraJpegInitialDelay
+                : CONSOLE_CAMERA_REFRESH_MS;
+            host._cameraJpegInitialDelay = CONSOLE_CAMERA_REFRESH_MS;
+            host._cameraJpegTimer = window.setTimeout(tick, delay);
+        }
+
+        function buildConsoleCameraView(cell, liveCacheKey) {
             var cameraId = cell && cell.cameraId ? String(cell.cameraId) : "";
             var mode = cell && cell.cameraMode === "live" ? "live" : "jpegRefresh";
             var channelIndex = cell && Number(cell.cameraChannel) === 2 ? 1 : 0;
+            var bindingKey = cameraId + "|" + mode + "|" + channelIndex;
+            if (liveCacheKey) {
+                var cachedHost = consoleCameraLiveViewCache[liveCacheKey];
+                if (cachedHost && cachedHost._cameraBindingKey === bindingKey) {
+                    consoleCameraArmJpegRefresh(cachedHost);
+                    return cachedHost;
+                }
+            }
+            var host = document.createElement("div");
+            host.className = "console-camera-view";
+            host._cameraBindingKey = bindingKey;
+            if (liveCacheKey) {
+                consoleCameraLiveViewCache[liveCacheKey] = host;
+            }
             function showUnavailable() {
+                host.classList.remove("is-jpeg-stack");
                 host.innerHTML = "";
+                host._cameraSnapshotUrl = "";
+                host._cameraFrontImg = null;
+                host._cameraBackImg = null;
                 var note = document.createElement("div");
                 note.className = "console-camera-placeholder";
                 note.textContent = "Camera unavailable";
@@ -12785,6 +12865,9 @@
                 return host;
             }
             consoleCameraFetchMedia(cameraId).then(function (media) {
+                if (liveCacheKey && consoleCameraLiveViewCache[liveCacheKey] !== host) {
+                    return;
+                }
                 var channels = media && Array.isArray(media.channels) ? media.channels : [];
                 var channel = channels[channelIndex] || null;
                 var url = channel ? (mode === "live" ? channel.liveUrl : channel.snapshotUrl) : "";
@@ -12795,6 +12878,7 @@
                 if (mode === "live") {
                     var liveHttp = /^https?:\/\//i.test(url);
                     if (!liveHttp) {
+                        host.classList.remove("is-jpeg-stack");
                         host.innerHTML = "";
                         var liveNote = document.createElement("div");
                         liveNote.className = "console-camera-placeholder";
@@ -12802,29 +12886,33 @@
                         host.appendChild(liveNote);
                         return;
                     }
-                }
-                var img = document.createElement("img");
-                img.className = "console-camera-img";
-                img.alt = "";
-                img.onerror = function () {
-                    if (mode === "live") {
+                    var liveImg = document.createElement("img");
+                    liveImg.className = "console-camera-img";
+                    liveImg.alt = "";
+                    liveImg.onerror = function () {
                         showUnavailable();
-                    }
-                };
-                if (mode === "live") {
-                    img.src = url;
-                } else {
-                    img.src = consoleCameraUrlWithCacheBuster(url);
-                    var timerId = window.setInterval(function () {
-                        if (!img.isConnected) {
-                            window.clearInterval(timerId);
-                            return;
-                        }
-                        img.src = consoleCameraUrlWithCacheBuster(url);
-                    }, CONSOLE_CAMERA_REFRESH_MS);
+                    };
+                    liveImg.src = url;
+                    host.innerHTML = "";
+                    host.appendChild(liveImg);
+                    return;
                 }
+                host.classList.add("is-jpeg-stack");
+                var frontImg = document.createElement("img");
+                var backImg = document.createElement("img");
+                frontImg.className = "console-camera-img is-front";
+                backImg.className = "console-camera-img is-back";
+                frontImg.alt = "";
+                backImg.alt = "";
+                frontImg.src = consoleCameraUrlWithCacheBuster(url);
                 host.innerHTML = "";
-                host.appendChild(img);
+                host.appendChild(frontImg);
+                host.appendChild(backImg);
+                host._cameraSnapshotUrl = url;
+                host._cameraFrontImg = frontImg;
+                host._cameraBackImg = backImg;
+                host._cameraJpegInitialDelay = consoleCameraStaggerMs(liveCacheKey || bindingKey);
+                consoleCameraArmJpegRefresh(host);
             });
             return host;
         }
@@ -13430,7 +13518,20 @@
                         textSpan.textContent = cell.text || "";
                         cellBody.appendChild(textSpan);
                     } else if (cell.content === "camera") {
-                        cellBody.appendChild(buildConsoleCameraView(cell));
+                        var cameraLiveCacheKey = null;
+                        if (live) {
+                            cameraLiveCacheKey = [
+                                "cam",
+                                options.consoleKey || "",
+                                String(widgetIndex != null ? widgetIndex : ""),
+                                String(rowIndex),
+                                String(cellIndex),
+                                String(cell.cameraId || ""),
+                                cell.cameraMode === "live" ? "live" : "jpegRefresh",
+                                String(Number(cell.cameraChannel) === 2 ? 2 : 1)
+                            ].join("|");
+                        }
+                        cellBody.appendChild(buildConsoleCameraView(cell, cameraLiveCacheKey));
                     } else if (cell.content === "device" && cell.binding) {
                         if (live && typeof placeBuildDeviceRow === "function") {
                             cellBody.appendChild(placeBuildDeviceRow(cell.binding));
