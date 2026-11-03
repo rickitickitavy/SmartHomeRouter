@@ -1744,12 +1744,78 @@
             return parseInt(channel, 10) || 1;
         }
 
+        var ACTUATOR_OPTIMISTIC_WAIT_MS = 5000;
+        var actuatorOptimisticPending = {};
+
+        function actuatorOptimisticKey(ieee, channel) {
+            return String(ieee || "").toLowerCase() + "#" + String(
+                channel === undefined || channel === null || channel === "" ? 1 : channel
+            );
+        }
+
+        function setActuatorOptimistic(ieee, channel, commandedOn) {
+            var key = actuatorOptimisticKey(ieee, channel);
+            var existing = actuatorOptimisticPending[key];
+            if (existing && existing.timerId) {
+                window.clearTimeout(existing.timerId);
+            }
+            var entry = {
+                state: commandedOn ? "ON" : "OFF",
+                timerId: null
+            };
+            entry.timerId = window.setTimeout(function () {
+                if (actuatorOptimisticPending[key] !== entry) {
+                    return;
+                }
+                delete actuatorOptimisticPending[key];
+                refreshConsoleControls();
+            }, ACTUATOR_OPTIMISTIC_WAIT_MS);
+            actuatorOptimisticPending[key] = entry;
+        }
+
+        function reconcileActuatorOptimisticFromDevice(device) {
+            if (!device || !device.ieee) {
+                return;
+            }
+            var ieeeLower = String(device.ieee).toLowerCase();
+            var prefix = ieeeLower + "#";
+            Object.keys(actuatorOptimisticPending).forEach(function (key) {
+                if (key.indexOf(prefix) !== 0) {
+                    return;
+                }
+                var channel = parseInt(key.substring(prefix.length), 10) || 1;
+                var live = String(
+                    findStatusState(statusEntriesForDevice(device), channel) || ""
+                ).toUpperCase();
+                if (live !== "ON" && live !== "OFF") {
+                    return;
+                }
+                var pending = actuatorOptimisticPending[key];
+                if (!pending) {
+                    return;
+                }
+                // Ignore stale opposite echoes while waiting; only confirm matching live state.
+                if (live !== String(pending.state || "").toUpperCase()) {
+                    return;
+                }
+                if (pending.timerId) {
+                    window.clearTimeout(pending.timerId);
+                }
+                delete actuatorOptimisticPending[key];
+            });
+        }
+
         function onOffStateForBinding(device, binding) {
             if (!device || (device.type || "") !== "onOff") {
                 return "";
             }
+            var channel = bindingChannel(binding);
+            var pending = actuatorOptimisticPending[actuatorOptimisticKey(device.ieee, channel)];
+            if (pending && pending.state) {
+                return pending.state;
+            }
             var entries = statusEntriesForDevice(device);
-            return findStatusState(entries, bindingChannel(binding));
+            return findStatusState(entries, channel);
         }
 
         function widgetGroupOnOffState(widget) {
@@ -1807,9 +1873,11 @@
                 if (!device || (device.type || "") !== "onOff") {
                     continue;
                 }
-                sendDeviceCommand(device.ieee, payload, bindingChannel(devices[index]));
+                var memberChannel = bindingChannel(devices[index]);
+                setActuatorOptimistic(device.ieee, memberChannel, turnOn);
+                sendDeviceCommand(device.ieee, payload, memberChannel);
             }
-            window.setTimeout(refreshConsoleControls, 300);
+            refreshConsoleControls();
         }
 
         function refreshConsoleControls() {
@@ -3236,8 +3304,10 @@
                 var onOffIsOn = String(onState).toUpperCase() === "ON";
                 var onOffToggle = (function (ieee, ch, currentOn) {
                     return function () {
-                        sendDeviceCommand(ieee, currentOn ? "OFF" : "ON", ch);
-                        window.setTimeout(refreshConsoleControls, 300);
+                        var nextOn = !currentOn;
+                        setActuatorOptimistic(ieee, ch, nextOn);
+                        sendDeviceCommand(ieee, nextOn ? "ON" : "OFF", ch);
+                        refreshConsoleControls();
                     };
                 })(device.ieee, channel, onOffIsOn);
                 var onOffClick = useCustomClick
@@ -3478,6 +3548,7 @@
                 if (!replaced) {
                     registeredDeviceRows.push(nextDevice);
                 }
+                reconcileActuatorOptimisticFromDevice(nextDevice);
                 refreshConsoleControls();
             }
         }

@@ -656,6 +656,22 @@ bool AutomationEngine::listenerMatchesEvent(
     if (effectiveCluster == 0) {
         effectiveCluster = automationInferClusterFromInterpretedState(newState);
     }
+    uint16_t reportableCluster = 0;
+    uint16_t reportableAttr = 0;
+    if (automationParamParseReportable(listener->param, &reportableCluster, &reportableAttr)) {
+        if (effectiveCluster == 0
+            || !automationClusterIdMatches(reportableCluster, effectiveCluster)) {
+            return false;
+        }
+        uint16_t attrFromState = automationParseAttrIdFromState(newState);
+        if (attrFromState == 0) {
+            attrFromState = automationInferAttrIdFromInterpretedState(newState);
+        }
+        if (attrFromState != 0 && !automationAttrIdMatches(reportableAttr, attrFromState)) {
+            return false;
+        }
+        return true;
+    }
     if (listener->hasCluster && effectiveCluster != 0
         && !automationClusterIdMatches(listener->cluster, effectiveCluster)) {
         return false;

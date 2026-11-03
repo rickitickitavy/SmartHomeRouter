@@ -853,6 +853,18 @@ bool AutomationStore::parseListeners(const char *objectJson, AutomationListener 
                 listener->attrId = (uint16_t)attrId;
             }
         }
+        uint16_t reportableCluster = 0;
+        uint16_t reportableAttr = 0;
+        if (automationParamParseReportable(listener->param, &reportableCluster, &reportableAttr)) {
+            if (!listener->hasCluster) {
+                listener->hasCluster = true;
+                listener->cluster = reportableCluster;
+            }
+            if (!listener->hasAttrId) {
+                listener->hasAttrId = true;
+                listener->attrId = reportableAttr;
+            }
+        }
         listener->eventType = AutomationListenEventChange;
         String eventTypeText;
         if (extractJsonString(object.c_str(), "eventType", eventTypeText)) {
@@ -943,6 +955,18 @@ bool AutomationStore::parseCondition(const char *conditionJson, AutomationCondit
             if (extractJsonInt(conditionJson, "attrId", attrId)) {
                 condition->hasAttrId = true;
                 condition->attrId = (uint16_t)attrId;
+            }
+        }
+        uint16_t reportableCluster = 0;
+        uint16_t reportableAttr = 0;
+        if (automationParamParseReportable(condition->param, &reportableCluster, &reportableAttr)) {
+            if (!condition->hasCluster) {
+                condition->hasCluster = true;
+                condition->cluster = reportableCluster;
+            }
+            if (!condition->hasAttrId) {
+                condition->hasAttrId = true;
+                condition->attrId = reportableAttr;
             }
         }
         *outCondition = condition;
