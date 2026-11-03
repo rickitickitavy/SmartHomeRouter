@@ -2828,6 +2828,14 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
     if (!requireAdmin(request, &user)) {
         return;
     }
+    String camerasJson = "[]";
+    if (cameraStore != nullptr) {
+        camerasJson = cameraStore->listJson(true);
+        if (camerasJson.length() == 0) {
+            request->send(507, "text/plain", "Out of memory");
+            return;
+        }
+    }
     GlobalSettings *settings = settingsManager->getSettings();
     AsyncResponseStream *response = request->beginResponseStream("application/json");
     response->addHeader("Cache-Control", "no-store");
@@ -2865,6 +2873,8 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
     response->print(consoleStore != nullptr ? consoleStore->listFullJson() : "[]");
     response->print(",\"automations\":");
     response->print(automationStore != nullptr ? automationStore->listFullJson() : "[]");
+    response->print(",\"cameras\":");
+    response->print(camerasJson);
     response->print('}');
     request->send(response);
 }
@@ -2893,10 +2903,12 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
     String usersJson;
     String consolesJson;
     String automationsJson;
+    String camerasJson;
     const bool haveUi = extractJsonKeyedSlice(body.c_str(), "ui", '{', uiJson);
     const bool haveUsers = extractJsonKeyedSlice(body.c_str(), "users", '[', usersJson);
     const bool haveConsoles = extractJsonKeyedSlice(body.c_str(), "consoles", '[', consolesJson);
     const bool haveAutomations = extractJsonKeyedSlice(body.c_str(), "automations", '[', automationsJson);
+    const bool haveCameras = extractJsonKeyedSlice(body.c_str(), "cameras", '[', camerasJson);
     if (haveMqtt && !applyMqttJson(mqttJson.c_str(), &errorText)) {
         request->send(400, "text/plain", errorText);
         return;
@@ -2943,6 +2955,21 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
         if (automationStore == nullptr || !automationStore->replaceAllFromJson(automationsJson)) {
             LOGGER.error("Settings restore failed: automations list rejected");
             request->send(400, "text/plain", "Need a valid automations list");
+            return;
+        }
+    }
+    if (haveCameras) {
+        if (cameraStore == nullptr) {
+            request->send(500, "text/plain", "Cameras unavailable");
+            return;
+        }
+        const CameraWriteResult camerasResult = cameraStore->replaceAllFromJson(camerasJson);
+        if (camerasResult != CameraWriteOk) {
+            LOGGER.error(
+                String("Settings restore failed: cameras list rejected (")
+                + CameraStore::writeResultText(camerasResult) + ")"
+            );
+            request->send(400, "text/plain", "Need a valid cameras list");
             return;
         }
     }

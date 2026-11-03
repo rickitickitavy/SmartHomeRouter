@@ -788,7 +788,7 @@ When the pointer is over a registered-device row that has type actions, the cons
 - **THEN** **…** is not shown
 
 ### Requirement: Maintenance exports settings without Wi-Fi
-System → Maintenance SHALL show **Export settings** above **Restore settings**. Both SHALL use compact inline buttons, not full-width bars. Export SHALL download a JSON file that includes MQTT settings, Zigbee settings, hardware SPI speed and blue/green LED brightness, the signed-in user’s theme, the persisted device list (same device fields as Devices Export, no live telemetry), the users table, control consoles, and automations (persisted fields only, no last-activation or TIMER runtime telemetry). Each exported user SHALL include user name, added-at, roles including `editConsoles`, `consoles`, `isBlocked`, theme, and password **hash and salt**. The file SHALL NOT contain a plaintext user password. The file SHALL NOT contain a Wi-Fi group (no BSSID, password, MODE, AP IP, hostname, or OTG). Only `isAdmin` SHALL see or use Export settings and Restore settings.
+System → Maintenance SHALL show **Export settings** above **Restore settings**. Both SHALL use compact inline buttons, not full-width bars. Export SHALL download a JSON file that includes MQTT settings, Zigbee settings, hardware SPI speed and blue/green LED brightness, the signed-in user’s theme, the persisted device list (same device fields as Devices Export, no live telemetry), the users table, control consoles, automations (persisted fields only, no last-activation or TIMER runtime telemetry), and cameras (same ONVIF fields as Cameras Export, including each camera’s username and password). Each exported user SHALL include user name, added-at, roles including `editConsoles`, `consoles`, `isBlocked`, theme, and password **hash and salt**. The file SHALL NOT contain a plaintext user password. The file SHALL NOT contain a Wi-Fi group (no BSSID, password, MODE, AP IP, hostname, or OTG). Only `isAdmin` SHALL see or use Export settings and Restore settings.
 
 #### Scenario: Export omits Wi-Fi
 - **WHEN** the operator clicks Export settings and the host has Wi-Fi, MQTT, Zigbee, hardware, a saved theme, and at least one registered device
@@ -814,8 +814,12 @@ System → Maintenance SHALL show **Export settings** above **Restore settings**
 - **WHEN** the host has a saved automation and an `isAdmin` operator exports settings
 - **THEN** the JSON includes that automation’s persisted fields and omits last-activation and TIMER runtime telemetry
 
+#### Scenario: Export includes cameras with credentials
+- **WHEN** the host has a saved ONVIF camera with username and password and an `isAdmin` operator exports settings
+- **THEN** the JSON `cameras` array includes that camera with the same username and password
+
 ### Requirement: Maintenance restores settings after confirm
-Restore settings SHALL ask the operator to confirm before applying a file. After confirm, the host SHALL replace MQTT, Zigbee, hardware SPI speed, blue/green LED brightness, and the registered device list from the file. When `ui.theme` is present, the host SHALL apply it to the **signed-in user** only. When a users list is present, the host SHALL replace the users table from that list (hashes and salts, never plaintext passwords). When a consoles list is present, the host SHALL replace control consoles from that list. When an automations list is present, the host SHALL replace automations from that list. The host SHALL leave Wi-Fi unchanged even if the file contains a wifi object. A file that is not valid JSON, or that lacks a usable settings body, SHALL be rejected and SHALL NOT write settings. Only `isAdmin` SHALL restore settings. Devices Export/Restore on the Devices page SHALL remain. A restore file whose `hardware` object lacks brightness fields SHALL keep the host’s current brightness values.
+Restore settings SHALL ask the operator to confirm before applying a file. After confirm, the host SHALL replace MQTT, Zigbee, hardware SPI speed, blue/green LED brightness, and the registered device list from the file. When `ui.theme` is present, the host SHALL apply it to the **signed-in user** only. When a users list is present, the host SHALL replace the users table from that list (hashes and salts, never plaintext passwords). When a consoles list is present, the host SHALL replace control consoles from that list. When an automations list is present, the host SHALL replace automations from that list. When a cameras list is present, the host SHALL replace the camera registry from that list (including ONVIF username and password). The host SHALL leave Wi-Fi unchanged even if the file contains a wifi object. A file that is not valid JSON, or that lacks a usable settings body, SHALL be rejected and SHALL NOT write settings. Only `isAdmin` SHALL restore settings. Devices Export/Restore on the Devices page SHALL remain. A restore file whose `hardware` object lacks brightness fields SHALL keep the host’s current brightness values.
 
 #### Scenario: Confirm then apply
 - **WHEN** the operator chooses Restore settings, selects a valid export file, and confirms
@@ -844,6 +848,10 @@ Restore settings SHALL ask the operator to confirm before applying a file. After
 #### Scenario: Automations in file replace definitions
 - **WHEN** an `isAdmin` operator confirms restore of a valid file that includes automations
 - **THEN** host automations match that file’s persisted definitions
+
+#### Scenario: Cameras in file replace registry with credentials
+- **WHEN** an `isAdmin` operator confirms restore of a valid file that includes cameras with usernames and passwords
+- **THEN** the host camera registry matches that file, including each camera’s username and password
 
 ### Requirement: Maintenance theme picker
 System → Maintenance SHALL show a Theme control with options **Light** and **Dark**. Light SHALL be the current gray/white chrome. Dark SHALL use a cool slate-night dashboard: near-black blue-gray page and sidebar, slightly lighter cards, cool off-white body text, muted blue-gray secondary text, and steel-blue primary buttons with dark labels. No magenta, pink, or red-violet accents. Changing the picker SHALL apply that theme to the whole console immediately without a reload. The last **saved** theme for the **signed-in user** SHALL load after login; the login form SHALL use Dark. Changing the picker without Save SHALL NOT persist; a later reload with the same session SHALL restore that user’s last saved theme.
