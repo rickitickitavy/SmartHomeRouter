@@ -1652,6 +1652,7 @@
                     loadDevices();
                     loadConsoles();
                     loadAutomations();
+                    loadCameras();
                 });
             }).catch(function (error) {
                 if (restoreError) {
@@ -11518,14 +11519,22 @@
                             reportStoreActionError("camerasSaveError", null, "Selected file is not valid JSON");
                             return;
                         }
+                        var camerasBody = text;
                         if (!Array.isArray(parsed)) {
-                            reportStoreActionError("camerasSaveError", null, "Selected file must be a cameras JSON array");
-                            return;
+                            if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.cameras)) {
+                                reportStoreActionError(
+                                    "camerasSaveError",
+                                    null,
+                                    "Selected file must be a cameras JSON array or a full settings export with cameras"
+                                );
+                                return;
+                            }
+                            camerasBody = JSON.stringify(parsed.cameras);
                         }
                         fetch("/api/cameras/restore", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
-                            body: text
+                            body: camerasBody
                         }).then(function (response) {
                             return response.text().then(function (bodyText) {
                                 if (!response.ok) {
@@ -17503,7 +17512,7 @@
         <div id="settingsRestoreConfirmDialog" class="dialog-overlay dialog-overlay-front" hidden>
             <div class="dialog-panel" role="dialog" aria-label="Confirm restore settings">
                 <h3 class="upload-title">Restore settings</h3>
-                <p class="field-hint">MQTT, Zigbee, hardware, devices, users, and consoles will match this file when those sections are present. Devices or consoles missing from the file are removed for those sections. Wi-Fi is not changed. Continue?</p>
+                <p class="field-hint">MQTT, Zigbee, hardware, devices, users, consoles, automations, and cameras will match this file when those sections are present (cameras include username and password). Devices, consoles, automations, or cameras missing from the file are removed for those sections. Wi-Fi is not changed. Continue?</p>
                 <div class="dialog-actions">
                     <button type="button" class="btn btn-primary" onclick="confirmSettingsRestore()">Restore</button>
                     <button type="button" class="btn btn-secondary" onclick="closeSettingsRestoreConfirmDialog()">Cancel</button>

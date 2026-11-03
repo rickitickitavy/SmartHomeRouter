@@ -94,11 +94,23 @@ Console image and live display MUST use the camera’s HTTP URLs in the browser 
 - **THEN** the browser loads the snapshot URL from the camera host and the gateway does not stream that JPEG body as a media proxy
 
 ### Requirement: Import and export cameras
-Export MUST download the camera registry as JSON. Import MUST replace or merge per the Cameras UI confirm rules and MUST round-trip ONVIF fields. Import MUST NOT create draft rows without Save semantics for interactive Add. Legacy `users` arrays in import files MUST be ignored.
+Export MUST download the camera registry as JSON including each camera’s ONVIF username and password. Import MUST replace or merge per the Cameras UI confirm rules and MUST round-trip ONVIF fields including credentials. Import MUST NOT create draft rows without Save semantics for interactive Add. Legacy `users` arrays in import files MUST be ignored. Full settings export and restore MUST include the same camera registry fields (username and password) under `cameras`.
 
 #### Scenario: Export then import
 - **WHEN** the operator exports cameras and imports that file on another host with empty registry
-- **THEN** the imported cameras match names, active, type, URLs, and channel settings
+- **THEN** the imported cameras match names, active, type, URLs, channel settings, username, and password
+
+#### Scenario: Settings export includes camera credentials
+- **WHEN** an `isAdmin` operator exports full settings and the host has a saved ONVIF camera
+- **THEN** the settings JSON `cameras` array includes that camera’s username and password
+
+#### Scenario: Settings restore replaces cameras including credentials
+- **WHEN** an `isAdmin` operator restores a full settings file that includes `cameras` with usernames and passwords
+- **THEN** the host camera registry is replaced from that list, including each camera’s username and password
+
+#### Scenario: Cameras Import accepts full settings export
+- **WHEN** the operator imports a full settings JSON file on the Cameras page
+- **THEN** the host replaces the camera registry from that file’s `cameras` array (including username and password)
 
 ### Requirement: Snapshot fetch for email uses PSRAM only
 When the host fetches a camera snapshot for an email attachment, image bytes MUST be allocated only in PSRAM. The host MUST NOT allocate or hold that image in internal RAM. After send attempt, the buffer MUST be freed. If PSRAM cannot hold the image, the host MUST skip the attachment, log a warning, and still send the text body when SMTP is otherwise configured.
