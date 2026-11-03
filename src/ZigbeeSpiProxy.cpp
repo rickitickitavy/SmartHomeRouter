@@ -304,8 +304,11 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
                &parsedAttr,
                &parsedValue
            ) == 3;
-    if (haveClAttrVal && registryMap != nullptr) {
-        const DeviceTopicEntry *entry = registryMap->findByIeee(slot->ieee);
+    if (haveClAttrVal) {
+        const DeviceTopicEntry *entry =
+            registryMap != nullptr ? registryMap->findByIeee(slot->ieee) : nullptr;
+        ReportableDataType convertType = ReportableDataTypeFloat;
+        bool knownReportableRow = false;
         if (entry != nullptr && entry->reportableDataCount > 0) {
             const int rowIndex = reportableDataFindIndex(
                 entry->reportableData,
@@ -314,61 +317,66 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
                 (uint16_t)parsedAttr
             );
             if (rowIndex >= 0) {
-                if (reportableDataConvertZclValue(
-                        (uint16_t)parsedCluster,
-                        (uint16_t)parsedAttr,
-                        (uint32_t)parsedValue,
-                        (ReportableDataType)entry->reportableData[rowIndex].type,
-                        reportableConverted,
-                        sizeof(reportableConverted)
-                    )) {
-                    noteReportableValue(
-                        slot,
-                        endpoint,
-                        (uint16_t)parsedCluster,
-                        (uint16_t)parsedAttr,
-                        reportableConverted
-                    );
-                    convertedReportableCluster = (uint16_t)parsedCluster;
-                    if ((uint16_t)parsedCluster == kZigbeeClusterPowerConfig
-                        && (uint16_t)parsedAttr == kZigbeeAttrBatteryPercentageRemaining) {
-                        unsigned batteryFromConverted = 0;
-                        if (sscanf(reportableConverted, "%u", &batteryFromConverted) == 1) {
-                            slot->hasBattery = true;
-                            slot->batteryPercent = batteryFromConverted;
-                        }
-                    }
-                    // Prefer converted text for endpoint status so legacy gauges keep working.
-                    message = reportableConverted;
-                }
-            } else if ((uint16_t)parsedCluster != kUserDataClusterId
-                       && (uint16_t)parsedCluster != kZigbeeClusterOnOff
-                       && (uint16_t)parsedCluster != kZigbeeClusterIasZone
-                       && (uint16_t)parsedCluster != kZigbeeClusterWindowCovering) {
-                // Always log unknown reportable pairs, even when device DEBUG is off.
-                char ieeeText[24];
-                snprintf(
-                    ieeeText,
-                    sizeof(ieeeText),
-                    "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
-                    slot->ieee[7],
-                    slot->ieee[6],
-                    slot->ieee[5],
-                    slot->ieee[4],
-                    slot->ieee[3],
-                    slot->ieee[2],
-                    slot->ieee[1],
-                    slot->ieee[0]
-                );
-                LOGGER.info(
-                    String("Unknown reportable cl=0x")
-                    + String(parsedCluster, HEX)
-                    + ",attr=0x"
-                    + String(parsedAttr, HEX)
-                    + " ieee="
-                    + ieeeText
-                );
+                convertType = (ReportableDataType)entry->reportableData[rowIndex].type;
+                knownReportableRow = true;
             }
+        }
+        // Always cache converted reportable text so automation reportable: conditions can
+        // resolve even when the device has no reportableData row configured yet.
+        if (reportableDataConvertZclValue(
+                (uint16_t)parsedCluster,
+                (uint16_t)parsedAttr,
+                (uint32_t)parsedValue,
+                convertType,
+                reportableConverted,
+                sizeof(reportableConverted)
+            )) {
+            noteReportableValue(
+                slot,
+                endpoint,
+                (uint16_t)parsedCluster,
+                (uint16_t)parsedAttr,
+                reportableConverted
+            );
+            convertedReportableCluster = (uint16_t)parsedCluster;
+            if ((uint16_t)parsedCluster == kZigbeeClusterPowerConfig
+                && (uint16_t)parsedAttr == kZigbeeAttrBatteryPercentageRemaining) {
+                unsigned batteryFromConverted = 0;
+                if (sscanf(reportableConverted, "%u", &batteryFromConverted) == 1) {
+                    slot->hasBattery = true;
+                    slot->batteryPercent = batteryFromConverted;
+                }
+            }
+            // Prefer converted text for endpoint status so legacy gauges keep working.
+            message = reportableConverted;
+        } else if (!knownReportableRow
+                   && (uint16_t)parsedCluster != kUserDataClusterId
+                   && (uint16_t)parsedCluster != kZigbeeClusterOnOff
+                   && (uint16_t)parsedCluster != kZigbeeClusterIasZone
+                   && (uint16_t)parsedCluster != kZigbeeClusterWindowCovering) {
+            // Always log unknown reportable pairs, even when device DEBUG is off.
+            char ieeeText[24];
+            snprintf(
+                ieeeText,
+                sizeof(ieeeText),
+                "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
+                slot->ieee[7],
+                slot->ieee[6],
+                slot->ieee[5],
+                slot->ieee[4],
+                slot->ieee[3],
+                slot->ieee[2],
+                slot->ieee[1],
+                slot->ieee[0]
+            );
+            LOGGER.info(
+                String("Unknown reportable cl=0x")
+                + String(parsedCluster, HEX)
+                + ",attr=0x"
+                + String(parsedAttr, HEX)
+                + " ieee="
+                + ieeeText
+            );
         }
     }
     String userDataBraceList;
@@ -407,6 +415,30 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
     }
     if (!DeviceTopicMap::isUsableEndpoint(endpoint)) {
         return;
+    }
+    // Plain MQTT/measurement numbers have no cl=/attr=; still cache as the device's
+    // primary measurement reportable so reportable: conditions can resolve.
+    if (convertedReportableCluster == 0 && registryMap != nullptr) {
+        const DeviceTopicEntry *measureEntry = registryMap->findByIeee(slot->ieee);
+        if (measureEntry != nullptr
+            && zigbeeDeviceTypeIsMeasurement(measureEntry->zigbeeType)) {
+            double unusedNumeric = 0;
+            if (automationParseNumericVal(message, unusedNumeric)) {
+                const ZigbeeDeviceTypeInfo *typeInfo =
+                    zigbeeDeviceTypeInfo(measureEntry->zigbeeType);
+                if (typeInfo != nullptr
+                    && typeInfo->clusterId != kZigbeeDeviceTypeNoCluster) {
+                    noteReportableValue(
+                        slot,
+                        endpoint,
+                        typeInfo->clusterId,
+                        0x0000,
+                        message
+                    );
+                    convertedReportableCluster = typeInfo->clusterId;
+                }
+            }
+        }
     }
     uint8_t neededCapacity = channelCapacityForIeee(slot->ieee);
     if (endpoint > neededCapacity && neededCapacity < DEVICE_CHANNEL_COUNT_MAX) {
@@ -913,6 +945,7 @@ bool ZigbeeSpiProxy::copyEndpointStateForParam(
             return false;
         }
         const ReportableValueSlot *best = nullptr;
+        const ReportableValueSlot *anyEndpointBest = nullptr;
         for (uint8_t index = 0; index < slot->reportableValueCount; index++) {
             const ReportableValueSlot &candidate = slot->reportableValues[index];
             if (candidate.value == nullptr || candidate.value[0] == '\0') {
@@ -924,6 +957,10 @@ bool ZigbeeSpiProxy::copyEndpointStateForParam(
             if (!automationAttrIdMatches(reportableAttr, candidate.attribute)) {
                 continue;
             }
+            if (anyEndpointBest == nullptr
+                || candidate.endpoint < anyEndpointBest->endpoint) {
+                anyEndpointBest = &candidate;
+            }
             if (endpoint != 0 && candidate.endpoint != endpoint) {
                 continue;
             }
@@ -934,6 +971,11 @@ bool ZigbeeSpiProxy::copyEndpointStateForParam(
                     break;
                 }
             }
+        }
+        if (best == nullptr) {
+            // Channel in the condition may not match the reporting endpoint; still use
+            // the cached reportable value for that cluster/attribute.
+            best = anyEndpointBest;
         }
         if (best == nullptr) {
             return false;

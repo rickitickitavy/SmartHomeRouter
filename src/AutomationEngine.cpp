@@ -160,7 +160,8 @@ bool AutomationEngine::resolveStatus(
     if (!spiProxy->copyEndpointStateForParam(ieee, channel, param, out, outLen)) {
         return false;
     }
-    if (hasCluster) {
+    // Reportable values are already selected by cluster/attr; converted text has no cl=.
+    if (hasCluster && !automationParamIsReportable(param)) {
         const uint16_t parsedCluster = parseClusterFromState(out);
         if (parsedCluster != 0 && parsedCluster != cluster) {
             out[0] = '\0';
