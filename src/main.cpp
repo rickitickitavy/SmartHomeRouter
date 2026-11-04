@@ -1145,7 +1145,9 @@ static bool onDeviceUpserted(const DeviceTopicEntry *entry) {
         mqttClient->subscribeDeviceCommands();
     }
     persistHostDeviceList();
+#if defined(BOARD_ROLE_HOST)
     historyStore.syncSeriesFromDevices(topicMap);
+#endif
     return ZIGBEE_SPI_PROXY.enqueueDeviceUpsert(entry);
 }
 

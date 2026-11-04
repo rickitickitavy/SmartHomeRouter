@@ -1279,10 +1279,41 @@
         }
 
 
+        function deviceHistoryUsesMinChange(typeId) {
+            return String(typeId || "") !== "onOff";
+        }
+
+        function syncDeviceHistoryEpsilonVisibility() {
+            var showMinChange = deviceHistoryUsesMinChange(parameterDialogTypeId);
+            var epsilonLabel = document.getElementById("deviceHistoryEpsilonLabel");
+            var epsilonInput = document.getElementById("deviceHistoryEpsilon");
+            var flag = document.getElementById("deviceHistoryEnabled");
+            if (epsilonLabel) {
+                epsilonLabel.hidden = !showMinChange;
+            }
+            if (epsilonInput) {
+                epsilonInput.hidden = !showMinChange;
+                if (!showMinChange) {
+                    epsilonInput.disabled = true;
+                    epsilonInput.value = "";
+                } else if (flag && flag.checked) {
+                    epsilonInput.disabled = false;
+                    if (epsilonInput.value === "" || Number(epsilonInput.value) < 0) {
+                        epsilonInput.value = "0";
+                    }
+                }
+            }
+        }
+
         function onDeviceHistoryFlagChanged() {
             var flag = document.getElementById("deviceHistoryEnabled");
             var epsilonInput = document.getElementById("deviceHistoryEpsilon");
             if (!flag || !epsilonInput) {
+                return;
+            }
+            if (!deviceHistoryUsesMinChange(parameterDialogTypeId)) {
+                epsilonInput.disabled = true;
+                epsilonInput.value = "";
                 return;
             }
             epsilonInput.disabled = !flag.checked;
@@ -1306,9 +1337,15 @@
                 epsilonInput.disabled = true;
             } else {
                 flag.checked = true;
-                epsilonInput.disabled = false;
-                epsilonInput.value = String(value);
+                if (deviceHistoryUsesMinChange(parameterDialogTypeId)) {
+                    epsilonInput.disabled = false;
+                    epsilonInput.value = String(value);
+                } else {
+                    epsilonInput.disabled = true;
+                    epsilonInput.value = "";
+                }
             }
+            syncDeviceHistoryEpsilonVisibility();
         }
 
         function readDeviceHistoryEpsilonFromForm() {
@@ -1316,6 +1353,9 @@
             var epsilonInput = document.getElementById("deviceHistoryEpsilon");
             if (!flag || !flag.checked) {
                 return -1;
+            }
+            if (!deviceHistoryUsesMinChange(parameterDialogTypeId)) {
+                return 0;
             }
             var value = epsilonInput ? Number(epsilonInput.value) : 0;
             if (isNaN(value) || value < 0) {
@@ -1325,8 +1365,60 @@
         }
 
 
+        function historyEpsilonEnabled(epsilon, typeId) {
+            var value = epsilon != null ? Number(epsilon) : -1;
+            if (isNaN(value)) {
+                value = -1;
+            }
+            if (String(typeId || "") === "string") {
+                return value === 0;
+            }
+            return value >= 0;
+        }
+
+        function historyReportableIdsEqual(left, right) {
+            var leftNum = parseInt(String(left || ""), 0);
+            var rightNum = parseInt(String(right || ""), 0);
+            if (!isNaN(leftNum) && !isNaN(rightNum)) {
+                return (leftNum & 0xFFFF) === (rightNum & 0xFFFF);
+            }
+            return String(left || "").toLowerCase() === String(right || "").toLowerCase();
+        }
+
+        function bindingHistoryEnabled(device, binding) {
+            if (!device || !binding) {
+                return false;
+            }
+            var param = binding.param || "";
+            var reportable = parseReportableParamId(param);
+            if (reportable) {
+                var rows = Array.isArray(device.reportableData) ? device.reportableData : [];
+                var rowIndex;
+                for (rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+                    var row = rows[rowIndex] || {};
+                    if (historyReportableIdsEqual(row.cluster, reportable.cluster)
+                        && historyReportableIdsEqual(row.attribute, reportable.attribute)) {
+                        return historyEpsilonEnabled(row.epsilon, row.type);
+                    }
+                }
+                return false;
+            }
+            var userDataFields = Array.isArray(device.userDataFields) ? device.userDataFields : [];
+            var fieldIndex;
+            for (fieldIndex = 0; fieldIndex < userDataFields.length; fieldIndex++) {
+                var field = userDataFields[fieldIndex] || {};
+                if (String(field.name || "") === param) {
+                    return historyEpsilonEnabled(field.epsilon, field.type);
+                }
+            }
+            return historyEpsilonEnabled(device.historyEpsilon, "float");
+        }
+
         function historyQueryForBinding(device, binding) {
             if (!device || !device.ieee || !binding) {
+                return null;
+            }
+            if (!bindingHistoryEnabled(device, binding)) {
                 return null;
             }
             var query = { ieee: device.ieee, title: binding.title || device.name || "History" };
@@ -1358,6 +1450,9 @@
             if (!element || !device || !binding) {
                 return;
             }
+            if (!bindingHistoryEnabled(device, binding)) {
+                return;
+            }
             element.style.cursor = "pointer";
             element.title = "Open history";
             element.onclick = function (event) {
@@ -1371,17 +1466,318 @@
             };
         }
 
-        function openHistoryChart(query) {
-            var overlay = document.getElementById("historyChartOverlay");
+        var HISTORY_EPOCH_UNIX_OFFSET = 1262304000;
+        var historyChartState = {
+            query: null,
+            hours: 24,
+            rangeEndUnix: 0,
+            payload: null,
+            layout: null,
+            smooth: false,
+            smoothWindow: 5
+        };
+        var HISTORY_RANGE_PRESETS = [
+            { hours: 1, label: "1h" },
+            { hours: 6, label: "6h" },
+            { hours: 12, label: "12h" },
+            { hours: 24, label: "24h" },
+            { hours: 48, label: "2d" },
+            { hours: 168, label: "7d" }
+        ];
+        var HISTORY_STATE_COLORS = [
+            "#03a9f4", "#4caf50", "#ff9800", "#f44336", "#9c27b0",
+            "#00bcd4", "#8bc34a", "#ffc107", "#e91e63", "#607d8b"
+        ];
+
+        function historyUnixToEpoch2010(unixSec) {
+            var value = Number(unixSec) || 0;
+            return value > HISTORY_EPOCH_UNIX_OFFSET ? Math.floor(value - HISTORY_EPOCH_UNIX_OFFSET) : 0;
+        }
+
+        function historyEpoch2010ToUnix(epoch2010) {
+            return (Number(epoch2010) || 0) + HISTORY_EPOCH_UNIX_OFFSET;
+        }
+
+        function historyFormatAxisTime(unixSec, hoursSpan) {
+            var date = new Date(unixSec * 1000);
+            if (isNaN(date.getTime())) {
+                return "";
+            }
+            if (hoursSpan <= 24) {
+                return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+            }
+            return date.toLocaleString([], {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit"
+            });
+        }
+
+        var HISTORY_Y_INTERVALS = 4;
+
+        function historyNiceNum(value, round) {
+            var x = Math.abs(Number(value));
+            if (!isFinite(x) || x === 0) {
+                return 1;
+            }
+            var exp = Math.floor(Math.log(x) / Math.LN10);
+            var frac = x / Math.pow(10, exp);
+            var niceFrac;
+            if (round) {
+                if (frac < 1.5) {
+                    niceFrac = 1;
+                } else if (frac < 3) {
+                    niceFrac = 2;
+                } else if (frac < 7) {
+                    niceFrac = 5;
+                } else {
+                    niceFrac = 10;
+                }
+            } else if (frac <= 1) {
+                niceFrac = 1;
+            } else if (frac <= 2) {
+                niceFrac = 2;
+            } else if (frac <= 5) {
+                niceFrac = 5;
+            } else {
+                niceFrac = 10;
+            }
+            return niceFrac * Math.pow(10, exp);
+        }
+
+        function historyNextNiceStep(step) {
+            var x = Number(step);
+            if (!isFinite(x) || x <= 0) {
+                return 1;
+            }
+            var exp = Math.floor(Math.log(x) / Math.LN10);
+            var base = x / Math.pow(10, exp);
+            var nextBase;
+            if (base < 1.5) {
+                nextBase = 2;
+            } else if (base < 3) {
+                nextBase = 5;
+            } else if (base < 7) {
+                nextBase = 10;
+            } else {
+                nextBase = 20;
+            }
+            return nextBase * Math.pow(10, exp);
+        }
+
+        function historyFormatAxisValue(value, step) {
+            var numeric = Number(value);
+            if (!isFinite(numeric)) {
+                return "";
+            }
+            var axisStep = Number(step);
+            if (!isFinite(axisStep) || axisStep <= 0) {
+                axisStep = 1;
+            }
+            var rounded = Math.round(numeric / axisStep) * axisStep;
+            if (Math.abs(rounded) < axisStep * 1e-9) {
+                rounded = 0;
+            }
+            var decimals = 0;
+            if (axisStep < 1) {
+                decimals = Math.max(0, Math.min(6, Math.ceil(-Math.log10(axisStep) - 1e-12)));
+            }
+            return decimals > 0 ? rounded.toFixed(decimals) : String(Math.round(rounded));
+        }
+
+        function historyComputeNumericAxis(dataMin, dataMax) {
+            var intervals = HISTORY_Y_INTERVALS;
+            var dmin = Number(dataMin);
+            var dmax = Number(dataMax);
+            if (!isFinite(dmin) || !isFinite(dmax)) {
+                dmin = 0;
+                dmax = 1;
+            }
+            if (dmin > dmax) {
+                var swap = dmin;
+                dmin = dmax;
+                dmax = swap;
+            }
+            if (dmax - dmin < 1e-12) {
+                dmin -= 1;
+                dmax += 1;
+            }
+            var crossesZero = dmin < 0 && dmax > 0;
+            var step = historyNiceNum((dmax - dmin) / intervals, true);
+            if (!isFinite(step) || !(step > 0)) {
+                step = 1;
+            }
+            var minV = 0;
+            var maxV = intervals * step;
+            var guard;
+            if (crossesZero) {
+                for (guard = 0; guard < 24; guard++) {
+                    var below = Math.ceil((-dmin) / step - 1e-12);
+                    var above = Math.ceil(dmax / step - 1e-12);
+                    if (below < 1) {
+                        below = 1;
+                    }
+                    if (above < 1) {
+                        above = 1;
+                    }
+                    if (below + above <= intervals) {
+                        var spare = intervals - below - above;
+                        var addBelow = Math.floor(spare / 2);
+                        var addAbove = spare - addBelow;
+                        minV = -(below + addBelow) * step;
+                        maxV = (above + addAbove) * step;
+                        break;
+                    }
+                    step = historyNextNiceStep(step);
+                }
+            } else {
+                for (guard = 0; guard < 24; guard++) {
+                    minV = Math.floor(dmin / step) * step;
+                    maxV = minV + intervals * step;
+                    if (maxV < dmax - 1e-12) {
+                        step = historyNextNiceStep(step);
+                        continue;
+                    }
+                    // Keep sign when data does not cross 0 (do not force a 0 tick).
+                    if (dmax < 0) {
+                        maxV = Math.floor(dmax / step) * step;
+                        if (maxV >= 0) {
+                            maxV = -step;
+                        }
+                        minV = maxV - intervals * step;
+                        if (minV > dmin + 1e-12) {
+                            step = historyNextNiceStep(step);
+                            continue;
+                        }
+                    } else if (dmin > 0 && minV < 0) {
+                        minV = Math.floor(dmin / step) * step;
+                        if (minV < 0) {
+                            minV = 0;
+                        }
+                        maxV = minV + intervals * step;
+                        if (maxV < dmax - 1e-12) {
+                            step = historyNextNiceStep(step);
+                            continue;
+                        }
+                    }
+                    var spareLow = dmin - minV;
+                    var spareHigh = maxV - dmax;
+                    if (spareHigh - spareLow > step) {
+                        var shift = Math.floor((spareHigh - spareLow) / (2 * step)) * step;
+                        if (shift > 0) {
+                            var shiftedMin = minV + shift;
+                            var shiftedMax = maxV + shift;
+                            if (shiftedMin <= dmin + 1e-12 && shiftedMax >= dmax - 1e-12
+                                && !(dmin >= 0 && shiftedMin < 0)
+                                && !(dmax <= 0 && shiftedMax > 0)) {
+                                minV = shiftedMin;
+                                maxV = shiftedMax;
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+            return { minV: minV, maxV: maxV, step: step };
+        }
+
+        function historyFormatTooltipTime(unixSec) {
+            var date = new Date(unixSec * 1000);
+            if (isNaN(date.getTime())) {
+                return "";
+            }
+            return date.toLocaleString([], {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit"
+            });
+        }
+
+        function historyToDatetimeLocalValue(unixSec) {
+            var date = new Date(unixSec * 1000);
+            if (isNaN(date.getTime())) {
+                return "";
+            }
+            var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+            return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate())
+                + "T" + pad(date.getHours()) + ":" + pad(date.getMinutes());
+        }
+
+        function historyParseDatetimeLocalValue(text) {
+            if (!text) {
+                return NaN;
+            }
+            var parsed = Date.parse(text);
+            return isNaN(parsed) ? NaN : Math.floor(parsed / 1000);
+        }
+
+        function historyDiscreteLabel(value) {
+            if (value === true || value === 1 || value === "1" || value === "on" || value === "ON" || value === "true") {
+                return "on";
+            }
+            if (value === false || value === 0 || value === "0" || value === "off" || value === "OFF" || value === "false") {
+                return "off";
+            }
+            return String(value == null ? "" : value);
+        }
+
+        function historyColorForState(label) {
+            var key = String(label || "").toLowerCase();
+            if (key === "on" || key === "open" || key === "true" || key === "leak") {
+                return "#4caf50";
+            }
+            if (key === "off" || key === "closed" || key === "false" || key === "dry") {
+                return "#44739e";
+            }
+            var hash = 0;
+            var index;
+            for (index = 0; index < key.length; index++) {
+                hash = ((hash << 5) - hash) + key.charCodeAt(index);
+                hash |= 0;
+            }
+            return HISTORY_STATE_COLORS[Math.abs(hash) % HISTORY_STATE_COLORS.length];
+        }
+
+        function historySyncRangeControls() {
+            var startInput = document.getElementById("historyChartStart");
+            var endInput = document.getElementById("historyChartEnd");
+            var endUnix = historyChartState.rangeEndUnix || Math.floor(Date.now() / 1000);
+            var startUnix = endUnix - Math.floor(historyChartState.hours * 3600);
+            if (startInput) {
+                startInput.value = historyToDatetimeLocalValue(startUnix);
+            }
+            if (endInput) {
+                endInput.value = historyToDatetimeLocalValue(endUnix);
+            }
+            var presetButtons = document.querySelectorAll("[data-history-hours]");
+            var buttonIndex;
+            for (buttonIndex = 0; buttonIndex < presetButtons.length; buttonIndex++) {
+                var button = presetButtons[buttonIndex];
+                var hours = Number(button.getAttribute("data-history-hours"));
+                if (hours === historyChartState.hours) {
+                    button.classList.add("is-active");
+                } else {
+                    button.classList.remove("is-active");
+                }
+            }
+        }
+
+        function historyFetchAndDraw() {
             var canvas = document.getElementById("historyChartCanvas");
-            var title = document.getElementById("historyChartTitle");
-            if (!overlay || !canvas) {
+            var query = historyChartState.query;
+            if (!canvas || !query) {
                 return;
             }
-            if (title) {
-                title.textContent = query.title || "History";
+            var endUnix = historyChartState.rangeEndUnix || Math.floor(Date.now() / 1000);
+            var startUnix = endUnix - Math.floor(historyChartState.hours * 3600);
+            if (startUnix < 0) {
+                startUnix = 0;
             }
-            overlay.hidden = false;
+            historySyncRangeControls();
             var params = new URLSearchParams();
             params.set("ieee", query.ieee || "");
             params.set("kind", query.kind || "main");
@@ -1394,76 +1790,508 @@
             if (query.attribute != null) {
                 params.set("attribute", String(query.attribute));
             }
-            params.set("maxPoints", "64");
+            params.set("from", String(historyUnixToEpoch2010(startUnix)));
+            params.set("to", String(historyUnixToEpoch2010(endUnix)));
+            params.set("maxPoints", "128");
             fetch("/api/history?" + params.toString(), { cache: "no-store" }).then(function (response) {
                 if (!response.ok) {
                     throw new Error("history " + response.status);
                 }
                 return response.json();
             }).then(function (payload) {
-                drawHistoryChart(canvas, payload);
+                historyChartState.payload = payload || { valueType: "float", points: [] };
+                drawHistoryChart(canvas, historyChartState.payload, startUnix, endUnix);
             }).catch(function () {
-                drawHistoryChart(canvas, { valueType: "float", points: [] });
+                historyChartState.payload = { valueType: "float", points: [] };
+                drawHistoryChart(canvas, historyChartState.payload, startUnix, endUnix);
             });
+        }
+
+        function openHistoryChart(query) {
+            var overlay = document.getElementById("historyChartOverlay");
+            var title = document.getElementById("historyChartTitle");
+            if (!overlay || !query) {
+                return;
+            }
+            historyChartState.query = query;
+            historyChartState.hours = 24;
+            historyChartState.rangeEndUnix = Math.floor(Date.now() / 1000);
+            if (historyChartState.smoothWindow < 1) {
+                historyChartState.smoothWindow = 5;
+            }
+            historySyncSmoothControls();
+            if (title) {
+                title.textContent = query.title || "History";
+            }
+            overlay.hidden = false;
+            historyFetchAndDraw();
         }
 
         function closeHistoryChart() {
             var overlay = document.getElementById("historyChartOverlay");
+            var tip = document.getElementById("historyChartTooltip");
             if (overlay) {
                 overlay.hidden = true;
             }
+            if (tip) {
+                tip.hidden = true;
+            }
+            historyChartState.query = null;
+            historyChartState.payload = null;
+            historyChartState.layout = null;
         }
 
-        function drawHistoryChart(canvas, payload) {
+        function setHistoryChartPreset(hours) {
+            var value = Number(hours);
+            if (!(value > 0)) {
+                return;
+            }
+            historyChartState.hours = value;
+            historyChartState.rangeEndUnix = Math.floor(Date.now() / 1000);
+            historyFetchAndDraw();
+        }
+
+        function shiftHistoryChartRange(direction) {
+            var delta = Math.floor(historyChartState.hours * 3600) * (direction < 0 ? -1 : 1);
+            historyChartState.rangeEndUnix =
+                (historyChartState.rangeEndUnix || Math.floor(Date.now() / 1000)) + delta;
+            historyFetchAndDraw();
+        }
+
+        function historySmoothWindowSize() {
+            var input = document.getElementById("historyChartSmoothWindow");
+            var value = input ? Number(input.value) : historyChartState.smoothWindow;
+            if (!isFinite(value) || value < 1) {
+                value = 5;
+            }
+            value = Math.floor(value);
+            if (value < 1) {
+                value = 1;
+            }
+            if (value > 128) {
+                value = 128;
+            }
+            historyChartState.smoothWindow = value;
+            if (input && String(input.value) !== String(value)) {
+                input.value = String(value);
+            }
+            return value;
+        }
+
+        function historySyncSmoothControls() {
+            var flag = document.getElementById("historyChartSmooth");
+            var input = document.getElementById("historyChartSmoothWindow");
+            if (flag) {
+                flag.checked = !!historyChartState.smooth;
+            }
+            if (input) {
+                input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 5);
+                input.disabled = !historyChartState.smooth;
+            }
+        }
+
+        function onHistoryChartSmoothChange() {
+            var flag = document.getElementById("historyChartSmooth");
+            historyChartState.smooth = !!(flag && flag.checked);
+            historySmoothWindowSize();
+            historySyncSmoothControls();
+            historyRedrawFromPayload();
+        }
+
+        function onHistoryChartSmoothWindowInput() {
+            if (!historyChartState.smooth) {
+                return;
+            }
+            var input = document.getElementById("historyChartSmoothWindow");
+            var value = input ? Number(input.value) : NaN;
+            if (!isFinite(value) || value < 1) {
+                return;
+            }
+            historyChartState.smoothWindow = Math.min(128, Math.floor(value));
+            historyRedrawFromPayload();
+        }
+
+        function historySmoothSeries(series, windowSize) {
+            var windowCount = Math.max(1, Math.floor(Number(windowSize) || 5));
+            if (!series || !series.length || windowCount <= 1) {
+                return series || [];
+            }
+            var smoothed = [];
+            var sum = 0;
+            var index;
+            for (index = 0; index < series.length; index++) {
+                sum += series[index].value;
+                if (index >= windowCount) {
+                    sum -= series[index - windowCount].value;
+                }
+                var count = index + 1 < windowCount ? index + 1 : windowCount;
+                smoothed.push({
+                    unix: series[index].unix,
+                    value: sum / count
+                });
+            }
+            return smoothed;
+        }
+
+        function historyRedrawFromPayload() {
+            var canvas = document.getElementById("historyChartCanvas");
+            if (!canvas || !historyChartState.payload) {
+                return;
+            }
+            var endUnix = historyChartState.rangeEndUnix || Math.floor(Date.now() / 1000);
+            var startUnix = endUnix - Math.floor(historyChartState.hours * 3600);
+            if (startUnix < 0) {
+                startUnix = 0;
+            }
+            drawHistoryChart(canvas, historyChartState.payload, startUnix, endUnix);
+        }
+
+        function applyHistoryChartDatetimeRange() {
+            var startUnix = historyParseDatetimeLocalValue(
+                (document.getElementById("historyChartStart") || {}).value
+            );
+            var endUnix = historyParseDatetimeLocalValue(
+                (document.getElementById("historyChartEnd") || {}).value
+            );
+            if (isNaN(startUnix) || isNaN(endUnix) || endUnix <= startUnix) {
+                return;
+            }
+            historyChartState.rangeEndUnix = endUnix;
+            historyChartState.hours = Math.max(1 / 60, (endUnix - startUnix) / 3600);
+            historyFetchAndDraw();
+        }
+
+        function drawHistoryChart(canvas, payload, rangeStartUnix, rangeEndUnix) {
             if (!canvas || !canvas.getContext) {
                 return;
             }
+            var wrap = document.getElementById("historyChartCanvasWrap");
+            var legend = document.getElementById("historyChartLegend");
+            var tip = document.getElementById("historyChartTooltip");
+            var cssWidth = wrap ? wrap.clientWidth : 680;
+            if (!(cssWidth > 0)) {
+                cssWidth = 680;
+            }
+            var cssHeight = 320;
+            var dpr = window.devicePixelRatio || 1;
+            canvas.width = Math.floor(cssWidth * dpr);
+            canvas.height = Math.floor(cssHeight * dpr);
+            canvas.style.width = cssWidth + "px";
+            canvas.style.height = cssHeight + "px";
             var ctx = canvas.getContext("2d");
-            var width = canvas.width;
-            var height = canvas.height;
-            ctx.clearRect(0, 0, width, height);
-            ctx.fillStyle = "#111";
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            var width = cssWidth;
+            var height = cssHeight;
+            var styles = getComputedStyle(document.documentElement);
+            var bg = styles.getPropertyValue("--bg").trim() || "#111";
+            var surface = styles.getPropertyValue("--surface").trim() || "#1c1c1c";
+            var text = styles.getPropertyValue("--text").trim() || "#eee";
+            var muted = styles.getPropertyValue("--muted").trim() || "#9aa";
+            var border = styles.getPropertyValue("--border").trim() || "#444";
+            var accent = styles.getPropertyValue("--accent").trim() || "#03a9f4";
+            ctx.fillStyle = bg;
             ctx.fillRect(0, 0, width, height);
-            var points = payload && Array.isArray(payload.points) ? payload.points : [];
-            if (points.length === 0) {
-                ctx.fillStyle = "#aaa";
-                ctx.fillText("No history samples", 16, 24);
-                return;
-            }
-            var valueType = payload.valueType || "float";
-            if (valueType === "bool" || valueType === "string") {
-                var bandHeight = Math.max(8, Math.floor((height - 20) / Math.max(1, points.length)));
-                var index;
-                for (index = 0; index < points.length; index++) {
-                    var on = points[index].v === true || points[index].v === "ON" || points[index].v === "on" || points[index].v === 1;
-                    ctx.fillStyle = on ? "#3ddc97" : "#c44";
-                    var x0 = Math.floor(index * width / points.length);
-                    var x1 = Math.floor((index + 1) * width / points.length);
-                    ctx.fillRect(x0, 10, Math.max(1, x1 - x0), height - 20);
-                }
-                return;
-            }
-            var minV = Number(points[0].v);
-            var maxV = minV;
-            points.forEach(function (point) {
-                var value = Number(point.v);
-                if (value < minV) minV = value;
-                if (value > maxV) maxV = value;
+            var points = payload && Array.isArray(payload.points) ? payload.points.slice() : [];
+            points.sort(function (a, b) {
+                return (Number(a.t) || 0) - (Number(b.t) || 0);
             });
-            if (minV === maxV) {
-                minV -= 1;
-                maxV += 1;
+            var valueType = payload && payload.valueType ? payload.valueType : "float";
+            var isDiscrete = valueType === "bool" || valueType === "string";
+            var padLeft = isDiscrete ? 16 : 52;
+            var padRight = 16;
+            var padTop = 16;
+            var padBottom = 36;
+            var plotW = Math.max(10, width - padLeft - padRight);
+            var plotH = Math.max(10, height - padTop - padBottom);
+            var t0 = rangeStartUnix;
+            var t1 = rangeEndUnix;
+            if (!(t1 > t0)) {
+                t1 = t0 + 3600;
             }
-            ctx.strokeStyle = "#8af";
-            ctx.lineWidth = 2;
+            var hoursSpan = (t1 - t0) / 3600;
+            var xForUnix = function (unixSec) {
+                return padLeft + ((unixSec - t0) / (t1 - t0)) * plotW;
+            };
+
+            ctx.strokeStyle = border;
+            ctx.lineWidth = 1;
             ctx.beginPath();
-            points.forEach(function (point, index) {
-                var x = index * (width - 20) / Math.max(1, points.length - 1) + 10;
-                var y = height - 10 - ((Number(point.v) - minV) / (maxV - minV)) * (height - 20);
-                if (index === 0) ctx.moveTo(x, y);
-                else ctx.lineTo(x, y);
-            });
+            ctx.moveTo(padLeft, padTop);
+            ctx.lineTo(padLeft, padTop + plotH);
+            ctx.lineTo(padLeft + plotW, padTop + plotH);
             ctx.stroke();
+
+            var tickCount = hoursSpan <= 6 ? 4 : (hoursSpan <= 48 ? 6 : 7);
+            var tickIndex;
+            ctx.fillStyle = muted;
+            ctx.font = "11px sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "top";
+            for (tickIndex = 0; tickIndex <= tickCount; tickIndex++) {
+                var tickUnix = t0 + ((t1 - t0) * tickIndex / tickCount);
+                var tickX = xForUnix(tickUnix);
+                ctx.strokeStyle = border;
+                ctx.globalAlpha = 0.35;
+                ctx.beginPath();
+                ctx.moveTo(tickX, padTop);
+                ctx.lineTo(tickX, padTop + plotH);
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+                ctx.fillStyle = muted;
+                ctx.fillText(historyFormatAxisTime(tickUnix, hoursSpan), tickX, padTop + plotH + 8);
+            }
+
+            if (legend) {
+                legend.innerHTML = "";
+            }
+            if (tip) {
+                tip.hidden = true;
+            }
+
+            if (!points.length) {
+                ctx.fillStyle = muted;
+                ctx.textAlign = "left";
+                ctx.textBaseline = "middle";
+                ctx.font = "13px sans-serif";
+                ctx.fillText("No history samples in this range", padLeft + 8, padTop + plotH / 2);
+                historyChartState.layout = null;
+                return;
+            }
+
+            if (isDiscrete) {
+                var bandTop = padTop + plotH * 0.28;
+                var bandH = Math.max(28, plotH * 0.44);
+                var segments = [];
+                var pointIndex;
+                for (pointIndex = 0; pointIndex < points.length; pointIndex++) {
+                    var pointUnix = historyEpoch2010ToUnix(points[pointIndex].t);
+                    var label = historyDiscreteLabel(points[pointIndex].v);
+                    var nextUnix = pointIndex + 1 < points.length
+                        ? historyEpoch2010ToUnix(points[pointIndex + 1].t)
+                        : t1;
+                    var segStart = Math.max(t0, pointUnix);
+                    var segEnd = Math.min(t1, nextUnix);
+                    if (segEnd <= segStart) {
+                        continue;
+                    }
+                    segments.push({
+                        start: segStart,
+                        end: segEnd,
+                        label: label,
+                        color: historyColorForState(label)
+                    });
+                }
+                if (points.length && historyEpoch2010ToUnix(points[0].t) > t0) {
+                    var leadLabel = historyDiscreteLabel(points[0].v);
+                    segments.unshift({
+                        start: t0,
+                        end: Math.min(t1, historyEpoch2010ToUnix(points[0].t)),
+                        label: leadLabel,
+                        color: historyColorForState(leadLabel)
+                    });
+                }
+                segments.forEach(function (segment) {
+                    var x0 = xForUnix(segment.start);
+                    var x1 = xForUnix(segment.end);
+                    ctx.fillStyle = segment.color;
+                    ctx.fillRect(x0, bandTop, Math.max(1, x1 - x0), bandH);
+                });
+                ctx.strokeStyle = border;
+                ctx.strokeRect(padLeft, bandTop, plotW, bandH);
+                var seen = {};
+                segments.forEach(function (segment) {
+                    if (seen[segment.label] || !legend) {
+                        return;
+                    }
+                    seen[segment.label] = true;
+                    var item = document.createElement("span");
+                    item.className = "history-chart-legend-item";
+                    var swatch = document.createElement("span");
+                    swatch.className = "history-chart-legend-swatch";
+                    swatch.style.background = segment.color;
+                    item.appendChild(swatch);
+                    item.appendChild(document.createTextNode(segment.label));
+                    legend.appendChild(item);
+                });
+                historyChartState.layout = {
+                    kind: "discrete",
+                    padLeft: padLeft,
+                    padTop: bandTop,
+                    plotW: plotW,
+                    plotH: bandH,
+                    t0: t0,
+                    t1: t1,
+                    segments: segments
+                };
+                return;
+            }
+
+            var series = points.map(function (point) {
+                return {
+                    unix: historyEpoch2010ToUnix(point.t),
+                    value: Number(point.v)
+                };
+            }).filter(function (point) {
+                return isFinite(point.value);
+            });
+            if (historyChartState.smooth) {
+                series = historySmoothSeries(series, historySmoothWindowSize());
+            }
+            if (!series.length) {
+                historyChartState.layout = null;
+                return;
+            }
+            var values = series.map(function (point) { return point.value; });
+            var dataMin = Math.min.apply(null, values);
+            var dataMax = Math.max.apply(null, values);
+            var axis = historyComputeNumericAxis(dataMin, dataMax);
+            var minV = axis.minV;
+            var maxV = axis.maxV;
+            var axisStep = axis.step;
+            var yForValue = function (value) {
+                return padTop + plotH - ((value - minV) / (maxV - minV)) * plotH;
+            };
+            var yTicks = HISTORY_Y_INTERVALS;
+            var yTick;
+            ctx.textAlign = "right";
+            ctx.textBaseline = "middle";
+            ctx.font = "11px sans-serif";
+            for (yTick = 0; yTick <= yTicks; yTick++) {
+                var yValue = minV + axisStep * yTick;
+                var y = yForValue(yValue);
+                ctx.strokeStyle = border;
+                ctx.globalAlpha = 0.35;
+                ctx.beginPath();
+                ctx.moveTo(padLeft, y);
+                ctx.lineTo(padLeft + plotW, y);
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+                ctx.fillStyle = muted;
+                ctx.fillText(historyFormatAxisValue(yValue, axisStep), padLeft - 6, y);
+            }
+            ctx.beginPath();
+            var firstX = xForUnix(Math.max(t0, Math.min(t1, series[0].unix)));
+            var firstY = yForValue(series[0].value);
+            ctx.moveTo(firstX, padTop + plotH);
+            ctx.lineTo(firstX, firstY);
+            var seriesIndex;
+            for (seriesIndex = 0; seriesIndex < series.length; seriesIndex++) {
+                var current = series[seriesIndex];
+                var next = seriesIndex + 1 < series.length ? series[seriesIndex + 1] : null;
+                var xNow = xForUnix(Math.max(t0, Math.min(t1, current.unix)));
+                var yNow = yForValue(current.value);
+                if (seriesIndex > 0) {
+                    ctx.lineTo(xNow, yForValue(series[seriesIndex - 1].value));
+                    ctx.lineTo(xNow, yNow);
+                }
+                if (next) {
+                    var xNext = xForUnix(Math.max(t0, Math.min(t1, next.unix)));
+                    ctx.lineTo(xNext, yNow);
+                } else {
+                    ctx.lineTo(xForUnix(t1), yNow);
+                    ctx.lineTo(xForUnix(t1), padTop + plotH);
+                }
+            }
+            ctx.closePath();
+            ctx.fillStyle = accent;
+            ctx.globalAlpha = 0.15;
+            ctx.fill();
+            ctx.globalAlpha = 1;
+            ctx.beginPath();
+            ctx.moveTo(firstX, firstY);
+            for (seriesIndex = 0; seriesIndex < series.length; seriesIndex++) {
+                var sample = series[seriesIndex];
+                var nx = xForUnix(Math.max(t0, Math.min(t1, sample.unix)));
+                var ny = yForValue(sample.value);
+                if (seriesIndex > 0) {
+                    ctx.lineTo(nx, yForValue(series[seriesIndex - 1].value));
+                    ctx.lineTo(nx, ny);
+                }
+                if (seriesIndex + 1 < series.length) {
+                    var nx2 = xForUnix(Math.max(t0, Math.min(t1, series[seriesIndex + 1].unix)));
+                    ctx.lineTo(nx2, ny);
+                } else {
+                    ctx.lineTo(xForUnix(t1), ny);
+                }
+            }
+            ctx.strokeStyle = accent;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            if (legend) {
+                var lineItem = document.createElement("span");
+                lineItem.className = "history-chart-legend-item";
+                var lineSwatch = document.createElement("span");
+                lineSwatch.className = "history-chart-legend-swatch";
+                lineSwatch.style.background = accent;
+                lineItem.appendChild(lineSwatch);
+                lineItem.appendChild(document.createTextNode(historyChartState.query && historyChartState.query.title
+                    ? historyChartState.query.title
+                    : "value"));
+                legend.appendChild(lineItem);
+            }
+            historyChartState.layout = {
+                kind: "numeric",
+                padLeft: padLeft,
+                padTop: padTop,
+                plotW: plotW,
+                plotH: plotH,
+                t0: t0,
+                t1: t1,
+                minV: minV,
+                maxV: maxV,
+                series: series
+            };
+        }
+
+        function onHistoryChartPointer(event) {
+            var canvas = document.getElementById("historyChartCanvas");
+            var tip = document.getElementById("historyChartTooltip");
+            var layout = historyChartState.layout;
+            if (!canvas || !tip || !layout) {
+                return;
+            }
+            var rect = canvas.getBoundingClientRect();
+            var x = event.clientX - rect.left;
+            var y = event.clientY - rect.top;
+            if (x < layout.padLeft || x > layout.padLeft + layout.plotW
+                || y < layout.padTop || y > layout.padTop + layout.plotH) {
+                tip.hidden = true;
+                return;
+            }
+            var unix = layout.t0 + ((x - layout.padLeft) / layout.plotW) * (layout.t1 - layout.t0);
+            var text = historyFormatTooltipTime(unix);
+            if (layout.kind === "discrete") {
+                var segment = null;
+                var segIndex;
+                for (segIndex = 0; segIndex < layout.segments.length; segIndex++) {
+                    if (unix >= layout.segments[segIndex].start && unix < layout.segments[segIndex].end) {
+                        segment = layout.segments[segIndex];
+                        break;
+                    }
+                }
+                if (!segment && layout.segments.length) {
+                    segment = layout.segments[layout.segments.length - 1];
+                }
+                text += "\n" + (segment ? segment.label : "—");
+            } else if (layout.series && layout.series.length) {
+                var best = layout.series[0];
+                var bestDist = Math.abs(best.unix - unix);
+                var seriesIndex;
+                for (seriesIndex = 1; seriesIndex < layout.series.length; seriesIndex++) {
+                    var dist = Math.abs(layout.series[seriesIndex].unix - unix);
+                    if (dist < bestDist) {
+                        best = layout.series[seriesIndex];
+                        bestDist = dist;
+                    }
+                }
+                text += "\n" + String(best.value);
+            }
+            tip.textContent = text;
+            tip.hidden = false;
+            var tipX = Math.min(rect.width - 8, Math.max(8, x + 12));
+            var tipY = Math.min(rect.height - 8, Math.max(8, y - 12));
+            tip.style.left = tipX + "px";
+            tip.style.top = tipY + "px";
         }
 
         function loadHardware() {
@@ -3071,6 +3899,7 @@
             parameterDialogTypeId = typeSelect.value || "unknown";
             typeSelect.onchange = function () {
                 parameterDialogTypeId = typeSelect.value || "unknown";
+                syncDeviceHistoryEpsilonVisibility();
                 renderUserDataFieldsEditor();
                 applyZigbeeProtocolControls();
             };
@@ -3270,6 +4099,7 @@
                     typeSelect.value = parameterDialogTypeId || "unknown";
                 }
             }
+            syncDeviceHistoryEpsilonVisibility();
             renderUserDataFieldsEditor();
             applyMqttPublishControls();
             applyZigbeeProtocolControls();
@@ -3697,18 +4527,50 @@
         function appendBindingTitleElement(row, binding, fallbackText, options) {
             var titleOptions = options || {};
             var showTitle = bindingShowsTitle(binding);
-            if (!showTitle && !titleOptions.editPlaceholder) {
+            if (!showTitle && !titleOptions.editPlaceholder && !titleOptions.forceShow) {
                 return null;
             }
-            var usePlaceholder = !showTitle && titleOptions.editPlaceholder;
+            var usePlaceholder = !showTitle && titleOptions.editPlaceholder && !titleOptions.forceShow;
             var title = document.createElement("span");
             title.className = "console-device-row-title"
                 + (usePlaceholder ? " console-device-row-title--edit-placeholder" : "");
             title.textContent = usePlaceholder
                 ? bindingEditPlaceholderLabel(binding, fallbackText)
                 : bindingTitleLabel(binding, fallbackText);
-            row.appendChild(title);
+            if (titleOptions.beforeChild && titleOptions.beforeChild.parentNode === row) {
+                row.insertBefore(title, titleOptions.beforeChild);
+            } else {
+                row.appendChild(title);
+            }
             return title;
+        }
+
+        function wireBindingHistoryTargets(row, controls, titleEl, device, binding) {
+            if (!device || !bindingHistoryEnabled(device, binding)) {
+                return;
+            }
+            // Respect showTitle: never invent a title. History opens from an existing
+            // title (if shown), text values, and indicator-only icons.
+            var historyTitle = titleEl || (row && row.querySelector(".console-device-row-title"));
+            if (historyTitle && bindingShowsTitle(binding)) {
+                attachHistoryOpen(historyTitle, device, binding);
+            }
+            if (!controls) {
+                return;
+            }
+            var valueNodes = controls.querySelectorAll(
+                ".console-sensor-value, .console-cover-position"
+            );
+            var valueIndex;
+            for (valueIndex = 0; valueIndex < valueNodes.length; valueIndex++) {
+                attachHistoryOpen(valueNodes[valueIndex], device, binding);
+            }
+            // Indicator icons only (span). Actuator icons are <button class="...--control">.
+            var indicatorIcons = controls.querySelectorAll("span.console-binary-icon");
+            var iconIndex;
+            for (iconIndex = 0; iconIndex < indicatorIcons.length; iconIndex++) {
+                attachHistoryOpen(indicatorIcons[iconIndex], device, binding);
+            }
         }
 
         function buildConsoleIconElement(binding, stateText, options) {
@@ -7572,7 +8434,7 @@
             }
             row.className = "console-device-row";
             applyBindingTitleLayout(row, binding, layoutOptions || null);
-            appendBindingTitleElement(row, binding, "Device");
+            var titleEl = appendBindingTitleElement(row, binding, "Device");
             var controls = document.createElement("div");
             controls.className = "console-device-row-controls";
             var useCustomClick = bindingHasAnyClickAction(binding);
@@ -7858,7 +8720,6 @@
                             : reportableRaw)
                         : "—";
                 }
-                attachHistoryOpen(reportableValueLabel, device, binding);
                 controls.appendChild(reportableValueLabel);
             } else if (isMeasurementDeviceType(typeId) && param !== "battery") {
                 var valueLabel = document.createElement("span");
@@ -7877,6 +8738,7 @@
                 controls.appendChild(generic);
             }
             row.appendChild(controls);
+            wireBindingHistoryTargets(row, controls, titleEl, device, binding);
             return row;
         }
 
@@ -16853,6 +17715,10 @@
                 closeSettingsRestoreConfirmDialog();
                 return true;
             }
+            if (dialogId === "historyChartOverlay") {
+                closeHistoryChart();
+                return true;
+            }
             return false;
         }
 
@@ -17928,7 +18794,7 @@
                                 <input id="deviceHistoryEnabled" type="checkbox" onchange="onDeviceHistoryFlagChanged()">
                                 <span>save history</span>
                             </div>
-                            <label for="deviceHistoryEpsilon">min. change</label>
+                            <label id="deviceHistoryEpsilonLabel" for="deviceHistoryEpsilon">min. change</label>
                             <input id="deviceHistoryEpsilon" type="number" step="any" min="0" disabled
                                    oninput="if (this.value !== '' && Number(this.value) < 0) this.value = '0'">
                         </div>
@@ -18569,9 +19435,41 @@
 </div>
 
     <div id="historyChartOverlay" class="dialog-overlay dialog-overlay-front" hidden>
-        <div class="dialog-panel" role="dialog" aria-label="History" style="width:min(45rem,100%);">
+        <div class="dialog-panel" role="dialog" aria-label="History">
             <h2 id="historyChartTitle">History</h2>
-            <canvas id="historyChartCanvas" width="680" height="280" style="width:100%;background:#111;border-radius:8px;"></canvas>
+            <div class="history-chart-toolbar">
+                <div class="history-chart-presets" role="group" aria-label="Time range">
+                    <button type="button" class="btn btn-secondary" data-history-hours="1" onclick="setHistoryChartPreset(1)">1h</button>
+                    <button type="button" class="btn btn-secondary" data-history-hours="6" onclick="setHistoryChartPreset(6)">6h</button>
+                    <button type="button" class="btn btn-secondary" data-history-hours="12" onclick="setHistoryChartPreset(12)">12h</button>
+                    <button type="button" class="btn btn-secondary is-active" data-history-hours="24" onclick="setHistoryChartPreset(24)">24h</button>
+                    <button type="button" class="btn btn-secondary" data-history-hours="48" onclick="setHistoryChartPreset(48)">2d</button>
+                    <button type="button" class="btn btn-secondary" data-history-hours="168" onclick="setHistoryChartPreset(168)">7d</button>
+                </div>
+                <div class="history-chart-range">
+                    <button type="button" class="btn btn-secondary" onclick="shiftHistoryChartRange(-1)" title="Previous period">◀</button>
+                    <input id="historyChartStart" type="datetime-local" aria-label="Range start" onchange="applyHistoryChartDatetimeRange()">
+                    <span aria-hidden="true">–</span>
+                    <input id="historyChartEnd" type="datetime-local" aria-label="Range end" onchange="applyHistoryChartDatetimeRange()">
+                    <button type="button" class="btn btn-secondary" onclick="shiftHistoryChartRange(1)" title="Next period">▶</button>
+                </div>
+                <div class="history-chart-smooth">
+                    <div class="field-check">
+                        <input id="historyChartSmooth" type="checkbox" onchange="onHistoryChartSmoothChange()">
+                        <span>Smooth</span>
+                    </div>
+                    <label for="historyChartSmoothWindow">samples</label>
+                    <input id="historyChartSmoothWindow" type="number" min="1" max="128" step="1" value="5" disabled
+                           onchange="onHistoryChartSmoothChange()" oninput="onHistoryChartSmoothWindowInput()">
+                </div>
+            </div>
+            <div id="historyChartCanvasWrap" class="history-chart-canvas-wrap">
+                <canvas id="historyChartCanvas" width="680" height="320"
+                        onmousemove="onHistoryChartPointer(event)"
+                        onmouseleave="document.getElementById('historyChartTooltip').hidden = true"></canvas>
+                <div id="historyChartTooltip" class="history-chart-tooltip" hidden></div>
+            </div>
+            <div id="historyChartLegend" class="history-chart-legend"></div>
             <div class="dialog-actions">
                 <button type="button" class="btn btn-secondary" onclick="closeHistoryChart()">Close</button>
             </div>

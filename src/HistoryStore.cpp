@@ -149,13 +149,20 @@ void historyNoteMainStateValue(
     memcpy(key.ieee, ieee, 8);
     key.kind = HistorySeriesMainState;
     key.channel = channel == 0 ? 1 : channel;
-    if (entry->zigbeeType == ZigbeeDeviceTypeWindowCovering) {
+    if (entry->zigbeeType == ZigbeeDeviceTypeWindowCovering
+        || zigbeeDeviceTypeIsMeasurement(entry->zigbeeType)) {
         char *endPointer = nullptr;
-        const float position = strtof(valueText, &endPointer);
+        const float numericValue = strtof(valueText, &endPointer);
         if (endPointer == valueText) {
             return;
         }
-        store->noteFloat(key, position, entry->historyEpsilon, HistoryValueFloat);
+        while (*endPointer == ' ' || *endPointer == '\t') {
+            endPointer++;
+        }
+        if (*endPointer != '\0' && *endPointer != '%') {
+            return;
+        }
+        store->noteFloat(key, numericValue, entry->historyEpsilon, HistoryValueFloat);
         return;
     }
     const bool asOn =
@@ -792,11 +799,13 @@ void HistoryStore::syncSeriesFromDevices(DeviceTopicMap *deviceMap) {
                 memcpy(key.ieee, entry->ieee, 8);
                 key.kind = HistorySeriesMainState;
                 key.channel = channel;
-                const bool isCovering = entry->zigbeeType == ZigbeeDeviceTypeWindowCovering;
+                const bool isFloatMain =
+                    entry->zigbeeType == ZigbeeDeviceTypeWindowCovering
+                    || zigbeeDeviceTypeIsMeasurement(entry->zigbeeType);
                 ensureSeries(
                     key,
-                    isCovering ? HistoryValueFloat : HistoryValueBool,
-                    isCovering ? (uint8_t)sizeof(float) : (uint8_t)1,
+                    isFloatMain ? HistoryValueFloat : HistoryValueBool,
+                    isFloatMain ? (uint8_t)sizeof(float) : (uint8_t)1,
                     entry->historyEpsilon
                 );
             }

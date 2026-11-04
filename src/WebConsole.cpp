@@ -2623,10 +2623,10 @@ void WebConsole::handleHistoryGet(AsyncWebServerRequest *request) {
         toEpoch = (uint32_t)strtoul(request->getParam("to")->value().c_str(), nullptr, 10);
     }
     // Keep tiny on the AsyncTCP task: heap samples + bounded JSON.
-    uint16_t maxPoints = 64;
+    uint16_t maxPoints = 128;
     if (request->hasParam("maxPoints")) {
         const int parsedMax = request->getParam("maxPoints")->value().toInt();
-        if (parsedMax > 0 && parsedMax <= 64) {
+        if (parsedMax > 0 && parsedMax <= 128) {
             maxPoints = (uint16_t)parsedMax;
         }
     }
@@ -3628,9 +3628,11 @@ void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
         request->send(503, "text/plain", "Slave is not ready to store the device");
         return;
     }
+#if defined(BOARD_ROLE_HOST)
     if (historyStore != nullptr) {
         historyStore->syncSeriesFromDevices(deviceMap);
     }
+#endif
     broadcastDeviceUpsert(ieee);
     request->send(200, "text/plain", "Saved");
 }
@@ -3673,9 +3675,11 @@ void WebConsole::handleDevicesDelete(AsyncWebServerRequest *request) {
         request->send(503, "text/plain", "Slave is not ready to store the device");
         return;
     }
+#if defined(BOARD_ROLE_HOST)
     if (historyStore != nullptr) {
         historyStore->syncSeriesFromDevices(deviceMap);
     }
+#endif
     broadcastDeviceRemoved(ieee);
     request->send(200, "text/plain", "Deleted");
 }
