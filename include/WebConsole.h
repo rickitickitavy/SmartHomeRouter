@@ -11,6 +11,9 @@
 #include "AutomationStore.h"
 #include "CameraStore.h"
 #include "PsramJsonBuffer.h"
+#if defined(BOARD_ROLE_HOST)
+#include "HistoryStore.h"
+#endif
 
 class WebConsole {
 public:
@@ -66,6 +69,9 @@ public:
     void setZigbeeApplyHandler(VoidApplyFn handler);
     void setEmailSavedHandler(VoidApplyFn handler);
     void setActionRunner(ActionRunnerFn handler);
+#if defined(BOARD_ROLE_HOST)
+    void setHistoryStore(HistoryStore *store);
+#endif
 
 private:
     SettingsManager *settingsManager;
@@ -91,6 +97,9 @@ private:
     VoidApplyFn applyZigbeeRuntime = nullptr;
     VoidApplyFn onEmailSaved = nullptr;
     ActionRunnerFn runConsoleAction = nullptr;
+#if defined(BOARD_ROLE_HOST)
+    HistoryStore *historyStore = nullptr;
+#endif
     AsyncWebServer server;
     AsyncWebSocket devicesSocket;
     AsyncWebSocket consolesSocket;
@@ -121,6 +130,9 @@ private:
     void handleZigbeePost(AsyncWebServerRequest *request);
     void handleHardwareGet(AsyncWebServerRequest *request);
     void handleHardwarePost(AsyncWebServerRequest *request);
+#if defined(BOARD_ROLE_HOST)
+    void handleHistoryGet(AsyncWebServerRequest *request);
+#endif
     void handleSettingsExportGet(AsyncWebServerRequest *request);
     void handleSettingsRestorePost(AsyncWebServerRequest *request);
     void handleThemeGet(AsyncWebServerRequest *request);

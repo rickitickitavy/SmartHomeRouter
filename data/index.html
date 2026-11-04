@@ -322,6 +322,22 @@
                 "statusActionQueue",
                 payload && payload.actionQueue != null ? String(payload.actionQueue) : "—"
             );
+            setStatusText(
+                "statusHistoryEntries",
+                payload && payload.historyEntries != null ? String(payload.historyEntries) : "—"
+            );
+            setStatusText(
+                "statusHistoryPages",
+                payload && payload.historyPages != null ? String(payload.historyPages) : "—"
+            );
+            setStatusText(
+                "statusHistoryPsram",
+                payload && payload.historyPsramKiB != null ? String(payload.historyPsramKiB) + " kB" : "—"
+            );
+            setStatusText(
+                "statusHistoryValues",
+                payload && payload.historyValuesStored != null ? String(payload.historyValuesStored) : "—"
+            );
             if (payload && payload.wifiRssiDbm != null) {
                 setStatusText("statusWifiSignal", String(payload.wifiRssiDbm) + " dBm");
             } else {
@@ -1262,6 +1278,1073 @@
             });
         }
 
+
+        function deviceHistoryUsesMinChange(typeId) {
+            return String(typeId || "") !== "onOff";
+        }
+
+        function syncDeviceHistoryEpsilonVisibility() {
+            var showMinChange = deviceHistoryUsesMinChange(parameterDialogTypeId);
+            var epsilonLabel = document.getElementById("deviceHistoryEpsilonLabel");
+            var epsilonInput = document.getElementById("deviceHistoryEpsilon");
+            var flag = document.getElementById("deviceHistoryEnabled");
+            if (epsilonLabel) {
+                epsilonLabel.hidden = !showMinChange;
+            }
+            if (epsilonInput) {
+                epsilonInput.hidden = !showMinChange;
+                if (!showMinChange) {
+                    epsilonInput.disabled = true;
+                    epsilonInput.value = "";
+                } else if (flag && flag.checked) {
+                    epsilonInput.disabled = false;
+                    if (epsilonInput.value === "" || Number(epsilonInput.value) < 0) {
+                        epsilonInput.value = "0";
+                    }
+                }
+            }
+        }
+
+        function onDeviceHistoryFlagChanged() {
+            var flag = document.getElementById("deviceHistoryEnabled");
+            var epsilonInput = document.getElementById("deviceHistoryEpsilon");
+            if (!flag || !epsilonInput) {
+                return;
+            }
+            if (!deviceHistoryUsesMinChange(parameterDialogTypeId)) {
+                epsilonInput.disabled = true;
+                epsilonInput.value = "";
+                return;
+            }
+            epsilonInput.disabled = !flag.checked;
+            if (!flag.checked) {
+                epsilonInput.value = "";
+            } else if (epsilonInput.value === "" || Number(epsilonInput.value) < 0) {
+                epsilonInput.value = "0";
+            }
+        }
+
+        function applyDeviceHistoryEpsilonToForm(epsilon) {
+            var flag = document.getElementById("deviceHistoryEnabled");
+            var epsilonInput = document.getElementById("deviceHistoryEpsilon");
+            if (!flag || !epsilonInput) {
+                return;
+            }
+            var value = epsilon != null ? Number(epsilon) : -1;
+            if (isNaN(value) || value < 0) {
+                flag.checked = false;
+                epsilonInput.value = "";
+                epsilonInput.disabled = true;
+            } else {
+                flag.checked = true;
+                if (deviceHistoryUsesMinChange(parameterDialogTypeId)) {
+                    epsilonInput.disabled = false;
+                    epsilonInput.value = String(value);
+                } else {
+                    epsilonInput.disabled = true;
+                    epsilonInput.value = "";
+                }
+            }
+            syncDeviceHistoryEpsilonVisibility();
+        }
+
+        function readDeviceHistoryEpsilonFromForm() {
+            var flag = document.getElementById("deviceHistoryEnabled");
+            var epsilonInput = document.getElementById("deviceHistoryEpsilon");
+            if (!flag || !flag.checked) {
+                return -1;
+            }
+            if (!deviceHistoryUsesMinChange(parameterDialogTypeId)) {
+                return 0;
+            }
+            var value = epsilonInput ? Number(epsilonInput.value) : 0;
+            if (isNaN(value) || value < 0) {
+                return 0;
+            }
+            return value;
+        }
+
+
+        function historyEpsilonEnabled(epsilon, typeId) {
+            var value = epsilon != null ? Number(epsilon) : -1;
+            if (isNaN(value)) {
+                value = -1;
+            }
+            if (String(typeId || "") === "string") {
+                return value === 0;
+            }
+            return value >= 0;
+        }
+
+        function historyReportableIdsEqual(left, right) {
+            var leftNum = parseInt(String(left || ""), 0);
+            var rightNum = parseInt(String(right || ""), 0);
+            if (!isNaN(leftNum) && !isNaN(rightNum)) {
+                return (leftNum & 0xFFFF) === (rightNum & 0xFFFF);
+            }
+            return String(left || "").toLowerCase() === String(right || "").toLowerCase();
+        }
+
+        function bindingHistoryEnabled(device, binding) {
+            if (!device || !binding) {
+                return false;
+            }
+            var param = binding.param || "";
+            var reportable = parseReportableParamId(param);
+            if (reportable) {
+                var rows = Array.isArray(device.reportableData) ? device.reportableData : [];
+                var rowIndex;
+                for (rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+                    var row = rows[rowIndex] || {};
+                    if (historyReportableIdsEqual(row.cluster, reportable.cluster)
+                        && historyReportableIdsEqual(row.attribute, reportable.attribute)) {
+                        return historyEpsilonEnabled(row.epsilon, row.type);
+                    }
+                }
+                return false;
+            }
+            var userDataFields = Array.isArray(device.userDataFields) ? device.userDataFields : [];
+            var fieldIndex;
+            for (fieldIndex = 0; fieldIndex < userDataFields.length; fieldIndex++) {
+                var field = userDataFields[fieldIndex] || {};
+                if (String(field.name || "") === param) {
+                    return historyEpsilonEnabled(field.epsilon, field.type);
+                }
+            }
+            return historyEpsilonEnabled(device.historyEpsilon, "float");
+        }
+
+        function historyQueryForBinding(device, binding) {
+            if (!device || !device.ieee || !binding) {
+                return null;
+            }
+            if (!bindingHistoryEnabled(device, binding)) {
+                return null;
+            }
+            var query = { ieee: device.ieee, title: binding.title || device.name || "History" };
+            var param = binding.param || "";
+            var reportable = parseReportableParamId(param);
+            if (reportable) {
+                query.kind = "reportable";
+                query.cluster = reportable.cluster;
+                query.attribute = reportable.attribute;
+                return query;
+            }
+            var userDataFields = Array.isArray(device.userDataFields) ? device.userDataFields : [];
+            var fieldIndex;
+            for (fieldIndex = 0; fieldIndex < userDataFields.length; fieldIndex++) {
+                var field = userDataFields[fieldIndex] || {};
+                if (String(field.name || "") === param) {
+                    query.kind = "reportable";
+                    query.cluster = 0xFC00;
+                    query.attribute = 0x0100 + fieldIndex;
+                    return query;
+                }
+            }
+            query.kind = "main";
+            query.channel = binding.channel || 1;
+            return query;
+        }
+
+        function attachHistoryOpen(element, device, binding) {
+            if (!element || !device || !binding) {
+                return;
+            }
+            if (!bindingHistoryEnabled(device, binding)) {
+                return;
+            }
+            element.style.cursor = "pointer";
+            element.title = "Open history";
+            element.onclick = function (event) {
+                if (event) {
+                    event.stopPropagation();
+                }
+                var query = historyQueryForBinding(device, binding);
+                if (query) {
+                    openHistoryChart(query);
+                }
+            };
+        }
+
+        var HISTORY_EPOCH_UNIX_OFFSET = 1262304000;
+        var historyChartState = {
+            query: null,
+            hours: 24,
+            rangeEndUnix: 0,
+            payload: null,
+            layout: null,
+            smooth: true,
+            smoothWindow: 7
+        };
+        var HISTORY_RANGE_PRESETS = [
+            { hours: 1, label: "1h" },
+            { hours: 2, label: "2h" },
+            { hours: 4, label: "4h" },
+            { hours: 6, label: "6h" },
+            { hours: 12, label: "12h" },
+            { hours: 24, label: "24h" },
+            { hours: 48, label: "2d" },
+            { hours: 168, label: "7d" }
+        ];
+        var HISTORY_STATE_COLORS = [
+            "#03a9f4", "#4caf50", "#ff9800", "#f44336", "#9c27b0",
+            "#00bcd4", "#8bc34a", "#ffc107", "#e91e63", "#607d8b"
+        ];
+
+        function historyUnixToEpoch2010(unixSec) {
+            var value = Number(unixSec) || 0;
+            return value > HISTORY_EPOCH_UNIX_OFFSET ? Math.floor(value - HISTORY_EPOCH_UNIX_OFFSET) : 0;
+        }
+
+        function historyEpoch2010ToUnix(epoch2010) {
+            return (Number(epoch2010) || 0) + HISTORY_EPOCH_UNIX_OFFSET;
+        }
+
+        function historyFormatAxisTime(unixSec, hoursSpan) {
+            var date = new Date(unixSec * 1000);
+            if (isNaN(date.getTime())) {
+                return "";
+            }
+            if (hoursSpan <= 24) {
+                return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+            }
+            return date.toLocaleString([], {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit"
+            });
+        }
+
+        var HISTORY_Y_INTERVALS = 4;
+
+        function historyNiceNum(value, round) {
+            var x = Math.abs(Number(value));
+            if (!isFinite(x) || x === 0) {
+                return 1;
+            }
+            var exp = Math.floor(Math.log(x) / Math.LN10);
+            var frac = x / Math.pow(10, exp);
+            var niceFrac;
+            if (round) {
+                if (frac < 1.5) {
+                    niceFrac = 1;
+                } else if (frac < 3) {
+                    niceFrac = 2;
+                } else if (frac < 7) {
+                    niceFrac = 5;
+                } else {
+                    niceFrac = 10;
+                }
+            } else if (frac <= 1) {
+                niceFrac = 1;
+            } else if (frac <= 2) {
+                niceFrac = 2;
+            } else if (frac <= 5) {
+                niceFrac = 5;
+            } else {
+                niceFrac = 10;
+            }
+            return niceFrac * Math.pow(10, exp);
+        }
+
+        function historyNextNiceStep(step) {
+            var x = Number(step);
+            if (!isFinite(x) || x <= 0) {
+                return 1;
+            }
+            var exp = Math.floor(Math.log(x) / Math.LN10);
+            var base = x / Math.pow(10, exp);
+            var nextBase;
+            if (base < 1.5) {
+                nextBase = 2;
+            } else if (base < 3) {
+                nextBase = 5;
+            } else if (base < 7) {
+                nextBase = 10;
+            } else {
+                nextBase = 20;
+            }
+            return nextBase * Math.pow(10, exp);
+        }
+
+        function historyFormatAxisValue(value, step) {
+            var numeric = Number(value);
+            if (!isFinite(numeric)) {
+                return "";
+            }
+            var axisStep = Number(step);
+            if (!isFinite(axisStep) || axisStep <= 0) {
+                axisStep = 1;
+            }
+            var rounded = Math.round(numeric / axisStep) * axisStep;
+            if (Math.abs(rounded) < axisStep * 1e-9) {
+                rounded = 0;
+            }
+            var decimals = 0;
+            if (axisStep < 1) {
+                decimals = Math.max(0, Math.min(6, Math.ceil(-Math.log10(axisStep) - 1e-12)));
+            }
+            return decimals > 0 ? rounded.toFixed(decimals) : String(Math.round(rounded));
+        }
+
+        function historyComputeNumericAxis(dataMin, dataMax) {
+            var intervals = HISTORY_Y_INTERVALS;
+            var dmin = Number(dataMin);
+            var dmax = Number(dataMax);
+            if (!isFinite(dmin) || !isFinite(dmax)) {
+                dmin = 0;
+                dmax = 1;
+            }
+            if (dmin > dmax) {
+                var swap = dmin;
+                dmin = dmax;
+                dmax = swap;
+            }
+            if (dmax - dmin < 1e-12) {
+                dmin -= 1;
+                dmax += 1;
+            }
+            var crossesZero = dmin < 0 && dmax > 0;
+            var step = historyNiceNum((dmax - dmin) / intervals, true);
+            if (!isFinite(step) || !(step > 0)) {
+                step = 1;
+            }
+            var minV = 0;
+            var maxV = intervals * step;
+            var guard;
+            if (crossesZero) {
+                for (guard = 0; guard < 24; guard++) {
+                    var below = Math.ceil((-dmin) / step - 1e-12);
+                    var above = Math.ceil(dmax / step - 1e-12);
+                    if (below < 1) {
+                        below = 1;
+                    }
+                    if (above < 1) {
+                        above = 1;
+                    }
+                    if (below + above <= intervals) {
+                        var spare = intervals - below - above;
+                        var addBelow = Math.floor(spare / 2);
+                        var addAbove = spare - addBelow;
+                        minV = -(below + addBelow) * step;
+                        maxV = (above + addAbove) * step;
+                        break;
+                    }
+                    step = historyNextNiceStep(step);
+                }
+            } else {
+                for (guard = 0; guard < 24; guard++) {
+                    // Loose nice bounds: always cover data (ceil top, floor bottom).
+                    minV = Math.floor(dmin / step) * step;
+                    maxV = Math.ceil(dmax / step) * step;
+                    if (maxV - minV < step - 1e-12) {
+                        maxV = minV + step;
+                    }
+                    var usedSteps = Math.round((maxV - minV) / step);
+                    if (usedSteps > intervals) {
+                        step = historyNextNiceStep(step);
+                        continue;
+                    }
+                    var spareSteps = intervals - usedSteps;
+                    var addLow = Math.floor(spareSteps / 2);
+                    var addHigh = spareSteps - addLow;
+                    // Prefer expanding away from 0 when data stays on one side.
+                    if (dmax < 0) {
+                        addLow = spareSteps;
+                        addHigh = 0;
+                    } else if (dmin > 0) {
+                        addLow = 0;
+                        addHigh = spareSteps;
+                    }
+                    minV -= addLow * step;
+                    maxV += addHigh * step;
+
+                    // Keep sign only when coverage still holds.
+                    if (dmin >= 0 && minV < 0) {
+                        maxV -= minV;
+                        minV = 0;
+                    }
+                    if (dmax < 0 && maxV > 0) {
+                        minV -= maxV;
+                        maxV = 0;
+                    }
+                    if (minV > dmin + 1e-12 || maxV < dmax - 1e-12
+                        || Math.round((maxV - minV) / step) > intervals) {
+                        step = historyNextNiceStep(step);
+                        continue;
+                    }
+                    // Snap span to exactly intervals * step if clamp shortened it.
+                    if (Math.round((maxV - minV) / step) < intervals) {
+                        if (dmax < 0) {
+                            minV = maxV - intervals * step;
+                        } else {
+                            maxV = minV + intervals * step;
+                        }
+                        if (minV > dmin + 1e-12 || maxV < dmax - 1e-12) {
+                            step = historyNextNiceStep(step);
+                            continue;
+                        }
+                    }
+
+                    // Center leftover padding top/bottom without uncovering data.
+                    var spareLow = dmin - minV;
+                    var spareHigh = maxV - dmax;
+                    var shift = Math.round((spareLow - spareHigh) / (2 * step)) * step;
+                    if (shift !== 0) {
+                        var shiftedMin = minV + shift;
+                        var shiftedMax = maxV + shift;
+                        if (shiftedMin <= dmin + 1e-12 && shiftedMax >= dmax - 1e-12
+                            && !(dmin >= 0 && shiftedMin < 0)
+                            && !(dmax < 0 && shiftedMax > 0)) {
+                            minV = shiftedMin;
+                            maxV = shiftedMax;
+                        }
+                    }
+                    break;
+                }
+            }
+            return { minV: minV, maxV: maxV, step: step };
+        }
+
+        function historyFormatTooltipTime(unixSec) {
+            var date = new Date(unixSec * 1000);
+            if (isNaN(date.getTime())) {
+                return "";
+            }
+            return date.toLocaleString([], {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit"
+            });
+        }
+
+        function historyToDatetimeLocalValue(unixSec) {
+            var date = new Date(unixSec * 1000);
+            if (isNaN(date.getTime())) {
+                return "";
+            }
+            var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+            return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate())
+                + "T" + pad(date.getHours()) + ":" + pad(date.getMinutes());
+        }
+
+        function historyParseDatetimeLocalValue(text) {
+            if (!text) {
+                return NaN;
+            }
+            var parsed = Date.parse(text);
+            return isNaN(parsed) ? NaN : Math.floor(parsed / 1000);
+        }
+
+        function historyDiscreteLabel(value) {
+            if (value === true || value === 1 || value === "1" || value === "on" || value === "ON" || value === "true") {
+                return "on";
+            }
+            if (value === false || value === 0 || value === "0" || value === "off" || value === "OFF" || value === "false") {
+                return "off";
+            }
+            return String(value == null ? "" : value);
+        }
+
+        function historyColorForState(label) {
+            var key = String(label || "").toLowerCase();
+            if (key === "on" || key === "open" || key === "true" || key === "leak") {
+                return "#4caf50";
+            }
+            if (key === "off" || key === "closed" || key === "false" || key === "dry") {
+                return "#44739e";
+            }
+            var hash = 0;
+            var index;
+            for (index = 0; index < key.length; index++) {
+                hash = ((hash << 5) - hash) + key.charCodeAt(index);
+                hash |= 0;
+            }
+            return HISTORY_STATE_COLORS[Math.abs(hash) % HISTORY_STATE_COLORS.length];
+        }
+
+        function historySyncRangeControls() {
+            var startInput = document.getElementById("historyChartStart");
+            var endInput = document.getElementById("historyChartEnd");
+            var endUnix = historyChartState.rangeEndUnix || Math.floor(Date.now() / 1000);
+            var startUnix = endUnix - Math.floor(historyChartState.hours * 3600);
+            if (startInput) {
+                startInput.value = historyToDatetimeLocalValue(startUnix);
+            }
+            if (endInput) {
+                endInput.value = historyToDatetimeLocalValue(endUnix);
+            }
+            var presetButtons = document.querySelectorAll("[data-history-hours]");
+            var buttonIndex;
+            for (buttonIndex = 0; buttonIndex < presetButtons.length; buttonIndex++) {
+                var button = presetButtons[buttonIndex];
+                var hours = Number(button.getAttribute("data-history-hours"));
+                if (hours === historyChartState.hours) {
+                    button.classList.add("is-active");
+                } else {
+                    button.classList.remove("is-active");
+                }
+            }
+        }
+
+        function historyFetchAndDraw() {
+            var canvas = document.getElementById("historyChartCanvas");
+            var query = historyChartState.query;
+            if (!canvas || !query) {
+                return;
+            }
+            var endUnix = historyChartState.rangeEndUnix || Math.floor(Date.now() / 1000);
+            var startUnix = endUnix - Math.floor(historyChartState.hours * 3600);
+            if (startUnix < 0) {
+                startUnix = 0;
+            }
+            historySyncRangeControls();
+            var params = new URLSearchParams();
+            params.set("ieee", query.ieee || "");
+            params.set("kind", query.kind || "main");
+            if (query.channel != null) {
+                params.set("channel", String(query.channel));
+            }
+            if (query.cluster != null) {
+                params.set("cluster", String(query.cluster));
+            }
+            if (query.attribute != null) {
+                params.set("attribute", String(query.attribute));
+            }
+            params.set("from", String(historyUnixToEpoch2010(startUnix)));
+            params.set("to", String(historyUnixToEpoch2010(endUnix)));
+            params.set("maxPoints", "128");
+            fetch("/api/history?" + params.toString(), { cache: "no-store" }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error("history " + response.status);
+                }
+                return response.json();
+            }).then(function (payload) {
+                historyChartState.payload = payload || { valueType: "float", points: [] };
+                historySyncSmoothControls();
+                drawHistoryChart(canvas, historyChartState.payload, startUnix, endUnix);
+            }).catch(function () {
+                historyChartState.payload = { valueType: "float", points: [] };
+                historySyncSmoothControls();
+                drawHistoryChart(canvas, historyChartState.payload, startUnix, endUnix);
+            });
+        }
+
+        function openHistoryChart(query) {
+            var overlay = document.getElementById("historyChartOverlay");
+            var title = document.getElementById("historyChartTitle");
+            if (!overlay || !query) {
+                return;
+            }
+            historyChartState.query = query;
+            historyChartState.payload = null;
+            historyChartState.hours = 24;
+            historyChartState.rangeEndUnix = Math.floor(Date.now() / 1000);
+            if (historyChartState.smoothWindow < 1) {
+                historyChartState.smoothWindow = 7;
+            }
+            historySyncSmoothControls();
+            if (title) {
+                title.textContent = query.title || "History";
+            }
+            overlay.hidden = false;
+            historyFetchAndDraw();
+        }
+
+        function closeHistoryChart() {
+            var overlay = document.getElementById("historyChartOverlay");
+            var tip = document.getElementById("historyChartTooltip");
+            if (overlay) {
+                overlay.hidden = true;
+            }
+            if (tip) {
+                tip.hidden = true;
+            }
+            historyChartState.query = null;
+            historyChartState.payload = null;
+            historyChartState.layout = null;
+        }
+
+        function setHistoryChartPreset(hours) {
+            var value = Number(hours);
+            if (!(value > 0)) {
+                return;
+            }
+            historyChartState.hours = value;
+            historyChartState.rangeEndUnix = Math.floor(Date.now() / 1000);
+            historyFetchAndDraw();
+        }
+
+        function shiftHistoryChartRange(direction) {
+            var delta = Math.floor(historyChartState.hours * 3600) * (direction < 0 ? -1 : 1);
+            historyChartState.rangeEndUnix =
+                (historyChartState.rangeEndUnix || Math.floor(Date.now() / 1000)) + delta;
+            historyFetchAndDraw();
+        }
+
+        function historySmoothWindowSize() {
+            var input = document.getElementById("historyChartSmoothWindow");
+            var value = input ? Number(input.value) : historyChartState.smoothWindow;
+            if (!isFinite(value) || value < 1) {
+                value = 7;
+            }
+            value = Math.floor(value);
+            if (value < 1) {
+                value = 1;
+            }
+            if (value > 128) {
+                value = 128;
+            }
+            historyChartState.smoothWindow = value;
+            if (input && String(input.value) !== String(value)) {
+                input.value = String(value);
+            }
+            return value;
+        }
+
+        function historyChartIsDiscretePayload(payload) {
+            var valueType = payload && payload.valueType ? String(payload.valueType) : "float";
+            return valueType === "bool" || valueType === "string";
+        }
+
+        function historyChartAllowsSmooth() {
+            if (!historyChartState.payload) {
+                return false;
+            }
+            return !historyChartIsDiscretePayload(historyChartState.payload);
+        }
+
+        function historySyncSmoothControls() {
+            var wrap = document.getElementById("historyChartSmoothControls");
+            var flag = document.getElementById("historyChartSmooth");
+            var input = document.getElementById("historyChartSmoothWindow");
+            var allowSmooth = historyChartAllowsSmooth();
+            if (wrap) {
+                wrap.hidden = !allowSmooth;
+            }
+            if (!allowSmooth) {
+                return;
+            }
+            if (flag) {
+                flag.checked = !!historyChartState.smooth;
+            }
+            if (input) {
+                input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 7);
+                input.disabled = !historyChartState.smooth;
+            }
+        }
+
+        function onHistoryChartSmoothChange() {
+            if (!historyChartAllowsSmooth()) {
+                return;
+            }
+            var flag = document.getElementById("historyChartSmooth");
+            historyChartState.smooth = !!(flag && flag.checked);
+            historySmoothWindowSize();
+            historySyncSmoothControls();
+            historyRedrawFromPayload();
+        }
+
+        function onHistoryChartSmoothWindowInput() {
+            if (!historyChartAllowsSmooth() || !historyChartState.smooth) {
+                return;
+            }
+            var input = document.getElementById("historyChartSmoothWindow");
+            var value = input ? Number(input.value) : NaN;
+            if (!isFinite(value) || value < 1) {
+                return;
+            }
+            historyChartState.smoothWindow = Math.min(128, Math.floor(value));
+            historyRedrawFromPayload();
+        }
+
+        function historySmoothSeries(series, windowSize) {
+            var windowCount = Math.max(1, Math.floor(Number(windowSize) || 5));
+            if (!series || !series.length || windowCount <= 1) {
+                return series || [];
+            }
+            var smoothed = [];
+            var sum = 0;
+            var index;
+            for (index = 0; index < series.length; index++) {
+                sum += series[index].value;
+                if (index >= windowCount) {
+                    sum -= series[index - windowCount].value;
+                }
+                var count = index + 1 < windowCount ? index + 1 : windowCount;
+                smoothed.push({
+                    unix: series[index].unix,
+                    value: sum / count
+                });
+            }
+            return smoothed;
+        }
+
+        function historyRedrawFromPayload() {
+            var canvas = document.getElementById("historyChartCanvas");
+            if (!canvas || !historyChartState.payload) {
+                return;
+            }
+            var endUnix = historyChartState.rangeEndUnix || Math.floor(Date.now() / 1000);
+            var startUnix = endUnix - Math.floor(historyChartState.hours * 3600);
+            if (startUnix < 0) {
+                startUnix = 0;
+            }
+            drawHistoryChart(canvas, historyChartState.payload, startUnix, endUnix);
+        }
+
+        function applyHistoryChartDatetimeRange() {
+            var startUnix = historyParseDatetimeLocalValue(
+                (document.getElementById("historyChartStart") || {}).value
+            );
+            var endUnix = historyParseDatetimeLocalValue(
+                (document.getElementById("historyChartEnd") || {}).value
+            );
+            if (isNaN(startUnix) || isNaN(endUnix) || endUnix <= startUnix) {
+                return;
+            }
+            historyChartState.rangeEndUnix = endUnix;
+            historyChartState.hours = Math.max(1 / 60, (endUnix - startUnix) / 3600);
+            historyFetchAndDraw();
+        }
+
+        function drawHistoryChart(canvas, payload, rangeStartUnix, rangeEndUnix) {
+            if (!canvas || !canvas.getContext) {
+                return;
+            }
+            var wrap = document.getElementById("historyChartCanvasWrap");
+            var legend = document.getElementById("historyChartLegend");
+            var tip = document.getElementById("historyChartTooltip");
+            var cssWidth = wrap ? wrap.clientWidth : 680;
+            if (!(cssWidth > 0)) {
+                cssWidth = 680;
+            }
+            var cssHeight = 320;
+            var dpr = window.devicePixelRatio || 1;
+            canvas.width = Math.floor(cssWidth * dpr);
+            canvas.height = Math.floor(cssHeight * dpr);
+            canvas.style.width = cssWidth + "px";
+            canvas.style.height = cssHeight + "px";
+            var ctx = canvas.getContext("2d");
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            var width = cssWidth;
+            var height = cssHeight;
+            var styles = getComputedStyle(document.documentElement);
+            var bg = styles.getPropertyValue("--bg").trim() || "#111";
+            var surface = styles.getPropertyValue("--surface").trim() || "#1c1c1c";
+            var text = styles.getPropertyValue("--text").trim() || "#eee";
+            var muted = styles.getPropertyValue("--muted").trim() || "#9aa";
+            var border = styles.getPropertyValue("--border").trim() || "#444";
+            var accent = styles.getPropertyValue("--accent").trim() || "#03a9f4";
+            ctx.fillStyle = bg;
+            ctx.fillRect(0, 0, width, height);
+            var points = payload && Array.isArray(payload.points) ? payload.points.slice() : [];
+            points.sort(function (a, b) {
+                return (Number(a.t) || 0) - (Number(b.t) || 0);
+            });
+            var valueType = payload && payload.valueType ? payload.valueType : "float";
+            var isDiscrete = valueType === "bool" || valueType === "string";
+            var padLeft = isDiscrete ? 16 : 52;
+            var padRight = 16;
+            var padTop = 16;
+            var padBottom = 36;
+            var plotW = Math.max(10, width - padLeft - padRight);
+            var plotH = Math.max(10, height - padTop - padBottom);
+            var t0 = rangeStartUnix;
+            var t1 = rangeEndUnix;
+            if (!(t1 > t0)) {
+                t1 = t0 + 3600;
+            }
+            var hoursSpan = (t1 - t0) / 3600;
+            var xForUnix = function (unixSec) {
+                return padLeft + ((unixSec - t0) / (t1 - t0)) * plotW;
+            };
+
+            ctx.strokeStyle = border;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(padLeft, padTop);
+            ctx.lineTo(padLeft, padTop + plotH);
+            ctx.lineTo(padLeft + plotW, padTop + plotH);
+            ctx.stroke();
+
+            var tickCount = hoursSpan <= 6 ? 4 : (hoursSpan <= 48 ? 6 : 7);
+            var tickIndex;
+            ctx.fillStyle = muted;
+            ctx.font = "11px sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "top";
+            for (tickIndex = 0; tickIndex <= tickCount; tickIndex++) {
+                var tickUnix = t0 + ((t1 - t0) * tickIndex / tickCount);
+                var tickX = xForUnix(tickUnix);
+                ctx.strokeStyle = border;
+                ctx.globalAlpha = 0.35;
+                ctx.beginPath();
+                ctx.moveTo(tickX, padTop);
+                ctx.lineTo(tickX, padTop + plotH);
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+                ctx.fillStyle = muted;
+                ctx.fillText(historyFormatAxisTime(tickUnix, hoursSpan), tickX, padTop + plotH + 8);
+            }
+
+            if (legend) {
+                legend.innerHTML = "";
+            }
+            if (tip) {
+                tip.hidden = true;
+            }
+
+            if (!points.length) {
+                ctx.fillStyle = muted;
+                ctx.textAlign = "left";
+                ctx.textBaseline = "middle";
+                ctx.font = "13px sans-serif";
+                ctx.fillText("No history samples in this range", padLeft + 8, padTop + plotH / 2);
+                historyChartState.layout = null;
+                return;
+            }
+
+            if (isDiscrete) {
+                var bandTop = padTop + plotH * 0.28;
+                var bandH = Math.max(28, plotH * 0.44);
+                var segments = [];
+                var pointIndex;
+                for (pointIndex = 0; pointIndex < points.length; pointIndex++) {
+                    var pointUnix = historyEpoch2010ToUnix(points[pointIndex].t);
+                    var label = historyDiscreteLabel(points[pointIndex].v);
+                    var nextUnix = pointIndex + 1 < points.length
+                        ? historyEpoch2010ToUnix(points[pointIndex + 1].t)
+                        : t1;
+                    var segStart = Math.max(t0, pointUnix);
+                    var segEnd = Math.min(t1, nextUnix);
+                    if (segEnd <= segStart) {
+                        continue;
+                    }
+                    segments.push({
+                        start: segStart,
+                        end: segEnd,
+                        label: label,
+                        color: historyColorForState(label)
+                    });
+                }
+                if (points.length && historyEpoch2010ToUnix(points[0].t) > t0) {
+                    var leadLabel = historyDiscreteLabel(points[0].v);
+                    segments.unshift({
+                        start: t0,
+                        end: Math.min(t1, historyEpoch2010ToUnix(points[0].t)),
+                        label: leadLabel,
+                        color: historyColorForState(leadLabel)
+                    });
+                }
+                segments.forEach(function (segment) {
+                    var x0 = xForUnix(segment.start);
+                    var x1 = xForUnix(segment.end);
+                    ctx.fillStyle = segment.color;
+                    ctx.fillRect(x0, bandTop, Math.max(1, x1 - x0), bandH);
+                });
+                ctx.strokeStyle = border;
+                ctx.strokeRect(padLeft, bandTop, plotW, bandH);
+                var seen = {};
+                segments.forEach(function (segment) {
+                    if (seen[segment.label] || !legend) {
+                        return;
+                    }
+                    seen[segment.label] = true;
+                    var item = document.createElement("span");
+                    item.className = "history-chart-legend-item";
+                    var swatch = document.createElement("span");
+                    swatch.className = "history-chart-legend-swatch";
+                    swatch.style.background = segment.color;
+                    item.appendChild(swatch);
+                    item.appendChild(document.createTextNode(segment.label));
+                    legend.appendChild(item);
+                });
+                historyChartState.layout = {
+                    kind: "discrete",
+                    padLeft: padLeft,
+                    padTop: bandTop,
+                    plotW: plotW,
+                    plotH: bandH,
+                    t0: t0,
+                    t1: t1,
+                    segments: segments
+                };
+                return;
+            }
+
+            var series = points.map(function (point) {
+                return {
+                    unix: historyEpoch2010ToUnix(point.t),
+                    value: Number(point.v)
+                };
+            }).filter(function (point) {
+                return isFinite(point.value);
+            });
+            if (historyChartState.smooth && historyChartAllowsSmooth()) {
+                series = historySmoothSeries(series, historySmoothWindowSize());
+            }
+            if (!series.length) {
+                historyChartState.layout = null;
+                return;
+            }
+            var values = series.map(function (point) { return point.value; });
+            var dataMin = Math.min.apply(null, values);
+            var dataMax = Math.max.apply(null, values);
+            var axis = historyComputeNumericAxis(dataMin, dataMax);
+            var minV = axis.minV;
+            var maxV = axis.maxV;
+            var axisStep = axis.step;
+            var yForValue = function (value) {
+                return padTop + plotH - ((value - minV) / (maxV - minV)) * plotH;
+            };
+            var yTicks = HISTORY_Y_INTERVALS;
+            var yTick;
+            ctx.textAlign = "right";
+            ctx.textBaseline = "middle";
+            ctx.font = "11px sans-serif";
+            for (yTick = 0; yTick <= yTicks; yTick++) {
+                var yValue = minV + axisStep * yTick;
+                var y = yForValue(yValue);
+                ctx.strokeStyle = border;
+                ctx.globalAlpha = 0.35;
+                ctx.beginPath();
+                ctx.moveTo(padLeft, y);
+                ctx.lineTo(padLeft + plotW, y);
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+                ctx.fillStyle = muted;
+                ctx.fillText(historyFormatAxisValue(yValue, axisStep), padLeft - 6, y);
+            }
+            ctx.beginPath();
+            var firstX = xForUnix(Math.max(t0, Math.min(t1, series[0].unix)));
+            var firstY = yForValue(series[0].value);
+            ctx.moveTo(firstX, padTop + plotH);
+            ctx.lineTo(firstX, firstY);
+            var seriesIndex;
+            for (seriesIndex = 0; seriesIndex < series.length; seriesIndex++) {
+                var current = series[seriesIndex];
+                var next = seriesIndex + 1 < series.length ? series[seriesIndex + 1] : null;
+                var xNow = xForUnix(Math.max(t0, Math.min(t1, current.unix)));
+                var yNow = yForValue(current.value);
+                if (seriesIndex > 0) {
+                    ctx.lineTo(xNow, yForValue(series[seriesIndex - 1].value));
+                    ctx.lineTo(xNow, yNow);
+                }
+                if (next) {
+                    var xNext = xForUnix(Math.max(t0, Math.min(t1, next.unix)));
+                    ctx.lineTo(xNext, yNow);
+                } else {
+                    ctx.lineTo(xForUnix(t1), yNow);
+                    ctx.lineTo(xForUnix(t1), padTop + plotH);
+                }
+            }
+            ctx.closePath();
+            ctx.fillStyle = accent;
+            ctx.globalAlpha = 0.15;
+            ctx.fill();
+            ctx.globalAlpha = 1;
+            ctx.beginPath();
+            ctx.moveTo(firstX, firstY);
+            for (seriesIndex = 0; seriesIndex < series.length; seriesIndex++) {
+                var sample = series[seriesIndex];
+                var nx = xForUnix(Math.max(t0, Math.min(t1, sample.unix)));
+                var ny = yForValue(sample.value);
+                if (seriesIndex > 0) {
+                    ctx.lineTo(nx, yForValue(series[seriesIndex - 1].value));
+                    ctx.lineTo(nx, ny);
+                }
+                if (seriesIndex + 1 < series.length) {
+                    var nx2 = xForUnix(Math.max(t0, Math.min(t1, series[seriesIndex + 1].unix)));
+                    ctx.lineTo(nx2, ny);
+                } else {
+                    ctx.lineTo(xForUnix(t1), ny);
+                }
+            }
+            ctx.strokeStyle = accent;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            if (legend) {
+                var lineItem = document.createElement("span");
+                lineItem.className = "history-chart-legend-item";
+                var lineSwatch = document.createElement("span");
+                lineSwatch.className = "history-chart-legend-swatch";
+                lineSwatch.style.background = accent;
+                lineItem.appendChild(lineSwatch);
+                lineItem.appendChild(document.createTextNode(historyChartState.query && historyChartState.query.title
+                    ? historyChartState.query.title
+                    : "value"));
+                legend.appendChild(lineItem);
+            }
+            historyChartState.layout = {
+                kind: "numeric",
+                padLeft: padLeft,
+                padTop: padTop,
+                plotW: plotW,
+                plotH: plotH,
+                t0: t0,
+                t1: t1,
+                minV: minV,
+                maxV: maxV,
+                series: series
+            };
+        }
+
+        function onHistoryChartPointer(event) {
+            var canvas = document.getElementById("historyChartCanvas");
+            var tip = document.getElementById("historyChartTooltip");
+            var layout = historyChartState.layout;
+            if (!canvas || !tip || !layout) {
+                return;
+            }
+            var rect = canvas.getBoundingClientRect();
+            var x = event.clientX - rect.left;
+            var y = event.clientY - rect.top;
+            if (x < layout.padLeft || x > layout.padLeft + layout.plotW
+                || y < layout.padTop || y > layout.padTop + layout.plotH) {
+                tip.hidden = true;
+                return;
+            }
+            var unix = layout.t0 + ((x - layout.padLeft) / layout.plotW) * (layout.t1 - layout.t0);
+            var text = historyFormatTooltipTime(unix);
+            if (layout.kind === "discrete") {
+                var segment = null;
+                var segIndex;
+                for (segIndex = 0; segIndex < layout.segments.length; segIndex++) {
+                    if (unix >= layout.segments[segIndex].start && unix < layout.segments[segIndex].end) {
+                        segment = layout.segments[segIndex];
+                        break;
+                    }
+                }
+                if (!segment && layout.segments.length) {
+                    segment = layout.segments[layout.segments.length - 1];
+                }
+                text += "\n" + (segment ? segment.label : "—");
+            } else if (layout.series && layout.series.length) {
+                var best = layout.series[0];
+                var bestDist = Math.abs(best.unix - unix);
+                var seriesIndex;
+                for (seriesIndex = 1; seriesIndex < layout.series.length; seriesIndex++) {
+                    var dist = Math.abs(layout.series[seriesIndex].unix - unix);
+                    if (dist < bestDist) {
+                        best = layout.series[seriesIndex];
+                        bestDist = dist;
+                    }
+                }
+                text += "\n" + String(best.value);
+            }
+            tip.textContent = text;
+            tip.hidden = false;
+            var tipX = Math.min(rect.width - 8, Math.max(8, x + 12));
+            var tipY = Math.min(rect.height - 8, Math.max(8, y - 12));
+            tip.style.left = tipX + "px";
+            tip.style.top = tipY + "px";
+        }
+
         function loadHardware() {
             var saveError = document.getElementById("hardwareSaveError");
             var saveSuccess = document.getElementById("hardwareSaveSuccess");
@@ -1299,6 +2382,22 @@
                 if (queueInput) {
                     queueInput.checked = !!hardwareSettings.useQueueForBaseDeviceCommand;
                 }
+                var daysInput = document.getElementById("historyMaxStoreDays");
+                var sweepInput = document.getElementById("historySweepIntervalMin");
+                var sizeInput = document.getElementById("historyMaxSizeKiB");
+                var entrySelect = document.getElementById("historyEntrySize");
+                if (daysInput) {
+                    daysInput.value = String(hardwareSettings.historyMaxStoreDays != null ? hardwareSettings.historyMaxStoreDays : 7);
+                }
+                if (sweepInput) {
+                    sweepInput.value = String(hardwareSettings.historySweepIntervalMin != null ? hardwareSettings.historySweepIntervalMin : 10);
+                }
+                if (sizeInput) {
+                    sizeInput.value = String(hardwareSettings.historyMaxSizeKiB != null ? hardwareSettings.historyMaxSizeKiB : 4096);
+                }
+                if (entrySelect) {
+                    entrySelect.value = String(hardwareSettings.historyEntrySize != null ? hardwareSettings.historyEntrySize : 1024);
+                }
             }).catch(function (error) {
                 if (speedSelect && !speedSelect.value) {
                     speedSelect.value = "500000";
@@ -1335,7 +2434,11 @@
                 rfUpdateSpiSpeedHz: parseInt(document.getElementById("rfUpdateSpiSpeedHz").value, 10),
                 blueLedBrightness: parseInt(document.getElementById("blueLedBrightness").value, 10),
                 greenLedBrightness: parseInt(document.getElementById("greenLedBrightness").value, 10),
-                useQueueForBaseDeviceCommand: !!(queueInput && queueInput.checked)
+                useQueueForBaseDeviceCommand: !!(queueInput && queueInput.checked),
+                historyMaxStoreDays: parseInt(document.getElementById("historyMaxStoreDays").value, 10),
+                historySweepIntervalMin: parseInt(document.getElementById("historySweepIntervalMin").value, 10),
+                historyMaxSizeKiB: parseInt(document.getElementById("historyMaxSizeKiB").value, 10),
+                historyEntrySize: parseInt(document.getElementById("historyEntrySize").value, 10)
             };
             fetch("/api/hardware", {
                 method: "POST",
@@ -2847,6 +3950,7 @@
             parameterDialogTypeId = typeSelect.value || "unknown";
             typeSelect.onchange = function () {
                 parameterDialogTypeId = typeSelect.value || "unknown";
+                syncDeviceHistoryEpsilonVisibility();
                 renderUserDataFieldsEditor();
                 applyZigbeeProtocolControls();
             };
@@ -3046,6 +4150,7 @@
                     typeSelect.value = parameterDialogTypeId || "unknown";
                 }
             }
+            syncDeviceHistoryEpsilonVisibility();
             renderUserDataFieldsEditor();
             applyMqttPublishControls();
             applyZigbeeProtocolControls();
@@ -3473,18 +4578,50 @@
         function appendBindingTitleElement(row, binding, fallbackText, options) {
             var titleOptions = options || {};
             var showTitle = bindingShowsTitle(binding);
-            if (!showTitle && !titleOptions.editPlaceholder) {
+            if (!showTitle && !titleOptions.editPlaceholder && !titleOptions.forceShow) {
                 return null;
             }
-            var usePlaceholder = !showTitle && titleOptions.editPlaceholder;
+            var usePlaceholder = !showTitle && titleOptions.editPlaceholder && !titleOptions.forceShow;
             var title = document.createElement("span");
             title.className = "console-device-row-title"
                 + (usePlaceholder ? " console-device-row-title--edit-placeholder" : "");
             title.textContent = usePlaceholder
                 ? bindingEditPlaceholderLabel(binding, fallbackText)
                 : bindingTitleLabel(binding, fallbackText);
-            row.appendChild(title);
+            if (titleOptions.beforeChild && titleOptions.beforeChild.parentNode === row) {
+                row.insertBefore(title, titleOptions.beforeChild);
+            } else {
+                row.appendChild(title);
+            }
             return title;
+        }
+
+        function wireBindingHistoryTargets(row, controls, titleEl, device, binding) {
+            if (!device || !bindingHistoryEnabled(device, binding)) {
+                return;
+            }
+            // Respect showTitle: never invent a title. History opens from an existing
+            // title (if shown), text values, and indicator-only icons.
+            var historyTitle = titleEl || (row && row.querySelector(".console-device-row-title"));
+            if (historyTitle && bindingShowsTitle(binding)) {
+                attachHistoryOpen(historyTitle, device, binding);
+            }
+            if (!controls) {
+                return;
+            }
+            var valueNodes = controls.querySelectorAll(
+                ".console-sensor-value, .console-cover-position"
+            );
+            var valueIndex;
+            for (valueIndex = 0; valueIndex < valueNodes.length; valueIndex++) {
+                attachHistoryOpen(valueNodes[valueIndex], device, binding);
+            }
+            // Indicator icons only (span). Actuator icons are <button class="...--control">.
+            var indicatorIcons = controls.querySelectorAll("span.console-binary-icon");
+            var iconIndex;
+            for (iconIndex = 0; iconIndex < indicatorIcons.length; iconIndex++) {
+                attachHistoryOpen(indicatorIcons[iconIndex], device, binding);
+            }
         }
 
         function buildConsoleIconElement(binding, stateText, options) {
@@ -4922,6 +6059,7 @@
             if (debugInput) {
                 debugInput.checked = !!device.debug;
             }
+            applyDeviceHistoryEpsilonToForm(device.historyEpsilon);
             var protocolInput = document.getElementById("deviceZigbeeProtocol");
             if (protocolInput) {
                 protocolInput.checked =
@@ -5109,10 +6247,15 @@
                 if (typeId !== "int" && typeId !== "float" && typeId !== "bool" && typeId !== "string") {
                     typeId = "string";
                 }
+                var epsilonValue = row.epsilon != null ? Number(row.epsilon) : -1;
+                if (isNaN(epsilonValue)) {
+                    epsilonValue = -1;
+                }
                 normalized.push({
                     nullable: !!row.nullable,
                     name: name,
-                    type: typeId
+                    type: typeId,
+                    epsilon: epsilonValue
                 });
             }
             return normalized;
@@ -5174,8 +6317,63 @@
                     typeSelect.value = field.type || "string";
                     typeSelect.onchange = function () {
                         parameterDialogUserDataFields[fieldIndex].type = typeSelect.value;
+                        renderUserDataFieldsEditor();
                     };
                     typeCell.appendChild(typeSelect);
+
+                    var histCell = document.createElement("td");
+                    histCell.className = "user-data-col-hist";
+                    var histWrap = document.createElement("div");
+                    histWrap.className = "hist-delta-cell";
+                    var histFlag = document.createElement("input");
+                    histFlag.type = "checkbox";
+                    var epsilonInput = document.createElement("input");
+                    epsilonInput.type = "number";
+                    epsilonInput.step = "any";
+                    epsilonInput.min = "0";
+                    var eps = field.epsilon != null ? Number(field.epsilon) : -1;
+                    if (isNaN(eps)) eps = -1;
+                    var isString = (field.type || "") === "string";
+                    if (isString) {
+                        histFlag.checked = eps === 0;
+                        epsilonInput.hidden = true;
+                    } else {
+                        histFlag.checked = eps >= 0;
+                        epsilonInput.disabled = !histFlag.checked;
+                        epsilonInput.value = histFlag.checked ? String(eps) : "";
+                    }
+                    histFlag.onchange = function () {
+                        if (!histFlag.checked) {
+                            parameterDialogUserDataFields[fieldIndex].epsilon = -1;
+                            epsilonInput.value = "";
+                            epsilonInput.disabled = true;
+                        } else {
+                            parameterDialogUserDataFields[fieldIndex].epsilon = 0;
+                            epsilonInput.disabled = isString;
+                            if (!isString) {
+                                epsilonInput.value = "0";
+                            }
+                        }
+                    };
+                    epsilonInput.oninput = function () {
+                        if (epsilonInput.value !== "" && Number(epsilonInput.value) < 0) {
+                            epsilonInput.value = "0";
+                        }
+                    };
+                    epsilonInput.onchange = function () {
+                        var value = Number(epsilonInput.value);
+                        if (isNaN(value) || value < 0) {
+                            value = 0;
+                            epsilonInput.value = "0";
+                        }
+                        parameterDialogUserDataFields[fieldIndex].epsilon = value;
+                    };
+                    histWrap.appendChild(histFlag);
+                    if (!isString) {
+                        histWrap.appendChild(epsilonInput);
+                    }
+                    histCell.appendChild(histWrap);
+
                     var actionsCell = document.createElement("td");
                     actionsCell.className = "user-data-field-actions";
                     var upButton = document.createElement("button");
@@ -5214,6 +6412,7 @@
                     row.appendChild(nullableCell);
                     row.appendChild(nameCell);
                     row.appendChild(typeCell);
+                    row.appendChild(histCell);
                     row.appendChild(actionsCell);
                     body.appendChild(row);
                 })(rowIndex);
@@ -5238,7 +6437,8 @@
             parameterDialogUserDataFields.push({
                 nullable: false,
                 name: "",
-                type: "string"
+                type: "string",
+                epsilon: -1
             });
             renderUserDataFieldsEditor();
         }
@@ -5274,12 +6474,17 @@
                 if (typeId !== "int" && typeId !== "float" && typeId !== "bool" && typeId !== "string") {
                     typeId = "float";
                 }
+                var epsilonValue = row.epsilon != null ? Number(row.epsilon) : -1;
+                if (isNaN(epsilonValue)) {
+                    epsilonValue = -1;
+                }
                 normalized.push({
                     cluster: formatReportableIdToken(row.cluster != null ? row.cluster : row.cl),
                     attribute: formatReportableIdToken(
                         row.attribute != null ? row.attribute : (row.attr != null ? row.attr : row.attrId)
                     ),
-                    type: typeId
+                    type: typeId,
+                    epsilon: epsilonValue
                 });
             }
             return normalized;
@@ -5300,7 +6505,7 @@
                 if (rows.length >= REPORTABLE_DATA_MAX_COUNT) {
                     return;
                 }
-                rows.push({ cluster: clusterText, attribute: attributeText, type: type });
+                rows.push({ cluster: clusterText, attribute: attributeText, type: type, epsilon: -1 });
             }
             if (manuf === "zbeacon") {
                 pushUnique(0x0402, 0x0000, "float");
@@ -5501,8 +6706,62 @@
                     field.type = typeSelect.value;
                     typeSelect.onchange = function () {
                         parameterDialogReportableData[fieldIndex].type = typeSelect.value;
+                        renderReportableDataEditor();
                     };
                     typeCell.appendChild(typeSelect);
+
+                    var histCell = document.createElement("td");
+                    histCell.className = "reportable-col-hist";
+                    var histWrap = document.createElement("div");
+                    histWrap.className = "hist-delta-cell";
+                    var histFlag = document.createElement("input");
+                    histFlag.type = "checkbox";
+                    var epsilonInput = document.createElement("input");
+                    epsilonInput.type = "number";
+                    epsilonInput.step = "any";
+                    epsilonInput.min = "0";
+                    var eps = field.epsilon != null ? Number(field.epsilon) : -1;
+                    if (isNaN(eps)) eps = -1;
+                    var isString = (field.type || "") === "string";
+                    if (isString) {
+                        histFlag.checked = eps === 0;
+                        epsilonInput.hidden = true;
+                    } else {
+                        histFlag.checked = eps >= 0;
+                        epsilonInput.disabled = !histFlag.checked;
+                        epsilonInput.value = histFlag.checked ? String(eps) : "";
+                    }
+                    histFlag.onchange = function () {
+                        if (!histFlag.checked) {
+                            parameterDialogReportableData[fieldIndex].epsilon = -1;
+                            epsilonInput.value = "";
+                            epsilonInput.disabled = true;
+                        } else {
+                            parameterDialogReportableData[fieldIndex].epsilon = isString ? 0 : 0;
+                            epsilonInput.disabled = isString;
+                            if (!isString) {
+                                epsilonInput.value = "0";
+                            }
+                        }
+                    };
+                    epsilonInput.oninput = function () {
+                        if (epsilonInput.value !== "" && Number(epsilonInput.value) < 0) {
+                            epsilonInput.value = "0";
+                        }
+                    };
+                    epsilonInput.onchange = function () {
+                        var value = Number(epsilonInput.value);
+                        if (isNaN(value) || value < 0) {
+                            value = 0;
+                            epsilonInput.value = "0";
+                        }
+                        parameterDialogReportableData[fieldIndex].epsilon = value;
+                    };
+                    histWrap.appendChild(histFlag);
+                    if (!isString) {
+                        histWrap.appendChild(epsilonInput);
+                    }
+                    histCell.appendChild(histWrap);
 
                     var actionsCell = document.createElement("td");
                     actionsCell.className = "user-data-field-actions";
@@ -5542,6 +6801,7 @@
                     row.appendChild(clusterCell);
                     row.appendChild(attributeCell);
                     row.appendChild(typeCell);
+                    row.appendChild(histCell);
                     row.appendChild(actionsCell);
                     body.appendChild(row);
                 })(rowIndex);
@@ -5569,7 +6829,8 @@
             parameterDialogReportableData.push({
                 cluster: defaultCluster,
                 attribute: attrs.length ? attrs[0].id : "0x0000",
-                type: reportableDefaultTypeForCluster(defaultCluster)
+                type: reportableDefaultTypeForCluster(defaultCluster),
+                epsilon: -1
             });
             renderReportableDataEditor();
         }
@@ -6043,6 +7304,7 @@
                     && document.getElementById("deviceFullControl").checked),
                 debug: !!(document.getElementById("deviceDebug")
                     && document.getElementById("deviceDebug").checked),
+                historyEpsilon: readDeviceHistoryEpsilonFromForm(),
                 type: typeId || "unknown",
                 transport: parameterDialogTransport || "zigbee"
             };
@@ -7223,7 +8485,7 @@
             }
             row.className = "console-device-row";
             applyBindingTitleLayout(row, binding, layoutOptions || null);
-            appendBindingTitleElement(row, binding, "Device");
+            var titleEl = appendBindingTitleElement(row, binding, "Device");
             var controls = document.createElement("div");
             controls.className = "console-device-row-controls";
             var useCustomClick = bindingHasAnyClickAction(binding);
@@ -7483,11 +8745,13 @@
                     gaugeNumeric = parseBindingNumericValue(rawState);
                     gaugeDisplay = rawState || "";
                 }
-                controls.appendChild(buildConsoleGaugeElement(
+                var gaugeEl = buildConsoleGaugeElement(
                     binding,
                     gaugeNumeric,
                     gaugeDisplay
-                ));
+                );
+                attachHistoryOpen(gaugeEl, device, binding);
+                controls.appendChild(gaugeEl);
             } else if (parseReportableParamId(param)) {
                 var reportableValueLabel = document.createElement("span");
                 reportableValueLabel.className = "console-sensor-value";
@@ -7525,6 +8789,7 @@
                 controls.appendChild(generic);
             }
             row.appendChild(controls);
+            wireBindingHistoryTargets(row, controls, titleEl, device, binding);
             return row;
         }
 
@@ -16501,6 +17766,10 @@
                 closeSettingsRestoreConfirmDialog();
                 return true;
             }
+            if (dialogId === "historyChartOverlay") {
+                closeHistoryChart();
+                return true;
+            }
             return false;
         }
 
@@ -16649,6 +17918,25 @@
                             <div class="status-row">
                                 <span class="status-row-label">Action queue</span>
                                 <p id="statusActionQueue" class="status-value">—</p>
+                            </div>
+                        </div>
+                        <div class="status-group">
+                            <h3 class="group-title">Historical storage</h3>
+                            <div class="status-row">
+                                <span class="status-row-label">Entries</span>
+                                <p id="statusHistoryEntries" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Pages</span>
+                                <p id="statusHistoryPages" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">PSRAM usage</span>
+                                <p id="statusHistoryPsram" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Values stored</span>
+                                <p id="statusHistoryValues" class="status-value">—</p>
                             </div>
                         </div>
                         <div class="status-group">
@@ -17247,6 +18535,29 @@
                             <span>use queue for base device command</span>
                         </div>
                         <p class="field-hint">When on, Place/Devices/Manual live commands use the paced action queue (all device kinds). When off, only automation actions use the queue. Configure dialog writes stay immediate. Default off.</p>
+                        <div class="field">
+                            <label for="historyMaxStoreDays">Max History store days</label>
+                            <input id="historyMaxStoreDays" type="number" min="1" max="20" step="1" value="7">
+                        </div>
+                        <div class="field">
+                            <label for="historySweepIntervalMin">History sweep interval (minutes)</label>
+                            <input id="historySweepIntervalMin" type="number" min="1" max="120" step="1" value="10">
+                        </div>
+                        <div class="field">
+                            <label for="historyMaxSizeKiB">Maximum history size (kB)</label>
+                            <input id="historyMaxSizeKiB" type="number" min="4" step="1" value="4096">
+                        </div>
+                        <div class="field">
+                            <label for="historyEntrySize">Entry size</label>
+                            <select id="historyEntrySize">
+                                <option value="256">256</option>
+                                <option value="512">512</option>
+                                <option value="1024" selected>1024</option>
+                                <option value="2048">2048</option>
+                                <option value="4096">4096</option>
+                            </select>
+                            <p class="field-hint">History entry (page directory) size. Applied on next boot with Maximum history size.</p>
+                        </div>
                     </div>
                     <div class="dialog-actions hardware-tab-actions">
                         <button type="button" class="btn btn-primary" onclick="saveHardware()">Save</button>
@@ -17437,11 +18748,19 @@
                             <h3 class="group-title">User data fields</h3>
                             <div class="table-wrap">
                                 <table class="data-table" id="deviceUserDataFieldsTable">
+                                    <colgroup>
+                                        <col class="user-data-col-nullable">
+                                        <col class="user-data-col-name">
+                                        <col class="user-data-col-type">
+                                        <col class="user-data-col-hist">
+                                        <col class="user-data-col-actions">
+                                    </colgroup>
                                     <thead>
                                         <tr>
                                             <th class="col-check">Nullable</th>
                                             <th>Name</th>
                                             <th>Type</th>
+                                            <th>Hist/delta</th>
                                             <th></th>
                                         </tr>
                                     </thead>
@@ -17458,6 +18777,7 @@
                                         <col class="reportable-col-cluster">
                                         <col class="reportable-col-attribute">
                                         <col class="reportable-col-type">
+                                        <col class="reportable-col-hist">
                                         <col class="reportable-col-actions">
                                     </colgroup>
                                     <thead>
@@ -17465,6 +18785,7 @@
                                             <th>Cluster</th>
                                             <th>Attribute</th>
                                             <th>Type</th>
+                                            <th>Hist/delta</th>
                                             <th></th>
                                         </tr>
                                     </thead>
@@ -17518,6 +18839,15 @@
                         <div class="field field-check">
                             <input id="deviceDebug" type="checkbox">
                             <span>DEBUG</span>
+                        </div>
+                        <div class="field device-history-row">
+                            <div class="field-check">
+                                <input id="deviceHistoryEnabled" type="checkbox" onchange="onDeviceHistoryFlagChanged()">
+                                <span>save history</span>
+                            </div>
+                            <label id="deviceHistoryEpsilonLabel" for="deviceHistoryEpsilon">min. change</label>
+                            <input id="deviceHistoryEpsilon" type="number" step="any" min="0" disabled
+                                   oninput="if (this.value !== '' && Number(this.value) < 0) this.value = '0'">
                         </div>
                     </div>
                     <div id="parameter-tab-command" class="parameter-tab-panel tab-panel" role="tabpanel">
@@ -18154,5 +19484,51 @@
         </div>
     </div>
 </div>
+
+    <div id="historyChartOverlay" class="dialog-overlay dialog-overlay-front" hidden>
+        <div class="dialog-panel" role="dialog" aria-label="History">
+            <h2 id="historyChartTitle">History</h2>
+            <div class="history-chart-toolbar">
+                <div class="history-chart-toolbar-top">
+                    <div class="history-chart-presets" role="group" aria-label="Time range">
+                        <button type="button" class="btn btn-secondary" data-history-hours="1" onclick="setHistoryChartPreset(1)">1h</button>
+                        <button type="button" class="btn btn-secondary" data-history-hours="2" onclick="setHistoryChartPreset(2)">2h</button>
+                        <button type="button" class="btn btn-secondary" data-history-hours="4" onclick="setHistoryChartPreset(4)">4h</button>
+                        <button type="button" class="btn btn-secondary" data-history-hours="6" onclick="setHistoryChartPreset(6)">6h</button>
+                        <button type="button" class="btn btn-secondary" data-history-hours="12" onclick="setHistoryChartPreset(12)">12h</button>
+                        <button type="button" class="btn btn-secondary is-active" data-history-hours="24" onclick="setHistoryChartPreset(24)">24h</button>
+                        <button type="button" class="btn btn-secondary" data-history-hours="48" onclick="setHistoryChartPreset(48)">2d</button>
+                        <button type="button" class="btn btn-secondary" data-history-hours="168" onclick="setHistoryChartPreset(168)">7d</button>
+                    </div>
+                    <div id="historyChartSmoothControls" class="history-chart-smooth">
+                        <div class="field-check">
+                            <input id="historyChartSmooth" type="checkbox" checked onchange="onHistoryChartSmoothChange()">
+                            <span>Smooth</span>
+                        </div>
+                        <label for="historyChartSmoothWindow">samples</label>
+                        <input id="historyChartSmoothWindow" type="number" min="1" max="128" step="1" value="7"
+                               onchange="onHistoryChartSmoothChange()" oninput="onHistoryChartSmoothWindowInput()">
+                    </div>
+                </div>
+                <div class="history-chart-range">
+                    <button type="button" class="btn btn-secondary" onclick="shiftHistoryChartRange(-1)" title="Previous period">◀</button>
+                    <input id="historyChartStart" type="datetime-local" aria-label="Range start" onchange="applyHistoryChartDatetimeRange()">
+                    <span aria-hidden="true">–</span>
+                    <input id="historyChartEnd" type="datetime-local" aria-label="Range end" onchange="applyHistoryChartDatetimeRange()">
+                    <button type="button" class="btn btn-secondary" onclick="shiftHistoryChartRange(1)" title="Next period">▶</button>
+                </div>
+            </div>
+            <div id="historyChartCanvasWrap" class="history-chart-canvas-wrap">
+                <canvas id="historyChartCanvas" width="680" height="320"
+                        onmousemove="onHistoryChartPointer(event)"
+                        onmouseleave="document.getElementById('historyChartTooltip').hidden = true"></canvas>
+                <div id="historyChartTooltip" class="history-chart-tooltip" hidden></div>
+            </div>
+            <div id="historyChartLegend" class="history-chart-legend"></div>
+            <div class="dialog-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeHistoryChart()">Close</button>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

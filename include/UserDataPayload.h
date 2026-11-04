@@ -14,9 +14,9 @@ constexpr size_t kUserDataFieldNameMaxLen = kUserDataFieldNameMaxChars + 1;
 // String attribute value: 15 chars + NUL.
 constexpr size_t kUserDataStringValueMaxChars = 15;
 constexpr size_t kUserDataStringValueMaxLen = kUserDataStringValueMaxChars + 1;
-// Packed schema row: name[20]+NUL + nullable + type.
+// Host schema row: name[20]+NUL + nullable + type + history epsilon.
 constexpr size_t kUserDataFieldPackedBytes =
-    kUserDataFieldNameMaxChars + 1 + 1 + 1;
+    kUserDataFieldNameMaxChars + 1 + 1 + 1 + sizeof(float);
 constexpr size_t kUserDataFieldsMaxBytes =
     kUserDataFieldPackedBytes * kUserDataFieldMaxCount;
 constexpr size_t kUserDataValuesMaxBytes =
@@ -24,6 +24,12 @@ constexpr size_t kUserDataValuesMaxBytes =
 
 constexpr uint16_t kUserDataClusterId = 0xFC00;
 constexpr uint16_t kUserDataAttributeId = 0x0001;
+// History series attribute ids for per-field samples (not the brace-list attr).
+constexpr uint16_t kUserDataHistoryAttributeBase = 0x0100;
+
+inline uint16_t userDataHistoryAttributeForFieldIndex(uint8_t fieldIndex) {
+    return (uint16_t)(kUserDataHistoryAttributeBase + fieldIndex);
+}
 
 enum UserDataFieldType : uint8_t {
     UserDataFieldTypeInt = 0,
@@ -36,10 +42,25 @@ struct __attribute__((packed)) UserDataFieldDef {
     uint8_t nullable;
     uint8_t type;
     char name[kUserDataFieldNameMaxLen];
+    float epsilon;
 };
 
+inline bool userDataHistoryEnabled(const UserDataFieldDef *field) {
+    if (field == nullptr) {
+        return false;
+    }
+    if ((UserDataFieldType)field->type == UserDataFieldTypeString) {
+        return field->epsilon == 0.0f;
+    }
+    return field->epsilon >= 0.0f;
+}
+
+inline float userDataDefaultEpsilon() {
+    return -1.0f;
+}
+
 static_assert(sizeof(UserDataFieldDef) == kUserDataFieldPackedBytes, "userData field pack size");
-static_assert(kUserDataFieldsMaxBytes == 552, "userData schema max bytes");
+static_assert(kUserDataFieldsMaxBytes == 648, "userData schema max bytes");
 static_assert(kUserDataValuesMaxBytes == 384, "userData values max bytes");
 
 inline UserDataFieldType userDataFieldTypeFromText(const char *text) {
@@ -205,7 +226,12 @@ inline uint8_t userDataParseFieldsJson(
         memset(&field, 0, sizeof(field));
         field.nullable = nullable ? 1 : 0;
         field.type = (uint8_t)userDataFieldTypeFromText(typeText.c_str());
+        field.epsilon = userDataDefaultEpsilon();
         userDataCopyFieldName(field.name, nameText.c_str());
+        double epsilonValue = 0.0;
+        if (extractJsonDouble(object.c_str(), "epsilon", epsilonValue)) {
+            field.epsilon = (float)epsilonValue;
+        }
         count++;
         cursor = objectEnd + 1;
     }
@@ -240,7 +266,15 @@ inline String userDataFieldsToJson(const UserDataFieldDef *fields, uint8_t field
         appendJsonEscaped(json, fields[index].name, kUserDataFieldNameMaxChars);
         json += "\",\"type\":\"";
         json += userDataFieldTypeJsonId((UserDataFieldType)fields[index].type);
-        json += "\"}";
+        json += "\",\"epsilon\":";
+        if ((UserDataFieldType)fields[index].type == UserDataFieldTypeFloat) {
+            char epsilonText[32];
+            snprintf(epsilonText, sizeof(epsilonText), "%.6g", (double)fields[index].epsilon);
+            json += epsilonText;
+        } else {
+            json += String((long)fields[index].epsilon);
+        }
+        json += "}";
     }
     json += "]";
     return json;

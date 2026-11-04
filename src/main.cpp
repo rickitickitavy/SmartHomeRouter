@@ -23,6 +23,7 @@
 #include "CameraStore.h"
 #include "AutomationEngine.h"
 #include "EmailSender.h"
+#include "HistoryStore.h"
 #include "InterChipHost.h"
 #endif
 #include "JsonField.h"
@@ -75,6 +76,7 @@ static AutomationStore *automationStore = nullptr;
 static CameraStore *cameraStore = nullptr;
 static AutomationEngine *automationEngine = nullptr;
 static EmailSender *emailSender = nullptr;
+static HistoryStore historyStore;
 ActionCommandQueue actionCommandQueue;
 #endif
 static FoundDeviceList *foundDevices = nullptr;
@@ -1120,6 +1122,19 @@ static String hostGatewayStatusJson() {
     json += String((unsigned long)(emailSender != nullptr ? emailSender->emailsInQueue() : 0));
     json += ",\"actionQueue\":";
     json += String((unsigned long)actionCommandQueue.busyCount());
+    {
+        const HistoryStoreStats historyStats = historyStore.stats();
+        json += ",\"historyEntries\":";
+        json += String((unsigned)historyStats.entriesCount);
+        json += ",\"historyPages\":";
+        json += String((unsigned)historyStats.pagesUsed);
+        json += ",\"historyPagesTotal\":";
+        json += String((unsigned)historyStats.pagesTotal);
+        json += ",\"historyPsramKiB\":";
+        json += String((unsigned long)historyStats.slabUsedKiB);
+        json += ",\"historyValuesStored\":";
+        json += String((unsigned long)historyStats.valuesStored);
+    }
     json += "}";
     return json;
 }
@@ -1130,6 +1145,9 @@ static bool onDeviceUpserted(const DeviceTopicEntry *entry) {
         mqttClient->subscribeDeviceCommands();
     }
     persistHostDeviceList();
+#if defined(BOARD_ROLE_HOST)
+    historyStore.syncSeriesFromDevices(topicMap);
+#endif
     return ZIGBEE_SPI_PROXY.enqueueDeviceUpsert(entry);
 }
 
@@ -1989,6 +2007,24 @@ static void setupHost() {
 
     settingsManager = new SettingsManager();
     settingsManager->loadDeviceFile();
+    if (!historyStore.begin(
+            settingsManager->historyMaxSizeKiB(),
+            settingsManager->historyEntrySize()
+        )) {
+        LOGGER.warning("History store slab unavailable");
+    } else {
+        historyStore.setRetention(
+            settingsManager->historyMaxStoreDays(),
+            settingsManager->historySweepIntervalMin()
+        );
+        historyStore.syncSeriesFromDevices(settingsManager->deviceMap());
+        LOGGER.info(
+            "History store ready pages="
+            + String((unsigned)historyStore.stats().pagesTotal)
+            + " entrySize="
+            + String((unsigned)settingsManager->historyEntrySize())
+        );
+    }
     userStore = new UserStore();
     userStore->begin(true);
     userStore->setChangedHandler(onHostUserChanged);
@@ -2044,6 +2080,8 @@ static void setupHost() {
     webConsole->setDevicesFileHandler([]() {
         return settingsManager != nullptr ? settingsManager->devicesJsonFile() : String("[]");
     });
+    webConsole->setHistoryStore(&historyStore);
+    ZIGBEE_SPI_PROXY.setHistoryStore(&historyStore);
     actionCommandQueue.begin();
     actionCommandQueue.setHandlers(
         applyManualDeviceCommandImmediate,
@@ -2218,6 +2256,7 @@ void loop() {
         automationEngine->tick();
     }
     actionCommandQueue.tick();
+    historyStore.loop();
     if (emailSender != nullptr) {
         emailSender->tick();
     }

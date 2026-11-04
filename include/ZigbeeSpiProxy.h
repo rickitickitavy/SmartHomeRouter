@@ -6,6 +6,9 @@
 #include "PsramJsonBuffer.h"
 #include "UserDataPayload.h"
 #include "UserStore.h"
+#if defined(BOARD_ROLE_HOST)
+#include "HistoryStore.h"
+#endif
 
 class ZigbeeSpiProxy {
 public:
@@ -80,6 +83,9 @@ public:
             bool valueChanged
         );
     void setStatusValueChangedHandler(StatusValueChangedFn handler);
+#if defined(BOARD_ROLE_HOST)
+    void setHistoryStore(HistoryStore *store);
+#endif
     bool copyEndpointState(const uint8_t ieee[8], uint8_t endpoint, char *out, size_t outLen) const;
     bool copyEndpointStateForParam(
         const uint8_t ieee[8],
@@ -174,6 +180,9 @@ private:
     LightStateFn lightStateHandler = nullptr;
     DeviceLiveChangedFn deviceLiveChanged = nullptr;
     StatusValueChangedFn statusValueChanged = nullptr;
+#if defined(BOARD_ROLE_HOST)
+    HistoryStore *historyStore = nullptr;
+#endif
     DeviceTopicMap *registryMap = nullptr;
     DeviceTopicMap pullMap;
     PendingDeviceChange pendingChanges[kPendingChangeSlots]{};

@@ -32,6 +32,17 @@ public:
     void setLedBrightness(uint8_t bluePercent, uint8_t greenPercent);
     bool useQueueForBaseDeviceCommand() const;
     void setUseQueueForBaseDeviceCommand(bool enabled);
+    uint8_t historyMaxStoreDays() const;
+    void setHistoryMaxStoreDays(uint8_t days);
+    uint8_t historySweepIntervalMin() const;
+    void setHistorySweepIntervalMin(uint8_t minutes);
+    uint16_t historyMaxSizeKiB() const;
+    void setHistoryMaxSizeKiB(uint16_t sizeKiB);
+    uint16_t historyEntrySize() const;
+    void setHistoryEntrySize(uint16_t entrySize);
+    static bool isValidHistoryEntrySize(uint16_t entrySize);
+    static uint8_t clampHistoryMaxStoreDays(uint8_t days);
+    static uint8_t clampHistorySweepIntervalMin(uint8_t minutes);
     uint8_t uiTheme() const;
     void setUiTheme(uint8_t themeId);
     static const char *uiThemeJsonId(uint8_t themeId);

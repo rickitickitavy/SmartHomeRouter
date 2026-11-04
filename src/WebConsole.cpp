@@ -189,6 +189,13 @@ void WebConsole::begin() {
             appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
         }
     );
+#if defined(BOARD_ROLE_HOST)
+    server.on(
+        "/api/history",
+        HTTP_GET,
+        [this](AsyncWebServerRequest *request) { handleHistoryGet(request); }
+    );
+#endif
     server.on(
         "/api/hardware",
         HTTP_GET,
@@ -2423,6 +2430,12 @@ void WebConsole::setDevicesFileHandler(WebConsole::DevicesFileFn handler) {
     devicesFileJson = handler;
 }
 
+#if defined(BOARD_ROLE_HOST)
+void WebConsole::setHistoryStore(HistoryStore *store) {
+    historyStore = store;
+}
+#endif
+
 void WebConsole::setHardwareApplyHandler(WebConsole::HardwareApplyFn handler) {
     applyHardware = handler;
 }
@@ -2451,6 +2464,14 @@ void WebConsole::handleHardwareGet(AsyncWebServerRequest *request) {
     json += String(greenPercent);
     json += ",\"useQueueForBaseDeviceCommand\":";
     json += useQueueForBaseDeviceCommand ? "true" : "false";
+    json += ",\"historyMaxStoreDays\":";
+    json += String((unsigned)settingsManager->historyMaxStoreDays());
+    json += ",\"historySweepIntervalMin\":";
+    json += String((unsigned)settingsManager->historySweepIntervalMin());
+    json += ",\"historyMaxSizeKiB\":";
+    json += String((unsigned)settingsManager->historyMaxSizeKiB());
+    json += ",\"historyEntrySize\":";
+    json += String((unsigned)settingsManager->historyEntrySize());
     json += "}";
     request->send(200, "application/json", json);
 }
@@ -2494,16 +2515,175 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
     }
     const uint8_t bluePercent = (uint8_t)blueLedBrightness;
     const uint8_t greenPercent = (uint8_t)greenLedBrightness;
+    int historyMaxStoreDays = settingsManager->historyMaxStoreDays();
+    int historySweepIntervalMin = settingsManager->historySweepIntervalMin();
+    int historyMaxSizeKiB = settingsManager->historyMaxSizeKiB();
+    int historyEntrySize = settingsManager->historyEntrySize();
+    const bool haveHistoryDays = extractJsonInt(body.c_str(), "historyMaxStoreDays", historyMaxStoreDays);
+    const bool haveHistorySweep =
+        extractJsonInt(body.c_str(), "historySweepIntervalMin", historySweepIntervalMin);
+    const bool haveHistorySize = extractJsonInt(body.c_str(), "historyMaxSizeKiB", historyMaxSizeKiB);
+    const bool haveHistoryEntry = extractJsonInt(body.c_str(), "historyEntrySize", historyEntrySize);
+    if (haveHistoryDays
+        && (historyMaxStoreDays < HISTORY_MAX_STORE_DAYS_MIN
+            || historyMaxStoreDays > HISTORY_MAX_STORE_DAYS_MAX)) {
+        request->send(400, "text/plain", "historyMaxStoreDays must be 1-20");
+        return;
+    }
+    if (haveHistorySweep
+        && (historySweepIntervalMin < HISTORY_SWEEP_INTERVAL_MIN_MIN
+            || historySweepIntervalMin > HISTORY_SWEEP_INTERVAL_MIN_MAX)) {
+        request->send(400, "text/plain", "historySweepIntervalMin must be 1-120");
+        return;
+    }
+    if (haveHistorySize && historyMaxSizeKiB <= 0) {
+        request->send(400, "text/plain", "historyMaxSizeKiB must be positive");
+        return;
+    }
+    if (haveHistoryEntry && !SettingsManager::isValidHistoryEntrySize((uint16_t)historyEntrySize)) {
+        request->send(400, "text/plain", "historyEntrySize must be 256/512/1024/2048/4096");
+        return;
+    }
     settingsManager->setSpiSpeedHz(clamped);
     settingsManager->setRfUpdateSpiSpeedHz(rfUpdateClamped);
     settingsManager->setLedBrightness(bluePercent, greenPercent);
     settingsManager->setUseQueueForBaseDeviceCommand(useQueueForBaseDeviceCommand);
+    if (haveHistoryDays) {
+        settingsManager->setHistoryMaxStoreDays((uint8_t)historyMaxStoreDays);
+    }
+    if (haveHistorySweep) {
+        settingsManager->setHistorySweepIntervalMin((uint8_t)historySweepIntervalMin);
+    }
+    if (haveHistorySize) {
+        settingsManager->setHistoryMaxSizeKiB((uint16_t)historyMaxSizeKiB);
+    }
+    if (haveHistoryEntry) {
+        settingsManager->setHistoryEntrySize((uint16_t)historyEntrySize);
+    }
     settingsManager->saveMain(false);
     if (applyHardware != nullptr) {
         applyHardware(clamped, bluePercent, greenPercent);
     }
     request->send(200, "text/plain", "Saved. Hardware settings are active now.");
 }
+
+#if defined(BOARD_ROLE_HOST)
+void WebConsole::handleHistoryGet(AsyncWebServerRequest *request) {
+    const UserRecord *user = nullptr;
+    if (!requireUser(request, &user)) {
+        return;
+    }
+    if (historyStore == nullptr || !historyStore->available()) {
+        request->send(503, "text/plain", "History unavailable");
+        return;
+    }
+    if (!request->hasParam("ieee") || !request->hasParam("kind")) {
+        request->send(400, "text/plain", "Need ieee and kind");
+        return;
+    }
+    const String ieeeText = request->getParam("ieee")->value();
+    uint8_t ieee[8];
+    if (settingsManager == nullptr || settingsManager->deviceMap() == nullptr
+        || !settingsManager->deviceMap()->parseIeee(ieeeText.c_str(), ieee)) {
+        request->send(400, "text/plain", "Bad ieee");
+        return;
+    }
+    HistorySeriesKey key{};
+    memcpy(key.ieee, ieee, 8);
+    const String kindText = request->getParam("kind")->value();
+    if (kindText == "main") {
+        key.kind = HistorySeriesMainState;
+        int channel = 1;
+        if (request->hasParam("channel")) {
+            channel = request->getParam("channel")->value().toInt();
+        }
+        if (channel < 1) {
+            channel = 1;
+        }
+        key.channel = (uint8_t)channel;
+    } else if (kindText == "reportable") {
+        key.kind = HistorySeriesReportable;
+        if (!request->hasParam("cluster") || !request->hasParam("attribute")) {
+            request->send(400, "text/plain", "Need cluster and attribute");
+            return;
+        }
+        key.cluster = (uint16_t)strtoul(request->getParam("cluster")->value().c_str(), nullptr, 0);
+        key.attribute = (uint16_t)strtoul(request->getParam("attribute")->value().c_str(), nullptr, 0);
+    } else {
+        request->send(400, "text/plain", "kind must be main or reportable");
+        return;
+    }
+    const time_t nowUnix = time(nullptr);
+    uint32_t toEpoch = HistoryStore::unixToEpoch2010(nowUnix);
+    uint32_t fromEpoch = toEpoch > 86400UL ? toEpoch - 86400UL : 0;
+    if (request->hasParam("from")) {
+        fromEpoch = (uint32_t)strtoul(request->getParam("from")->value().c_str(), nullptr, 10);
+    }
+    if (request->hasParam("to")) {
+        toEpoch = (uint32_t)strtoul(request->getParam("to")->value().c_str(), nullptr, 10);
+    }
+    // Keep tiny on the AsyncTCP task: heap samples + bounded JSON.
+    uint16_t maxPoints = 128;
+    if (request->hasParam("maxPoints")) {
+        const int parsedMax = request->getParam("maxPoints")->value().toInt();
+        if (parsedMax > 0 && parsedMax <= 128) {
+            maxPoints = (uint16_t)parsedMax;
+        }
+    }
+    HistorySample *samples = (HistorySample *)heap_caps_malloc(
+        (size_t)maxPoints * sizeof(HistorySample),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+    );
+    if (samples == nullptr) {
+        samples = (HistorySample *)malloc((size_t)maxPoints * sizeof(HistorySample));
+    }
+    if (samples == nullptr) {
+        request->send(503, "text/plain", "History buffer unavailable");
+        return;
+    }
+    uint16_t sampleCount = 0;
+    HistoryValueType valueType = HistoryValueFloat;
+    historyStore->query(key, fromEpoch, toEpoch, maxPoints, samples, &sampleCount, &valueType);
+    String json;
+    json.reserve((size_t)sampleCount * 48u + 64u);
+    json = "{\"valueType\":\"";
+    if (valueType == HistoryValueBool) {
+        json += "bool";
+    } else if (valueType == HistoryValueInt) {
+        json += "int";
+    } else if (valueType == HistoryValueString) {
+        json += "string";
+    } else {
+        json += "float";
+    }
+    json += "\",\"points\":[";
+    for (uint16_t index = 0; index < sampleCount; index++) {
+        if (index > 0) {
+            json += ",";
+        }
+        json += "{\"t\":";
+        json += String((unsigned long)samples[index].epoch2010);
+        json += ",\"v\":";
+        if (valueType == HistoryValueBool) {
+            json += samples[index].boolValue ? "true" : "false";
+        } else if (valueType == HistoryValueInt) {
+            json += String((long)samples[index].intValue);
+        } else if (valueType == HistoryValueString) {
+            json += "\"";
+            appendJsonEscaped(json, samples[index].stringValue, sizeof(samples[index].stringValue));
+            json += "\"";
+        } else {
+            char floatText[32];
+            snprintf(floatText, sizeof(floatText), "%.6g", (double)samples[index].floatValue);
+            json += floatText;
+        }
+        json += "}";
+    }
+    json += "]}";
+    free(samples);
+    request->send(200, "application/json", json);
+}
+#endif
 
 void WebConsole::appendMqttSettingsJson(String &json) {
     GlobalSettings *settings = settingsManager->getSettings();
@@ -2814,6 +2994,48 @@ bool WebConsole::applyHardwareJson(const char *json, String *errorText) {
     }
     bool useQueueForBaseDeviceCommand = false;
     extractJsonBool(json, "useQueueForBaseDeviceCommand", useQueueForBaseDeviceCommand);
+    int historyMaxStoreDays = settingsManager->historyMaxStoreDays();
+    int historySweepIntervalMin = settingsManager->historySweepIntervalMin();
+    int historyMaxSizeKiB = settingsManager->historyMaxSizeKiB();
+    int historyEntrySize = settingsManager->historyEntrySize();
+    if (extractJsonInt(json, "historyMaxStoreDays", historyMaxStoreDays)) {
+        if (historyMaxStoreDays < HISTORY_MAX_STORE_DAYS_MIN
+            || historyMaxStoreDays > HISTORY_MAX_STORE_DAYS_MAX) {
+            if (errorText != nullptr) {
+                *errorText = "historyMaxStoreDays must be 1-20";
+            }
+            return false;
+        }
+        settingsManager->setHistoryMaxStoreDays((uint8_t)historyMaxStoreDays);
+    }
+    if (extractJsonInt(json, "historySweepIntervalMin", historySweepIntervalMin)) {
+        if (historySweepIntervalMin < HISTORY_SWEEP_INTERVAL_MIN_MIN
+            || historySweepIntervalMin > HISTORY_SWEEP_INTERVAL_MIN_MAX) {
+            if (errorText != nullptr) {
+                *errorText = "historySweepIntervalMin must be 1-120";
+            }
+            return false;
+        }
+        settingsManager->setHistorySweepIntervalMin((uint8_t)historySweepIntervalMin);
+    }
+    if (extractJsonInt(json, "historyMaxSizeKiB", historyMaxSizeKiB)) {
+        if (historyMaxSizeKiB <= 0) {
+            if (errorText != nullptr) {
+                *errorText = "historyMaxSizeKiB must be positive";
+            }
+            return false;
+        }
+        settingsManager->setHistoryMaxSizeKiB((uint16_t)historyMaxSizeKiB);
+    }
+    if (extractJsonInt(json, "historyEntrySize", historyEntrySize)) {
+        if (!SettingsManager::isValidHistoryEntrySize((uint16_t)historyEntrySize)) {
+            if (errorText != nullptr) {
+                *errorText = "historyEntrySize must be 256/512/1024/2048/4096";
+            }
+            return false;
+        }
+        settingsManager->setHistoryEntrySize((uint16_t)historyEntrySize);
+    }
     settingsManager->setSpiSpeedHz(clamped);
     settingsManager->setLedBrightness(bluePercent, greenPercent);
     settingsManager->setUseQueueForBaseDeviceCommand(useQueueForBaseDeviceCommand);
@@ -2863,6 +3085,14 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
     response->print((unsigned)settingsManager->greenLedBrightness());
     response->print(",\"useQueueForBaseDeviceCommand\":");
     response->print(settingsManager->useQueueForBaseDeviceCommand() ? "true" : "false");
+    response->print(",\"historyMaxStoreDays\":");
+    response->print((unsigned)settingsManager->historyMaxStoreDays());
+    response->print(",\"historySweepIntervalMin\":");
+    response->print((unsigned)settingsManager->historySweepIntervalMin());
+    response->print(",\"historyMaxSizeKiB\":");
+    response->print((unsigned)settingsManager->historyMaxSizeKiB());
+    response->print(",\"historyEntrySize\":");
+    response->print((unsigned)settingsManager->historyEntrySize());
     response->print("},\"ui\":{\"theme\":\"");
     response->print(UserStore::themeJsonId(user->theme));
     response->print("\"},\"devices\":");
@@ -3369,6 +3599,14 @@ void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
             existing->reportableDataCount
         );
     }
+    double historyEpsilonValue = -1.0;
+    if (extractJsonDouble(body.c_str(), "historyEpsilon", historyEpsilonValue)) {
+        entry->historyEpsilon = (float)historyEpsilonValue;
+    } else if (!isEdit) {
+        entry->historyEpsilon = -1.0f;
+    } else if (existing != nullptr) {
+        entry->historyEpsilon = existing->historyEpsilon;
+    }
     if (transport != DeviceTransportMqtt) {
         int parsedNwk = 0;
         uint16_t shortAddr = 0;
@@ -3390,6 +3628,11 @@ void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
         request->send(503, "text/plain", "Slave is not ready to store the device");
         return;
     }
+#if defined(BOARD_ROLE_HOST)
+    if (historyStore != nullptr) {
+        historyStore->syncSeriesFromDevices(deviceMap);
+    }
+#endif
     broadcastDeviceUpsert(ieee);
     request->send(200, "text/plain", "Saved");
 }
@@ -3432,6 +3675,11 @@ void WebConsole::handleDevicesDelete(AsyncWebServerRequest *request) {
         request->send(503, "text/plain", "Slave is not ready to store the device");
         return;
     }
+#if defined(BOARD_ROLE_HOST)
+    if (historyStore != nullptr) {
+        historyStore->syncSeriesFromDevices(deviceMap);
+    }
+#endif
     broadcastDeviceRemoved(ieee);
     request->send(200, "text/plain", "Deleted");
 }

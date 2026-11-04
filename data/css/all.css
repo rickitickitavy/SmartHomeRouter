@@ -922,19 +922,23 @@ html, body {
 }
 
 #deviceReportableDataTable .reportable-col-cluster {
-    width: 42%;
+    width: 36%;
 }
 
 #deviceReportableDataTable .reportable-col-attribute {
-    width: 32%;
+    width: 28%;
 }
 
 #deviceReportableDataTable .reportable-col-type {
-    width: 14%;
+    width: 9%;
+}
+
+#deviceReportableDataTable .reportable-col-hist {
+    width: 4.75rem;
 }
 
 #deviceReportableDataTable .reportable-col-actions {
-    width: 12%;
+    width: 7.25rem;
 }
 
 #deviceReportableDataTable td {
@@ -1346,9 +1350,252 @@ html, body {
 }
 
 #parameterDialog .dialog-panel {
-    width: min(40rem, 100%);
+    width: min(60rem, 100%);
     max-height: 90vh;
     overflow: hidden;
+}
+
+#historyChartOverlay .dialog-panel {
+    width: min(52rem, 100%);
+    max-height: 92vh;
+    overflow: auto;
+}
+
+.history-chart-toolbar {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+    margin: 0 0 0.75rem;
+}
+
+.history-chart-toolbar-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+}
+
+.history-chart-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.history-chart-presets .btn {
+    min-height: 2.25rem;
+    padding: 0.35rem 0.7rem;
+    font-size: 0.8125rem;
+}
+
+.history-chart-presets .btn.is-active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+.history-chart-range {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    margin-left: 0;
+}
+
+.history-chart-range input[type="datetime-local"] {
+    min-height: 2.25rem;
+    padding: 0.3rem 0.5rem;
+    font-size: 0.8125rem;
+    font-family: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+
+.history-chart-smooth {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
+    margin-left: 2.75rem; /* ~one preset button width */
+}
+
+.history-chart-smooth .field-check {
+    margin: 0;
+}
+
+.history-chart-smooth > label {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: var(--muted);
+}
+
+.history-chart-smooth > input[type="number"] {
+    width: 4.25rem;
+    min-height: 2.25rem;
+    padding: 0.3rem 0.45rem;
+    font-size: 0.8125rem;
+    font-family: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+
+.history-chart-smooth > input[type="number"]:disabled {
+    color: var(--muted);
+    background: color-mix(in srgb, var(--chrome-idle) 70%, var(--bg));
+}
+
+.history-chart-canvas-wrap {
+    position: relative;
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+#historyChartCanvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: var(--bg);
+    cursor: crosshair;
+}
+
+.history-chart-tooltip {
+    position: absolute;
+    z-index: 2;
+    pointer-events: none;
+    padding: 0.35rem 0.55rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.75rem;
+    white-space: pre-line;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.history-chart-tooltip[hidden] {
+    display: none !important;
+}
+
+.history-chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem 1rem;
+    margin: 0.65rem 0 0;
+    font-size: 0.8125rem;
+    color: var(--muted);
+}
+
+.history-chart-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.history-chart-legend-swatch {
+    width: 0.85rem;
+    height: 0.85rem;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+#parameterDialog .device-history-row {
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem 1rem;
+}
+
+#parameterDialog .device-history-row .field-check {
+    flex: 0 0 auto;
+    min-height: 44px;
+}
+
+#parameterDialog .device-history-row .field-check > span {
+    flex: 0 0 auto;
+}
+
+#parameterDialog .device-history-row > label {
+    margin: 0;
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+#parameterDialog .device-history-row > input[type="number"] {
+    width: 7.5rem;
+    flex: 0 0 7.5rem;
+    min-width: 0;
+    appearance: textfield;
+    -moz-appearance: textfield;
+}
+
+#parameterDialog .device-history-row > input[type="number"]::-webkit-outer-spin-button,
+#parameterDialog .device-history-row > input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+#parameterDialog .user-data-field-actions .console-widget-delete-btn {
+    margin-right: 0;
+}
+
+#parameterDialog .reportable-col-hist,
+#parameterDialog .user-data-col-hist {
+    width: 4.75rem;
+    min-width: 4.75rem;
+    max-width: 4.75rem;
+    white-space: nowrap;
+    padding-left: 0.35rem;
+    padding-right: 0.25rem;
+}
+
+#parameterDialog .data-table th.reportable-col-hist,
+#parameterDialog .data-table th.user-data-col-hist,
+#parameterDialog #deviceReportableDataTable th:nth-child(4),
+#parameterDialog #deviceUserDataFieldsTable th:nth-child(4) {
+    white-space: nowrap;
+}
+
+#parameterDialog .hist-delta-cell {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.3rem;
+    white-space: nowrap;
+    width: max-content;
+}
+
+#parameterDialog .hist-delta-cell input[type="checkbox"] {
+    width: 1.35rem;
+    height: 1.35rem;
+    margin: 0;
+    flex-shrink: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+#parameterDialog .hist-delta-cell input[type="number"] {
+    width: 2.75rem;
+    min-width: 2.75rem;
+    flex: 0 0 2.75rem;
+    min-height: 2rem;
+    padding: 0.2rem 0.35rem;
+    box-sizing: border-box;
+    appearance: textfield;
+    -moz-appearance: textfield;
+}
+
+#parameterDialog .hist-delta-cell input[type="number"]::-webkit-outer-spin-button,
+#parameterDialog .hist-delta-cell input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
 }
 
 #parameterDialog .tab-content {

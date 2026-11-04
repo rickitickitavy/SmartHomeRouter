@@ -27,7 +27,22 @@ struct __attribute__((packed)) ReportableDataDef {
     uint16_t cluster;
     uint16_t attribute;
     uint8_t type;
+    float epsilon;
 };
+
+inline bool reportableHistoryEnabled(const ReportableDataDef *row) {
+    if (row == nullptr) {
+        return false;
+    }
+    if ((ReportableDataType)row->type == ReportableDataTypeString) {
+        return row->epsilon == 0.0f;
+    }
+    return row->epsilon >= 0.0f;
+}
+
+inline float reportableDefaultEpsilon() {
+    return -1.0f;
+}
 
 inline ReportableDataType reportableDataTypeFromText(const char *text) {
     if (text == nullptr) {
@@ -138,6 +153,7 @@ inline bool reportableDataAppendUnique(
     rows[*rowCount].cluster = cluster;
     rows[*rowCount].attribute = attribute;
     rows[*rowCount].type = (uint8_t)type;
+    rows[*rowCount].epsilon = reportableDefaultEpsilon();
     (*rowCount)++;
     return true;
 }
@@ -352,7 +368,15 @@ inline String reportableDataToJson(const ReportableDataDef *rows, uint8_t rowCou
         json += attributeText;
         json += "\",\"type\":\"";
         json += reportableDataTypeJsonId((ReportableDataType)rows[index].type);
-        json += "\"}";
+        json += "\",\"epsilon\":";
+        if ((ReportableDataType)rows[index].type == ReportableDataTypeFloat) {
+            char epsilonText[32];
+            snprintf(epsilonText, sizeof(epsilonText), "%.6g", (double)rows[index].epsilon);
+            json += epsilonText;
+        } else {
+            json += String((long)rows[index].epsilon);
+        }
+        json += "}";
     }
     json += "]";
     return json;
@@ -469,6 +493,11 @@ inline bool reportableDataAssignFromJson(
         parsed[count].cluster = (uint16_t)clusterInt;
         parsed[count].attribute = (uint16_t)attributeInt;
         parsed[count].type = (uint8_t)reportableDataTypeFromText(typeText.c_str());
+        parsed[count].epsilon = reportableDefaultEpsilon();
+        double epsilonValue = 0.0;
+        if (extractJsonDouble(object.c_str(), "epsilon", epsilonValue)) {
+            parsed[count].epsilon = (float)epsilonValue;
+        }
         count++;
         cursor = objectEnd + 1;
     }
