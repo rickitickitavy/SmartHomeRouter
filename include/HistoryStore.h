@@ -1,12 +1,17 @@
 #pragma once
 
 #include "Defines.h"
-#include "DeviceTopicMap.h"
-#include "ReportableData.h"
 
 #include <Arduino.h>
 #include <stddef.h>
 #include <stdint.h>
+
+class DeviceTopicMap;
+
+// Keep HistoryStore.h free of ReportableData/DeviceTopicMap bodies so native
+// unit tests can compile against lightweight stubs.
+constexpr size_t kHistoryValueTextMaxChars = 31;
+constexpr size_t kHistoryValueTextMaxLen = kHistoryValueTextMaxChars + 1;
 
 enum HistorySeriesKind : uint8_t {
     HistorySeriesMainState = 0,
@@ -34,7 +39,7 @@ struct HistorySample {
     float floatValue;
     int32_t intValue;
     bool boolValue;
-    char stringValue[kReportableValueTextMaxLen];
+    char stringValue[kHistoryValueTextMaxLen];
 };
 
 struct HistoryStoreStats {
@@ -84,6 +89,18 @@ public:
     static bool clockIsSane(time_t unixSec);
     static uint16_t maxPagesForEntrySize(uint16_t entrySizeBytes);
 
+#if defined(HISTORY_STORE_UNIT_TEST)
+    static void setTestUnixNow(time_t unixSec);
+    static void clearTestUnixNow();
+    void forceSweepForTest();
+    bool seriesRingState(
+        const HistorySeriesKey &key,
+        uint16_t *oldestIndex,
+        uint16_t *newestIndex,
+        uint16_t *pageCountOut
+    ) const;
+#endif
+
 private:
     struct PageHeader {
         uint16_t recordsCount;
@@ -113,7 +130,7 @@ private:
         float lastFloat;
         int32_t lastInt;
         bool lastBool;
-        char lastString[kReportableValueTextMaxLen];
+        char lastString[kHistoryValueTextMaxLen];
         uint8_t *entryBytes;
         bool used;
     };

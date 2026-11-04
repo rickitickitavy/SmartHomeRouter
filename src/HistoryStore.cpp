@@ -1,10 +1,16 @@
 #include "HistoryStore.h"
 
+#if defined(HISTORY_STORE_UNIT_TEST)
+#include <esp_heap_caps.h>
+// Match ReportableData.h without pulling host Arduino headers.
+constexpr size_t kReportableValueTextMaxChars = kHistoryValueTextMaxChars;
+#else
 #include "SettingsManager.h"
 #include "UserDataPayload.h"
 #include "ZigbeeDeviceType.h"
-
 #include <esp_heap_caps.h>
+#endif
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +20,57 @@ namespace {
 
 constexpr size_t kSeriesCapacityMax = 256;
 constexpr time_t kSaneUnixFloor = 1700000000;
+
+#if defined(HISTORY_STORE_UNIT_TEST)
+bool gHistoryTestUnixActive = false;
+time_t gHistoryTestUnix = 0;
+
+bool historyIsValidEntrySize(uint16_t entrySize) {
+    return entrySize == 256 || entrySize == 512 || entrySize == 1024 || entrySize == 2048
+        || entrySize == 4096;
+}
+
+uint8_t historyClampMaxStoreDays(uint8_t days) {
+    if (days < HISTORY_MAX_STORE_DAYS_MIN) {
+        return HISTORY_MAX_STORE_DAYS_MIN;
+    }
+    if (days > HISTORY_MAX_STORE_DAYS_MAX) {
+        return HISTORY_MAX_STORE_DAYS_MAX;
+    }
+    return days;
+}
+
+uint8_t historyClampSweepIntervalMin(uint8_t minutes) {
+    if (minutes < HISTORY_SWEEP_INTERVAL_MIN_MIN) {
+        return HISTORY_SWEEP_INTERVAL_MIN_MIN;
+    }
+    if (minutes > HISTORY_SWEEP_INTERVAL_MIN_MAX) {
+        return HISTORY_SWEEP_INTERVAL_MIN_MAX;
+    }
+    return minutes;
+}
+#else
+bool historyIsValidEntrySize(uint16_t entrySize) {
+    return SettingsManager::isValidHistoryEntrySize(entrySize);
+}
+
+uint8_t historyClampMaxStoreDays(uint8_t days) {
+    return SettingsManager::clampHistoryMaxStoreDays(days);
+}
+
+uint8_t historyClampSweepIntervalMin(uint8_t minutes) {
+    return SettingsManager::clampHistorySweepIntervalMin(minutes);
+}
+#endif
+
+time_t historyWallClockUnix() {
+#if defined(HISTORY_STORE_UNIT_TEST)
+    if (gHistoryTestUnixActive) {
+        return gHistoryTestUnix;
+    }
+#endif
+    return time(nullptr);
+}
 
 bool floatChangedBeyond(float previous, float next, float epsilon) {
     if (epsilon <= 0.0f) {
@@ -26,6 +83,46 @@ bool floatChangedBeyond(float previous, float next, float epsilon) {
 
 HistoryStore::HistoryStore() = default;
 
+#if defined(HISTORY_STORE_UNIT_TEST)
+void HistoryStore::setTestUnixNow(time_t unixSec) {
+    gHistoryTestUnixActive = true;
+    gHistoryTestUnix = unixSec;
+}
+
+void HistoryStore::clearTestUnixNow() {
+    gHistoryTestUnixActive = false;
+    gHistoryTestUnix = 0;
+}
+
+void HistoryStore::forceSweepForTest() {
+    sweepAll();
+}
+
+bool HistoryStore::seriesRingState(
+    const HistorySeriesKey &key,
+    uint16_t *oldestIndex,
+    uint16_t *newestIndex,
+    uint16_t *pageCountOut
+) const {
+    if (oldestIndex == nullptr || newestIndex == nullptr || pageCountOut == nullptr) {
+        return false;
+    }
+    SeriesRuntime *runtime = findSeries(key);
+    if (runtime == nullptr || !runtime->used) {
+        return false;
+    }
+    EntryHeader *header = entryHeader(runtime);
+    if (header == nullptr) {
+        return false;
+    }
+    *oldestIndex = header->oldestIndex;
+    *newestIndex = header->newestIndex;
+    *pageCountOut = entryPageCount(runtime);
+    return true;
+}
+#endif
+
+#if !defined(HISTORY_STORE_UNIT_TEST)
 void historyNoteReportableValue(
     HistoryStore *store,
     DeviceTopicMap *deviceMap,
@@ -176,6 +273,7 @@ void historyNoteMainStateValue(
     }
     store->noteBool(key, asOn);
 }
+#endif // !HISTORY_STORE_UNIT_TEST
 
 uint16_t HistoryStore::maxPagesForEntrySize(uint16_t entrySizeBytes) {
     if (entrySizeBytes <= HISTORY_ENTRY_HEADER_BYTES) {
@@ -202,7 +300,7 @@ bool HistoryStore::clockIsSane(time_t unixSec) {
 bool HistoryStore::begin(uint16_t maxSizeKiB, uint16_t entrySizeBytes) {
     end();
     entrySize = entrySizeBytes;
-    if (!SettingsManager::isValidHistoryEntrySize(entrySize)) {
+    if (!historyIsValidEntrySize(entrySize)) {
         entrySize = DEFAULT_HISTORY_ENTRY_SIZE;
     }
     maxPagesPerEntry = maxPagesForEntrySize(entrySize);
@@ -245,8 +343,8 @@ void HistoryStore::end() {
 }
 
 void HistoryStore::setRetention(uint8_t maxDays, uint8_t sweepMinutes) {
-    maxStoreDays = SettingsManager::clampHistoryMaxStoreDays(maxDays);
-    sweepIntervalMin = SettingsManager::clampHistorySweepIntervalMin(sweepMinutes);
+    maxStoreDays = historyClampMaxStoreDays(maxDays);
+    sweepIntervalMin = historyClampSweepIntervalMin(sweepMinutes);
 }
 
 bool HistoryStore::allocSlab(uint16_t maxSizeKiB) {
@@ -405,6 +503,11 @@ bool HistoryStore::removeSeries(const HistorySeriesKey &key) {
 }
 
 bool HistoryStore::seriesConfigured(DeviceTopicMap *deviceMap, const HistorySeriesKey &key) const {
+#if defined(HISTORY_STORE_UNIT_TEST)
+    (void)deviceMap;
+    (void)key;
+    return false;
+#else
     if (deviceMap == nullptr) {
         return false;
     }
@@ -442,6 +545,7 @@ bool HistoryStore::seriesConfigured(DeviceTopicMap *deviceMap, const HistorySeri
         return false;
     }
     return reportableHistoryEnabled(&entry->reportableData[rowIndex]);
+#endif
 }
 
 HistoryStore::SeriesRuntime *HistoryStore::ensureSeries(
@@ -688,7 +792,8 @@ bool HistoryStore::noteFloat(
     float epsilon,
     HistoryValueType valueType
 ) {
-    if (!clockIsSane(time(nullptr))) {
+    const time_t nowUnix = historyWallClockUnix();
+    if (!clockIsSane(nowUnix)) {
         return false;
     }
     SeriesRuntime *runtime = ensureSeries(key, valueType, sizeof(float), epsilon);
@@ -698,7 +803,7 @@ bool HistoryStore::noteFloat(
     if (runtime->hasLast && !floatChangedBeyond(runtime->lastFloat, value, epsilon)) {
         return false;
     }
-    const uint32_t epoch2010 = unixToEpoch2010(time(nullptr));
+    const uint32_t epoch2010 = unixToEpoch2010(nowUnix);
     if (!appendRecord(runtime, epoch2010, &value)) {
         return false;
     }
@@ -708,7 +813,8 @@ bool HistoryStore::noteFloat(
 }
 
 bool HistoryStore::noteInt(const HistorySeriesKey &key, int32_t value, float epsilon) {
-    if (!clockIsSane(time(nullptr))) {
+    const time_t nowUnix = historyWallClockUnix();
+    if (!clockIsSane(nowUnix)) {
         return false;
     }
     SeriesRuntime *runtime = ensureSeries(key, HistoryValueInt, sizeof(int32_t), epsilon);
@@ -727,7 +833,7 @@ bool HistoryStore::noteInt(const HistorySeriesKey &key, int32_t value, float eps
             return false;
         }
     }
-    const uint32_t epoch2010 = unixToEpoch2010(time(nullptr));
+    const uint32_t epoch2010 = unixToEpoch2010(nowUnix);
     if (!appendRecord(runtime, epoch2010, &value)) {
         return false;
     }
@@ -737,7 +843,8 @@ bool HistoryStore::noteInt(const HistorySeriesKey &key, int32_t value, float eps
 }
 
 bool HistoryStore::noteBool(const HistorySeriesKey &key, bool value) {
-    if (!clockIsSane(time(nullptr))) {
+    const time_t nowUnix = historyWallClockUnix();
+    if (!clockIsSane(nowUnix)) {
         return false;
     }
     SeriesRuntime *runtime = ensureSeries(key, HistoryValueBool, 1, 0.0f);
@@ -748,7 +855,7 @@ bool HistoryStore::noteBool(const HistorySeriesKey &key, bool value) {
         return false;
     }
     const uint8_t byteValue = value ? 1 : 0;
-    const uint32_t epoch2010 = unixToEpoch2010(time(nullptr));
+    const uint32_t epoch2010 = unixToEpoch2010(nowUnix);
     if (!appendRecord(runtime, epoch2010, &byteValue)) {
         return false;
     }
@@ -758,21 +865,22 @@ bool HistoryStore::noteBool(const HistorySeriesKey &key, bool value) {
 }
 
 bool HistoryStore::noteString(const HistorySeriesKey &key, const char *value) {
-    if (value == nullptr || !clockIsSane(time(nullptr))) {
+    const time_t nowUnix = historyWallClockUnix();
+    if (value == nullptr || !clockIsSane(nowUnix)) {
         return false;
     }
     SeriesRuntime *runtime =
-        ensureSeries(key, HistoryValueString, (uint8_t)kReportableValueTextMaxChars, 0.0f);
+        ensureSeries(key, HistoryValueString, (uint8_t)kHistoryValueTextMaxChars, 0.0f);
     if (runtime == nullptr) {
         return false;
     }
-    if (runtime->hasLast && strncmp(runtime->lastString, value, kReportableValueTextMaxChars) == 0) {
+    if (runtime->hasLast && strncmp(runtime->lastString, value, kHistoryValueTextMaxChars) == 0) {
         return false;
     }
-    char packed[kReportableValueTextMaxChars];
+    char packed[kHistoryValueTextMaxChars];
     memset(packed, 0, sizeof(packed));
     strncpy(packed, value, sizeof(packed));
-    const uint32_t epoch2010 = unixToEpoch2010(time(nullptr));
+    const uint32_t epoch2010 = unixToEpoch2010(nowUnix);
     if (!appendRecord(runtime, epoch2010, packed)) {
         return false;
     }
@@ -783,6 +891,9 @@ bool HistoryStore::noteString(const HistorySeriesKey &key, const char *value) {
 }
 
 void HistoryStore::syncSeriesFromDevices(DeviceTopicMap *deviceMap) {
+#if defined(HISTORY_STORE_UNIT_TEST)
+    (void)deviceMap;
+#else
     if (deviceMap == nullptr || !available()) {
         return;
     }
@@ -873,6 +984,7 @@ void HistoryStore::syncSeriesFromDevices(DeviceTopicMap *deviceMap) {
             dropSeries(&series[index]);
         }
     }
+#endif
 }
 
 void HistoryStore::loop() {
@@ -888,7 +1000,7 @@ void HistoryStore::loop() {
 }
 
 void HistoryStore::sweepAll() {
-    const time_t nowUnix = time(nullptr);
+    const time_t nowUnix = historyWallClockUnix();
     if (!clockIsSane(nowUnix)) {
         return;
     }
