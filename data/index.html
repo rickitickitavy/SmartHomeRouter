@@ -1473,11 +1473,13 @@
             rangeEndUnix: 0,
             payload: null,
             layout: null,
-            smooth: false,
-            smoothWindow: 5
+            smooth: true,
+            smoothWindow: 7
         };
         var HISTORY_RANGE_PRESETS = [
             { hours: 1, label: "1h" },
+            { hours: 2, label: "2h" },
+            { hours: 4, label: "4h" },
             { hours: 6, label: "6h" },
             { hours: 12, label: "12h" },
             { hours: 24, label: "24h" },
@@ -1633,47 +1635,70 @@
                 }
             } else {
                 for (guard = 0; guard < 24; guard++) {
+                    // Loose nice bounds: always cover data (ceil top, floor bottom).
                     minV = Math.floor(dmin / step) * step;
-                    maxV = minV + intervals * step;
-                    if (maxV < dmax - 1e-12) {
+                    maxV = Math.ceil(dmax / step) * step;
+                    if (maxV - minV < step - 1e-12) {
+                        maxV = minV + step;
+                    }
+                    var usedSteps = Math.round((maxV - minV) / step);
+                    if (usedSteps > intervals) {
                         step = historyNextNiceStep(step);
                         continue;
                     }
-                    // Keep sign when data does not cross 0 (do not force a 0 tick).
+                    var spareSteps = intervals - usedSteps;
+                    var addLow = Math.floor(spareSteps / 2);
+                    var addHigh = spareSteps - addLow;
+                    // Prefer expanding away from 0 when data stays on one side.
                     if (dmax < 0) {
-                        maxV = Math.floor(dmax / step) * step;
-                        if (maxV >= 0) {
-                            maxV = -step;
+                        addLow = spareSteps;
+                        addHigh = 0;
+                    } else if (dmin > 0) {
+                        addLow = 0;
+                        addHigh = spareSteps;
+                    }
+                    minV -= addLow * step;
+                    maxV += addHigh * step;
+
+                    // Keep sign only when coverage still holds.
+                    if (dmin >= 0 && minV < 0) {
+                        maxV -= minV;
+                        minV = 0;
+                    }
+                    if (dmax < 0 && maxV > 0) {
+                        minV -= maxV;
+                        maxV = 0;
+                    }
+                    if (minV > dmin + 1e-12 || maxV < dmax - 1e-12
+                        || Math.round((maxV - minV) / step) > intervals) {
+                        step = historyNextNiceStep(step);
+                        continue;
+                    }
+                    // Snap span to exactly intervals * step if clamp shortened it.
+                    if (Math.round((maxV - minV) / step) < intervals) {
+                        if (dmax < 0) {
+                            minV = maxV - intervals * step;
+                        } else {
+                            maxV = minV + intervals * step;
                         }
-                        minV = maxV - intervals * step;
-                        if (minV > dmin + 1e-12) {
-                            step = historyNextNiceStep(step);
-                            continue;
-                        }
-                    } else if (dmin > 0 && minV < 0) {
-                        minV = Math.floor(dmin / step) * step;
-                        if (minV < 0) {
-                            minV = 0;
-                        }
-                        maxV = minV + intervals * step;
-                        if (maxV < dmax - 1e-12) {
+                        if (minV > dmin + 1e-12 || maxV < dmax - 1e-12) {
                             step = historyNextNiceStep(step);
                             continue;
                         }
                     }
+
+                    // Center leftover padding top/bottom without uncovering data.
                     var spareLow = dmin - minV;
                     var spareHigh = maxV - dmax;
-                    if (spareHigh - spareLow > step) {
-                        var shift = Math.floor((spareHigh - spareLow) / (2 * step)) * step;
-                        if (shift > 0) {
-                            var shiftedMin = minV + shift;
-                            var shiftedMax = maxV + shift;
-                            if (shiftedMin <= dmin + 1e-12 && shiftedMax >= dmax - 1e-12
-                                && !(dmin >= 0 && shiftedMin < 0)
-                                && !(dmax <= 0 && shiftedMax > 0)) {
-                                minV = shiftedMin;
-                                maxV = shiftedMax;
-                            }
+                    var shift = Math.round((spareLow - spareHigh) / (2 * step)) * step;
+                    if (shift !== 0) {
+                        var shiftedMin = minV + shift;
+                        var shiftedMax = maxV + shift;
+                        if (shiftedMin <= dmin + 1e-12 && shiftedMax >= dmax - 1e-12
+                            && !(dmin >= 0 && shiftedMin < 0)
+                            && !(dmax < 0 && shiftedMax > 0)) {
+                            minV = shiftedMin;
+                            maxV = shiftedMax;
                         }
                     }
                     break;
@@ -1800,9 +1825,11 @@
                 return response.json();
             }).then(function (payload) {
                 historyChartState.payload = payload || { valueType: "float", points: [] };
+                historySyncSmoothControls();
                 drawHistoryChart(canvas, historyChartState.payload, startUnix, endUnix);
             }).catch(function () {
                 historyChartState.payload = { valueType: "float", points: [] };
+                historySyncSmoothControls();
                 drawHistoryChart(canvas, historyChartState.payload, startUnix, endUnix);
             });
         }
@@ -1814,10 +1841,11 @@
                 return;
             }
             historyChartState.query = query;
+            historyChartState.payload = null;
             historyChartState.hours = 24;
             historyChartState.rangeEndUnix = Math.floor(Date.now() / 1000);
             if (historyChartState.smoothWindow < 1) {
-                historyChartState.smoothWindow = 5;
+                historyChartState.smoothWindow = 7;
             }
             historySyncSmoothControls();
             if (title) {
@@ -1862,7 +1890,7 @@
             var input = document.getElementById("historyChartSmoothWindow");
             var value = input ? Number(input.value) : historyChartState.smoothWindow;
             if (!isFinite(value) || value < 1) {
-                value = 5;
+                value = 7;
             }
             value = Math.floor(value);
             if (value < 1) {
@@ -1878,19 +1906,42 @@
             return value;
         }
 
+        function historyChartIsDiscretePayload(payload) {
+            var valueType = payload && payload.valueType ? String(payload.valueType) : "float";
+            return valueType === "bool" || valueType === "string";
+        }
+
+        function historyChartAllowsSmooth() {
+            if (!historyChartState.payload) {
+                return false;
+            }
+            return !historyChartIsDiscretePayload(historyChartState.payload);
+        }
+
         function historySyncSmoothControls() {
+            var wrap = document.getElementById("historyChartSmoothControls");
             var flag = document.getElementById("historyChartSmooth");
             var input = document.getElementById("historyChartSmoothWindow");
+            var allowSmooth = historyChartAllowsSmooth();
+            if (wrap) {
+                wrap.hidden = !allowSmooth;
+            }
+            if (!allowSmooth) {
+                return;
+            }
             if (flag) {
                 flag.checked = !!historyChartState.smooth;
             }
             if (input) {
-                input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 5);
+                input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 7);
                 input.disabled = !historyChartState.smooth;
             }
         }
 
         function onHistoryChartSmoothChange() {
+            if (!historyChartAllowsSmooth()) {
+                return;
+            }
             var flag = document.getElementById("historyChartSmooth");
             historyChartState.smooth = !!(flag && flag.checked);
             historySmoothWindowSize();
@@ -1899,7 +1950,7 @@
         }
 
         function onHistoryChartSmoothWindowInput() {
-            if (!historyChartState.smooth) {
+            if (!historyChartAllowsSmooth() || !historyChartState.smooth) {
                 return;
             }
             var input = document.getElementById("historyChartSmoothWindow");
@@ -2134,7 +2185,7 @@
             }).filter(function (point) {
                 return isFinite(point.value);
             });
-            if (historyChartState.smooth) {
+            if (historyChartState.smooth && historyChartAllowsSmooth()) {
                 series = historySmoothSeries(series, historySmoothWindowSize());
             }
             if (!series.length) {
@@ -19438,13 +19489,26 @@
         <div class="dialog-panel" role="dialog" aria-label="History">
             <h2 id="historyChartTitle">History</h2>
             <div class="history-chart-toolbar">
-                <div class="history-chart-presets" role="group" aria-label="Time range">
-                    <button type="button" class="btn btn-secondary" data-history-hours="1" onclick="setHistoryChartPreset(1)">1h</button>
-                    <button type="button" class="btn btn-secondary" data-history-hours="6" onclick="setHistoryChartPreset(6)">6h</button>
-                    <button type="button" class="btn btn-secondary" data-history-hours="12" onclick="setHistoryChartPreset(12)">12h</button>
-                    <button type="button" class="btn btn-secondary is-active" data-history-hours="24" onclick="setHistoryChartPreset(24)">24h</button>
-                    <button type="button" class="btn btn-secondary" data-history-hours="48" onclick="setHistoryChartPreset(48)">2d</button>
-                    <button type="button" class="btn btn-secondary" data-history-hours="168" onclick="setHistoryChartPreset(168)">7d</button>
+                <div class="history-chart-toolbar-top">
+                    <div class="history-chart-presets" role="group" aria-label="Time range">
+                        <button type="button" class="btn btn-secondary" data-history-hours="1" onclick="setHistoryChartPreset(1)">1h</button>
+                        <button type="button" class="btn btn-secondary" data-history-hours="2" onclick="setHistoryChartPreset(2)">2h</button>
+                        <button type="button" class="btn btn-secondary" data-history-hours="4" onclick="setHistoryChartPreset(4)">4h</button>
+                        <button type="button" class="btn btn-secondary" data-history-hours="6" onclick="setHistoryChartPreset(6)">6h</button>
+                        <button type="button" class="btn btn-secondary" data-history-hours="12" onclick="setHistoryChartPreset(12)">12h</button>
+                        <button type="button" class="btn btn-secondary is-active" data-history-hours="24" onclick="setHistoryChartPreset(24)">24h</button>
+                        <button type="button" class="btn btn-secondary" data-history-hours="48" onclick="setHistoryChartPreset(48)">2d</button>
+                        <button type="button" class="btn btn-secondary" data-history-hours="168" onclick="setHistoryChartPreset(168)">7d</button>
+                    </div>
+                    <div id="historyChartSmoothControls" class="history-chart-smooth">
+                        <div class="field-check">
+                            <input id="historyChartSmooth" type="checkbox" checked onchange="onHistoryChartSmoothChange()">
+                            <span>Smooth</span>
+                        </div>
+                        <label for="historyChartSmoothWindow">samples</label>
+                        <input id="historyChartSmoothWindow" type="number" min="1" max="128" step="1" value="7"
+                               onchange="onHistoryChartSmoothChange()" oninput="onHistoryChartSmoothWindowInput()">
+                    </div>
                 </div>
                 <div class="history-chart-range">
                     <button type="button" class="btn btn-secondary" onclick="shiftHistoryChartRange(-1)" title="Previous period">◀</button>
@@ -19452,15 +19516,6 @@
                     <span aria-hidden="true">–</span>
                     <input id="historyChartEnd" type="datetime-local" aria-label="Range end" onchange="applyHistoryChartDatetimeRange()">
                     <button type="button" class="btn btn-secondary" onclick="shiftHistoryChartRange(1)" title="Next period">▶</button>
-                </div>
-                <div class="history-chart-smooth">
-                    <div class="field-check">
-                        <input id="historyChartSmooth" type="checkbox" onchange="onHistoryChartSmoothChange()">
-                        <span>Smooth</span>
-                    </div>
-                    <label for="historyChartSmoothWindow">samples</label>
-                    <input id="historyChartSmoothWindow" type="number" min="1" max="128" step="1" value="5" disabled
-                           onchange="onHistoryChartSmoothChange()" oninput="onHistoryChartSmoothWindowInput()">
                 </div>
             </div>
             <div id="historyChartCanvasWrap" class="history-chart-canvas-wrap">

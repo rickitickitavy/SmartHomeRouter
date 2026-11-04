@@ -1363,10 +1363,18 @@ html, body {
 
 .history-chart-toolbar {
     display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+    margin: 0 0 0.75rem;
+}
+
+.history-chart-toolbar-top {
+    display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 0.5rem;
-    margin: 0 0 0.75rem;
+    width: 100%;
 }
 
 .history-chart-presets {
@@ -1392,7 +1400,7 @@ html, body {
     flex-wrap: wrap;
     align-items: center;
     gap: 0.4rem;
-    margin-left: auto;
+    margin-left: 0;
 }
 
 .history-chart-range input[type="datetime-local"] {
@@ -1411,6 +1419,7 @@ html, body {
     flex-wrap: wrap;
     align-items: center;
     gap: 0.45rem;
+    margin-left: 2.75rem; /* ~one preset button width */
 }
 
 .history-chart-smooth .field-check {
