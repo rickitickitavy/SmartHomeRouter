@@ -1,5 +1,59 @@
 1) hardware brownout
---- 8) historical chart
 5) new action: HTTP request
+
 decrease requirement of minimal width of widget
 
+## Goal
+I want to add historical data. The goal is user has ability to view history of some device data or states in the past. For sensors, it must be a chart, for binary actuator - colored line with states.
+
+## Data storages
+Historical data must be stored in PSRAM. How I see this:
+1) each  Reported data by device in list must have additional attribute "historical" (column name let be as "Hist". default false ). This attribute means that changes of this attribute will be stored
+2) each device must have new attribute "historical" which means that main state of device will be stored historically (for window control and so on actuators with position - stored value is POSITION only. default is FALSE)
+3) historical data stored on PSRAM in pages. each page has 4096 bytes.  The goal is to  prevent fragmentation of PSRAM.
+4) use for store datetime u_long and store seconds from 1-1-2010 00:00:00. almost like Unix but from 2010 year
+5) each attribute has Entry page in RAM that store information about all pages with historical data. Entry page size is 1024 bytes. Fields of such page are:
+            a) startDate - start date of history,
+            b) lastDate - last date of history,
+            c) firstPageIndex (2 bytes) - index of first pageRecord in pages record. alias is "Head".
+            d) lastPageIndex (2 bytes) - index of last pageRecord in pages record. alias is "tail".
+
+    Then going records of pages. Array. field of each element are:
+            a) startDate - the REAL datetime of first record,
+            b) lastDate - the REAL date of the last record,
+            c) pageAddress - address of page with historical data in PSRAM
+
+6) each page with historical data has header with fields:
+            c) recordsCount (2 byte unsigned) - Number of records in page. use this field to calculate first free address in page to store the next value.
+            d) blockLength (1 byte) - length of data portion, stored in page. Without datetime marker (see bellow). Length of string if page stored string values. All string must has the same length. If stored string shorter than needed then add to the end \\0x00 to max length, if longer - then cut to maxLen
+            e) reserved - 1byte.
+7) records in page must be like
+            a) datetime (4 bytes) - datetime of event
+            b) value. float, int, word, string, boolean and so on. All fixed length as specified in dataLength (see above)
+
+8) when new data for device received and this is historical data check if it differs from previous stored. if so then add new record to history.
+9) At boot allocate for each historical data it's entry and first historical data page in PSRAM;
+
+10) add to Status card new widget "Historical storage". Place to it "entries count", "pages count", PSRAM usage (in kB. 1024 bytes) and "values stored" (all stored values counter over all pages.
+
+
+## Purging old data
+periodically it is necessary to remove old pages of all historical attributes.
+1) Add to Hardware card new parameter "Max History store days" (1 - 20, default 7) and parameter "History sweep interval (minutes)" (1 - 120 default 10).
+2) page must be purged if it's LASTDATE is outdated
+3) start checking from the oldest page (from tale).
+4) to purge page fix startDate in Entry, fix tailIndex in Entry, free memory in PSRAM.
+
+
+## Allocating new historical data page in PSRAM
+as you can see maximum count of historical pages for attribute is (EntrySize - EntryHeaderSize)/PageRecord = (1024 - 12)/12 = 84 pages (for 1024 bytes Entry).
+before allocating new page purge old pages for attribute af any. Then obviously check for available free space in PSRAM, for available pages number for entry. If not enough then purge the oldest pages to free memory.
+then allocate page in PSRAM, add new value to allocated page, add new pageRecord to Entry (use "head" attribute , update StartDate and head in entry
+
+## Displaying
+if user click in UI name of device or gauge UI must show historical chart. The best way to understand how - look at homeassistant history chart. I want the same.
+
+## Version
+set version to 4.0.01
+
+think it. analyze. try to find issues. Try to propose better way for some mechanisms or decisions

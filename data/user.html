@@ -7,6 +7,104 @@
     <link rel="stylesheet" type="text/css" href="css/all.css"/>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css"/>
     <script>
+
+
+        function historyQueryForBinding(device, binding) {
+            if (!device || !device.ieee || !binding) return null;
+            var query = { ieee: device.ieee, title: binding.title || device.name || "History" };
+            var param = binding.param || "";
+            var reportable = typeof parseReportableParamId === "function" ? parseReportableParamId(param) : null;
+            if (reportable) {
+                query.kind = "reportable";
+                query.cluster = reportable.cluster;
+                query.attribute = reportable.attribute;
+                return query;
+            }
+            var userDataFields = Array.isArray(device.userDataFields) ? device.userDataFields : [];
+            var fieldIndex;
+            for (fieldIndex = 0; fieldIndex < userDataFields.length; fieldIndex++) {
+                var field = userDataFields[fieldIndex] || {};
+                if (String(field.name || "") === param) {
+                    query.kind = "reportable";
+                    query.cluster = 0xFC00;
+                    query.attribute = 0x0100 + fieldIndex;
+                    return query;
+                }
+            }
+            query.kind = "main";
+            query.channel = binding.channel || 1;
+            return query;
+        }
+        function attachHistoryOpen(element, device, binding) {
+            if (!element || !device || !binding) return;
+            element.style.cursor = "pointer";
+            element.title = "Open history";
+            element.onclick = function (event) {
+                if (event) event.stopPropagation();
+                var query = historyQueryForBinding(device, binding);
+                if (query) openHistoryChart(query);
+            };
+        }
+
+        function openHistoryChart(query) {
+            var overlay = document.getElementById("historyChartOverlay");
+            var canvas = document.getElementById("historyChartCanvas");
+            var title = document.getElementById("historyChartTitle");
+            if (!overlay || !canvas) { return; }
+            if (title) { title.textContent = query.title || "History"; }
+            overlay.hidden = false;
+            var params = new URLSearchParams();
+            params.set("ieee", query.ieee || "");
+            params.set("kind", query.kind || "main");
+            if (query.channel != null) params.set("channel", String(query.channel));
+            if (query.cluster != null) params.set("cluster", String(query.cluster));
+            if (query.attribute != null) params.set("attribute", String(query.attribute));
+            params.set("maxPoints", "64");
+            fetch("/api/history?" + params.toString(), { cache: "no-store" })
+                .then(function (r) {
+                    if (!r.ok) {
+                        throw new Error("history " + r.status);
+                    }
+                    return r.json();
+                })
+                .then(function (payload) { drawHistoryChart(canvas, payload); })
+                .catch(function () { drawHistoryChart(canvas, { valueType: "float", points: [] }); });
+        }
+        function closeHistoryChart() {
+            var overlay = document.getElementById("historyChartOverlay");
+            if (overlay) overlay.hidden = true;
+        }
+        function drawHistoryChart(canvas, payload) {
+            if (!canvas || !canvas.getContext) return;
+            var ctx = canvas.getContext("2d");
+            var width = canvas.width, height = canvas.height;
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = "#111"; ctx.fillRect(0, 0, width, height);
+            var points = payload && Array.isArray(payload.points) ? payload.points : [];
+            if (!points.length) { ctx.fillStyle = "#aaa"; ctx.fillText("No history samples", 16, 24); return; }
+            var valueType = payload.valueType || "float";
+            if (valueType === "bool" || valueType === "string") {
+                for (var i = 0; i < points.length; i++) {
+                    var on = points[i].v === true || points[i].v === "ON" || points[i].v === "on" || points[i].v === 1;
+                    ctx.fillStyle = on ? "#3ddc97" : "#c44";
+                    var x0 = Math.floor(i * width / points.length);
+                    var x1 = Math.floor((i + 1) * width / points.length);
+                    ctx.fillRect(x0, 10, Math.max(1, x1 - x0), height - 20);
+                }
+                return;
+            }
+            var minV = Number(points[0].v), maxV = minV;
+            points.forEach(function (p) { var v = Number(p.v); if (v < minV) minV = v; if (v > maxV) maxV = v; });
+            if (minV === maxV) { minV -= 1; maxV += 1; }
+            ctx.strokeStyle = "#8af"; ctx.lineWidth = 2; ctx.beginPath();
+            points.forEach(function (p, i) {
+                var x = i * (width - 20) / Math.max(1, points.length - 1) + 10;
+                var y = height - 10 - ((Number(p.v) - minV) / (maxV - minV)) * (height - 20);
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+        }
+
         var signedInUser = null;
         var sessionWatchTimer = null;
         var firmwareRebootWaitActive = false;
@@ -663,6 +761,22 @@
                 "statusActionQueue",
                 payload && payload.actionQueue != null ? String(payload.actionQueue) : "—"
             );
+            setStatusText(
+                "statusHistoryEntries",
+                payload && payload.historyEntries != null ? String(payload.historyEntries) : "—"
+            );
+            setStatusText(
+                "statusHistoryPages",
+                payload && payload.historyPages != null ? String(payload.historyPages) : "—"
+            );
+            setStatusText(
+                "statusHistoryPsram",
+                payload && payload.historyPsramKiB != null ? String(payload.historyPsramKiB) + " kB" : "—"
+            );
+            setStatusText(
+                "statusHistoryValues",
+                payload && payload.historyValuesStored != null ? String(payload.historyValuesStored) : "—"
+            );
             if (payload && payload.wifiRssiDbm != null) {
                 setStatusText("statusWifiSignal", String(payload.wifiRssiDbm) + " dBm");
             } else {
@@ -748,6 +862,12 @@
                 ["Free RAM", "statusHeapUsage"],
                 ["Free PSRAM", "statusPsramUsage"],
                 ["Action queue", "statusActionQueue"]
+            ]);
+            appendStatusGroup(stack, "Historical storage", [
+                ["Entries", "statusHistoryEntries"],
+                ["Pages", "statusHistoryPages"],
+                ["PSRAM usage", "statusHistoryPsram"],
+                ["Values stored", "statusHistoryValues"]
             ]);
             appendStatusGroup(stack, "Devices", [
                 ["Zigbee devices", "statusZigbeeDevices"],
@@ -3561,11 +3681,13 @@
                     gaugeNumeric = parseBindingNumericValue(rawState);
                     gaugeDisplay = rawState || "";
                 }
-                controls.appendChild(buildConsoleGaugeElement(
+                var gaugeEl = buildConsoleGaugeElement(
                     binding,
                     gaugeNumeric,
                     gaugeDisplay
-                ));
+                );
+                attachHistoryOpen(gaugeEl, device, binding);
+                controls.appendChild(gaugeEl);
             } else if (parseReportableParamId(param)) {
                 var reportableValueLabel = document.createElement("span");
                 reportableValueLabel.className = "console-sensor-value";
@@ -3958,5 +4080,15 @@
         </div>
     </div>
 </div>
+
+    <div id="historyChartOverlay" class="dialog-overlay dialog-overlay-front" hidden>
+        <div class="dialog-panel" role="dialog" aria-label="History" style="width:min(45rem,100%);">
+            <h2 id="historyChartTitle">History</h2>
+            <canvas id="historyChartCanvas" width="680" height="280" style="width:100%;background:#111;border-radius:8px;"></canvas>
+            <div class="dialog-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeHistoryChart()">Close</button>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

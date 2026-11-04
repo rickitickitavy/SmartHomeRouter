@@ -32,8 +32,13 @@ struct DeviceTopicEntry {
     uint8_t manufacturer;
     uint8_t transport;
     uint8_t used;
+    float historyEpsilon;
     DeviceTopicEntry *next;
 };
+
+inline bool deviceHistoryEnabled(const DeviceTopicEntry *entry) {
+    return entry != nullptr && entry->used && entry->historyEpsilon >= 0.0f;
+}
 
 inline bool devicePublishesToMqtt(const DeviceTopicEntry *entry) {
     if (entry == nullptr || !entry->used) {

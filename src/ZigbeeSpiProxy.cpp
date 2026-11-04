@@ -214,6 +214,11 @@ void ZigbeeSpiProxy::noteReportableValue(
     if (slot == nullptr || valueText == nullptr || !DeviceTopicMap::isUsableEndpoint(endpoint)) {
         return;
     }
+#if defined(BOARD_ROLE_HOST)
+    if (historyStore != nullptr && registryMap != nullptr) {
+        historyNoteReportableValue(historyStore, registryMap, slot->ieee, cluster, attribute, valueText);
+    }
+#endif
     if (slot->reportableValues != nullptr) {
         for (uint8_t index = 0; index < slot->reportableValueCount; index++) {
             ReportableValueSlot &existing = slot->reportableValues[index];
@@ -412,6 +417,11 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
     if (haveUserDataBrace) {
         userDataBraceList = userDataClampBraceListValues(userDataBraceList);
         message = userDataBraceList.c_str();
+#if defined(BOARD_ROLE_HOST)
+        if (historyStore != nullptr && registryMap != nullptr) {
+            historyNoteUserDataBraceList(historyStore, registryMap, slot->ieee, message);
+        }
+#endif
     }
     if (!DeviceTopicMap::isUsableEndpoint(endpoint)) {
         return;
@@ -472,6 +482,11 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
     if (!setEndpointState(statusSlot, message)) {
         return;
     }
+#if defined(BOARD_ROLE_HOST)
+    if (valueChanged && historyStore != nullptr && registryMap != nullptr) {
+        historyNoteMainStateValue(historyStore, registryMap, slot->ieee, endpoint, message);
+    }
+#endif
     const bool isMove = strcmp(message, "UP") == 0
         || strcmp(message, "DOWN") == 0
         || strcmp(message, "STOPPED") == 0;
@@ -883,6 +898,12 @@ void ZigbeeSpiProxy::setDeviceLiveChangedHandler(DeviceLiveChangedFn handler) {
 void ZigbeeSpiProxy::setStatusValueChangedHandler(StatusValueChangedFn handler) {
     statusValueChanged = handler;
 }
+
+#if defined(BOARD_ROLE_HOST)
+void ZigbeeSpiProxy::setHistoryStore(HistoryStore *store) {
+    historyStore = store;
+}
+#endif
 
 bool ZigbeeSpiProxy::copyEndpointState(
     const uint8_t ieee[8],

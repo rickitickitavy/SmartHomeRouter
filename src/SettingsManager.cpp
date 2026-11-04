@@ -119,6 +119,10 @@ void SettingsManager::applyDefaults() {
     setSpiSpeedHz(DEFAULT_SPI_SPEED_HZ);
     setRfUpdateSpiSpeedHz(DEFAULT_RF_UPDATE_SPI_SPEED_HZ);
     setLedBrightness(DEFAULT_LED_BRIGHTNESS_PERCENT, DEFAULT_LED_BRIGHTNESS_PERCENT);
+    setHistoryMaxStoreDays(DEFAULT_HISTORY_MAX_STORE_DAYS);
+    setHistorySweepIntervalMin(DEFAULT_HISTORY_SWEEP_INTERVAL_MIN);
+    setHistoryMaxSizeKiB(DEFAULT_HISTORY_MAX_SIZE_KIB);
+    setHistoryEntrySize(DEFAULT_HISTORY_ENTRY_SIZE);
 }
 
 void SettingsManager::applyEmailDefaults() {
@@ -441,6 +445,89 @@ bool SettingsManager::useQueueForBaseDeviceCommand() const {
 
 void SettingsManager::setUseQueueForBaseDeviceCommand(bool enabled) {
     settings.reserved[USE_QUEUE_FOR_BASE_DEVICE_COMMAND_RESERVED_OFFSET] = enabled ? 1 : 0;
+}
+
+uint8_t SettingsManager::clampHistoryMaxStoreDays(uint8_t days) {
+    if (days < HISTORY_MAX_STORE_DAYS_MIN) {
+        return HISTORY_MAX_STORE_DAYS_MIN;
+    }
+    if (days > HISTORY_MAX_STORE_DAYS_MAX) {
+        return HISTORY_MAX_STORE_DAYS_MAX;
+    }
+    return days;
+}
+
+uint8_t SettingsManager::clampHistorySweepIntervalMin(uint8_t minutes) {
+    if (minutes < HISTORY_SWEEP_INTERVAL_MIN_MIN) {
+        return HISTORY_SWEEP_INTERVAL_MIN_MIN;
+    }
+    if (minutes > HISTORY_SWEEP_INTERVAL_MIN_MAX) {
+        return HISTORY_SWEEP_INTERVAL_MIN_MAX;
+    }
+    return minutes;
+}
+
+bool SettingsManager::isValidHistoryEntrySize(uint16_t entrySize) {
+    return entrySize == 256 || entrySize == 512 || entrySize == 1024 || entrySize == 2048
+        || entrySize == 4096;
+}
+
+uint8_t SettingsManager::historyMaxStoreDays() const {
+    const uint8_t stored = settings.reserved[HISTORY_MAX_STORE_DAYS_RESERVED_OFFSET];
+    if (stored == 0) {
+        return DEFAULT_HISTORY_MAX_STORE_DAYS;
+    }
+    return clampHistoryMaxStoreDays(stored);
+}
+
+void SettingsManager::setHistoryMaxStoreDays(uint8_t days) {
+    settings.reserved[HISTORY_MAX_STORE_DAYS_RESERVED_OFFSET] = clampHistoryMaxStoreDays(days);
+}
+
+uint8_t SettingsManager::historySweepIntervalMin() const {
+    const uint8_t stored = settings.reserved[HISTORY_SWEEP_INTERVAL_MIN_RESERVED_OFFSET];
+    if (stored == 0) {
+        return DEFAULT_HISTORY_SWEEP_INTERVAL_MIN;
+    }
+    return clampHistorySweepIntervalMin(stored);
+}
+
+void SettingsManager::setHistorySweepIntervalMin(uint8_t minutes) {
+    settings.reserved[HISTORY_SWEEP_INTERVAL_MIN_RESERVED_OFFSET] =
+        clampHistorySweepIntervalMin(minutes);
+}
+
+uint16_t SettingsManager::historyMaxSizeKiB() const {
+    uint16_t sizeKiB = 0;
+    memcpy(&sizeKiB, settings.reserved + HISTORY_MAX_SIZE_KIB_RESERVED_OFFSET, sizeof(sizeKiB));
+    // 0 and erased-EEPROM 0xFFFF both mean unset.
+    if (sizeKiB == 0 || sizeKiB == 0xFFFF) {
+        return DEFAULT_HISTORY_MAX_SIZE_KIB;
+    }
+    return sizeKiB;
+}
+
+void SettingsManager::setHistoryMaxSizeKiB(uint16_t sizeKiB) {
+    if (sizeKiB == 0) {
+        sizeKiB = DEFAULT_HISTORY_MAX_SIZE_KIB;
+    }
+    memcpy(settings.reserved + HISTORY_MAX_SIZE_KIB_RESERVED_OFFSET, &sizeKiB, sizeof(sizeKiB));
+}
+
+uint16_t SettingsManager::historyEntrySize() const {
+    uint16_t entrySize = 0;
+    memcpy(&entrySize, settings.reserved + HISTORY_ENTRY_SIZE_RESERVED_OFFSET, sizeof(entrySize));
+    if (!isValidHistoryEntrySize(entrySize)) {
+        return DEFAULT_HISTORY_ENTRY_SIZE;
+    }
+    return entrySize;
+}
+
+void SettingsManager::setHistoryEntrySize(uint16_t entrySize) {
+    if (!isValidHistoryEntrySize(entrySize)) {
+        entrySize = DEFAULT_HISTORY_ENTRY_SIZE;
+    }
+    memcpy(settings.reserved + HISTORY_ENTRY_SIZE_RESERVED_OFFSET, &entrySize, sizeof(entrySize));
 }
 
 uint8_t SettingsManager::blueLedBrightness() const {

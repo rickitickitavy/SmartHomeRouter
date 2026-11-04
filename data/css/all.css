@@ -922,19 +922,23 @@ html, body {
 }
 
 #deviceReportableDataTable .reportable-col-cluster {
-    width: 42%;
+    width: 36%;
 }
 
 #deviceReportableDataTable .reportable-col-attribute {
-    width: 32%;
+    width: 28%;
 }
 
 #deviceReportableDataTable .reportable-col-type {
-    width: 14%;
+    width: 9%;
+}
+
+#deviceReportableDataTable .reportable-col-hist {
+    width: 4.75rem;
 }
 
 #deviceReportableDataTable .reportable-col-actions {
-    width: 12%;
+    width: 7.25rem;
 }
 
 #deviceReportableDataTable td {
@@ -1346,9 +1350,101 @@ html, body {
 }
 
 #parameterDialog .dialog-panel {
-    width: min(40rem, 100%);
+    width: min(60rem, 100%);
     max-height: 90vh;
     overflow: hidden;
+}
+
+#parameterDialog .device-history-row {
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem 1rem;
+}
+
+#parameterDialog .device-history-row .field-check {
+    flex: 0 0 auto;
+    min-height: 44px;
+}
+
+#parameterDialog .device-history-row .field-check > span {
+    flex: 0 0 auto;
+}
+
+#parameterDialog .device-history-row > label {
+    margin: 0;
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+#parameterDialog .device-history-row > input[type="number"] {
+    width: 7.5rem;
+    flex: 0 0 7.5rem;
+    min-width: 0;
+    appearance: textfield;
+    -moz-appearance: textfield;
+}
+
+#parameterDialog .device-history-row > input[type="number"]::-webkit-outer-spin-button,
+#parameterDialog .device-history-row > input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+#parameterDialog .user-data-field-actions .console-widget-delete-btn {
+    margin-right: 0;
+}
+
+#parameterDialog .reportable-col-hist,
+#parameterDialog .user-data-col-hist {
+    width: 4.75rem;
+    min-width: 4.75rem;
+    max-width: 4.75rem;
+    white-space: nowrap;
+    padding-left: 0.35rem;
+    padding-right: 0.25rem;
+}
+
+#parameterDialog .data-table th.reportable-col-hist,
+#parameterDialog .data-table th.user-data-col-hist,
+#parameterDialog #deviceReportableDataTable th:nth-child(4),
+#parameterDialog #deviceUserDataFieldsTable th:nth-child(4) {
+    white-space: nowrap;
+}
+
+#parameterDialog .hist-delta-cell {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.3rem;
+    white-space: nowrap;
+    width: max-content;
+}
+
+#parameterDialog .hist-delta-cell input[type="checkbox"] {
+    width: 1.35rem;
+    height: 1.35rem;
+    margin: 0;
+    flex-shrink: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+#parameterDialog .hist-delta-cell input[type="number"] {
+    width: 2.75rem;
+    min-width: 2.75rem;
+    flex: 0 0 2.75rem;
+    min-height: 2rem;
+    padding: 0.2rem 0.35rem;
+    box-sizing: border-box;
+    appearance: textfield;
+    -moz-appearance: textfield;
+}
+
+#parameterDialog .hist-delta-cell input[type="number"]::-webkit-outer-spin-button,
+#parameterDialog .hist-delta-cell input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
 }
 
 #parameterDialog .tab-content {

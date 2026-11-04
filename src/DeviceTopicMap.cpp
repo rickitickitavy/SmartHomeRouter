@@ -132,6 +132,7 @@ bool DeviceTopicMap::cloneEntry(DeviceTopicEntry *destination, const DeviceTopic
     destination->zigbeeType = source->zigbeeType;
     destination->manufacturer = source->manufacturer;
     destination->transport = source->transport;
+    destination->historyEpsilon = source->historyEpsilon;
     if (!userDataCopyFieldDefs(
             &destination->userDataFields,
             &destination->userDataFieldCount,
@@ -192,6 +193,7 @@ DeviceTopicEntry *DeviceTopicMap::allocateEntry() {
     if (entry == nullptr) {
         return nullptr;
     }
+    entry->historyEpsilon = -1.0f;
     entry->next = head;
     head = entry;
     return entry;
@@ -1455,6 +1457,11 @@ void DeviceTopicMap::replaceFromJson(const char *json) {
                         reportableSlice.c_str()
                     );
                 }
+                entry->historyEpsilon = -1.0f;
+                double historyEpsilonValue = 0.0;
+                if (extractJsonDouble(object.c_str(), "historyEpsilon", historyEpsilonValue)) {
+                    entry->historyEpsilon = (float)historyEpsilonValue;
+                }
             }
         }
         cursor = objectEnd + 1;
@@ -1731,6 +1738,12 @@ static void appendDeviceListEntryJson(
     json += deviceCustomCommandsToJson(deviceEntry->customCommands, deviceEntry->customCommandCount);
     json += ",\"reportableData\":";
     json += reportableDataToJson(deviceEntry->reportableData, deviceEntry->reportableDataCount);
+    json += ",\"historyEpsilon\":";
+    {
+        char historyEpsilonText[32];
+        snprintf(historyEpsilonText, sizeof(historyEpsilonText), "%.6g", (double)deviceEntry->historyEpsilon);
+        json += historyEpsilonText;
+    }
     if (isOnline != nullptr) {
         json += ",\"online\":";
         json += isOnline(deviceEntry->ieee) ? "true" : "false";

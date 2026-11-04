@@ -322,6 +322,22 @@
                 "statusActionQueue",
                 payload && payload.actionQueue != null ? String(payload.actionQueue) : "—"
             );
+            setStatusText(
+                "statusHistoryEntries",
+                payload && payload.historyEntries != null ? String(payload.historyEntries) : "—"
+            );
+            setStatusText(
+                "statusHistoryPages",
+                payload && payload.historyPages != null ? String(payload.historyPages) : "—"
+            );
+            setStatusText(
+                "statusHistoryPsram",
+                payload && payload.historyPsramKiB != null ? String(payload.historyPsramKiB) + " kB" : "—"
+            );
+            setStatusText(
+                "statusHistoryValues",
+                payload && payload.historyValuesStored != null ? String(payload.historyValuesStored) : "—"
+            );
             if (payload && payload.wifiRssiDbm != null) {
                 setStatusText("statusWifiSignal", String(payload.wifiRssiDbm) + " dBm");
             } else {
@@ -1262,6 +1278,194 @@
             });
         }
 
+
+        function onDeviceHistoryFlagChanged() {
+            var flag = document.getElementById("deviceHistoryEnabled");
+            var epsilonInput = document.getElementById("deviceHistoryEpsilon");
+            if (!flag || !epsilonInput) {
+                return;
+            }
+            epsilonInput.disabled = !flag.checked;
+            if (!flag.checked) {
+                epsilonInput.value = "";
+            } else if (epsilonInput.value === "" || Number(epsilonInput.value) < 0) {
+                epsilonInput.value = "0";
+            }
+        }
+
+        function applyDeviceHistoryEpsilonToForm(epsilon) {
+            var flag = document.getElementById("deviceHistoryEnabled");
+            var epsilonInput = document.getElementById("deviceHistoryEpsilon");
+            if (!flag || !epsilonInput) {
+                return;
+            }
+            var value = epsilon != null ? Number(epsilon) : -1;
+            if (isNaN(value) || value < 0) {
+                flag.checked = false;
+                epsilonInput.value = "";
+                epsilonInput.disabled = true;
+            } else {
+                flag.checked = true;
+                epsilonInput.disabled = false;
+                epsilonInput.value = String(value);
+            }
+        }
+
+        function readDeviceHistoryEpsilonFromForm() {
+            var flag = document.getElementById("deviceHistoryEnabled");
+            var epsilonInput = document.getElementById("deviceHistoryEpsilon");
+            if (!flag || !flag.checked) {
+                return -1;
+            }
+            var value = epsilonInput ? Number(epsilonInput.value) : 0;
+            if (isNaN(value) || value < 0) {
+                return 0;
+            }
+            return value;
+        }
+
+
+        function historyQueryForBinding(device, binding) {
+            if (!device || !device.ieee || !binding) {
+                return null;
+            }
+            var query = { ieee: device.ieee, title: binding.title || device.name || "History" };
+            var param = binding.param || "";
+            var reportable = parseReportableParamId(param);
+            if (reportable) {
+                query.kind = "reportable";
+                query.cluster = reportable.cluster;
+                query.attribute = reportable.attribute;
+                return query;
+            }
+            var userDataFields = Array.isArray(device.userDataFields) ? device.userDataFields : [];
+            var fieldIndex;
+            for (fieldIndex = 0; fieldIndex < userDataFields.length; fieldIndex++) {
+                var field = userDataFields[fieldIndex] || {};
+                if (String(field.name || "") === param) {
+                    query.kind = "reportable";
+                    query.cluster = 0xFC00;
+                    query.attribute = 0x0100 + fieldIndex;
+                    return query;
+                }
+            }
+            query.kind = "main";
+            query.channel = binding.channel || 1;
+            return query;
+        }
+
+        function attachHistoryOpen(element, device, binding) {
+            if (!element || !device || !binding) {
+                return;
+            }
+            element.style.cursor = "pointer";
+            element.title = "Open history";
+            element.onclick = function (event) {
+                if (event) {
+                    event.stopPropagation();
+                }
+                var query = historyQueryForBinding(device, binding);
+                if (query) {
+                    openHistoryChart(query);
+                }
+            };
+        }
+
+        function openHistoryChart(query) {
+            var overlay = document.getElementById("historyChartOverlay");
+            var canvas = document.getElementById("historyChartCanvas");
+            var title = document.getElementById("historyChartTitle");
+            if (!overlay || !canvas) {
+                return;
+            }
+            if (title) {
+                title.textContent = query.title || "History";
+            }
+            overlay.hidden = false;
+            var params = new URLSearchParams();
+            params.set("ieee", query.ieee || "");
+            params.set("kind", query.kind || "main");
+            if (query.channel != null) {
+                params.set("channel", String(query.channel));
+            }
+            if (query.cluster != null) {
+                params.set("cluster", String(query.cluster));
+            }
+            if (query.attribute != null) {
+                params.set("attribute", String(query.attribute));
+            }
+            params.set("maxPoints", "64");
+            fetch("/api/history?" + params.toString(), { cache: "no-store" }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error("history " + response.status);
+                }
+                return response.json();
+            }).then(function (payload) {
+                drawHistoryChart(canvas, payload);
+            }).catch(function () {
+                drawHistoryChart(canvas, { valueType: "float", points: [] });
+            });
+        }
+
+        function closeHistoryChart() {
+            var overlay = document.getElementById("historyChartOverlay");
+            if (overlay) {
+                overlay.hidden = true;
+            }
+        }
+
+        function drawHistoryChart(canvas, payload) {
+            if (!canvas || !canvas.getContext) {
+                return;
+            }
+            var ctx = canvas.getContext("2d");
+            var width = canvas.width;
+            var height = canvas.height;
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = "#111";
+            ctx.fillRect(0, 0, width, height);
+            var points = payload && Array.isArray(payload.points) ? payload.points : [];
+            if (points.length === 0) {
+                ctx.fillStyle = "#aaa";
+                ctx.fillText("No history samples", 16, 24);
+                return;
+            }
+            var valueType = payload.valueType || "float";
+            if (valueType === "bool" || valueType === "string") {
+                var bandHeight = Math.max(8, Math.floor((height - 20) / Math.max(1, points.length)));
+                var index;
+                for (index = 0; index < points.length; index++) {
+                    var on = points[index].v === true || points[index].v === "ON" || points[index].v === "on" || points[index].v === 1;
+                    ctx.fillStyle = on ? "#3ddc97" : "#c44";
+                    var x0 = Math.floor(index * width / points.length);
+                    var x1 = Math.floor((index + 1) * width / points.length);
+                    ctx.fillRect(x0, 10, Math.max(1, x1 - x0), height - 20);
+                }
+                return;
+            }
+            var minV = Number(points[0].v);
+            var maxV = minV;
+            points.forEach(function (point) {
+                var value = Number(point.v);
+                if (value < minV) minV = value;
+                if (value > maxV) maxV = value;
+            });
+            if (minV === maxV) {
+                minV -= 1;
+                maxV += 1;
+            }
+            ctx.strokeStyle = "#8af";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            points.forEach(function (point, index) {
+                var x = index * (width - 20) / Math.max(1, points.length - 1) + 10;
+                var y = height - 10 - ((Number(point.v) - minV) / (maxV - minV)) * (height - 20);
+                if (index === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+        }
+
         function loadHardware() {
             var saveError = document.getElementById("hardwareSaveError");
             var saveSuccess = document.getElementById("hardwareSaveSuccess");
@@ -1299,6 +1503,22 @@
                 if (queueInput) {
                     queueInput.checked = !!hardwareSettings.useQueueForBaseDeviceCommand;
                 }
+                var daysInput = document.getElementById("historyMaxStoreDays");
+                var sweepInput = document.getElementById("historySweepIntervalMin");
+                var sizeInput = document.getElementById("historyMaxSizeKiB");
+                var entrySelect = document.getElementById("historyEntrySize");
+                if (daysInput) {
+                    daysInput.value = String(hardwareSettings.historyMaxStoreDays != null ? hardwareSettings.historyMaxStoreDays : 7);
+                }
+                if (sweepInput) {
+                    sweepInput.value = String(hardwareSettings.historySweepIntervalMin != null ? hardwareSettings.historySweepIntervalMin : 10);
+                }
+                if (sizeInput) {
+                    sizeInput.value = String(hardwareSettings.historyMaxSizeKiB != null ? hardwareSettings.historyMaxSizeKiB : 4096);
+                }
+                if (entrySelect) {
+                    entrySelect.value = String(hardwareSettings.historyEntrySize != null ? hardwareSettings.historyEntrySize : 1024);
+                }
             }).catch(function (error) {
                 if (speedSelect && !speedSelect.value) {
                     speedSelect.value = "500000";
@@ -1335,7 +1555,11 @@
                 rfUpdateSpiSpeedHz: parseInt(document.getElementById("rfUpdateSpiSpeedHz").value, 10),
                 blueLedBrightness: parseInt(document.getElementById("blueLedBrightness").value, 10),
                 greenLedBrightness: parseInt(document.getElementById("greenLedBrightness").value, 10),
-                useQueueForBaseDeviceCommand: !!(queueInput && queueInput.checked)
+                useQueueForBaseDeviceCommand: !!(queueInput && queueInput.checked),
+                historyMaxStoreDays: parseInt(document.getElementById("historyMaxStoreDays").value, 10),
+                historySweepIntervalMin: parseInt(document.getElementById("historySweepIntervalMin").value, 10),
+                historyMaxSizeKiB: parseInt(document.getElementById("historyMaxSizeKiB").value, 10),
+                historyEntrySize: parseInt(document.getElementById("historyEntrySize").value, 10)
             };
             fetch("/api/hardware", {
                 method: "POST",
@@ -4922,6 +5146,7 @@
             if (debugInput) {
                 debugInput.checked = !!device.debug;
             }
+            applyDeviceHistoryEpsilonToForm(device.historyEpsilon);
             var protocolInput = document.getElementById("deviceZigbeeProtocol");
             if (protocolInput) {
                 protocolInput.checked =
@@ -5109,10 +5334,15 @@
                 if (typeId !== "int" && typeId !== "float" && typeId !== "bool" && typeId !== "string") {
                     typeId = "string";
                 }
+                var epsilonValue = row.epsilon != null ? Number(row.epsilon) : -1;
+                if (isNaN(epsilonValue)) {
+                    epsilonValue = -1;
+                }
                 normalized.push({
                     nullable: !!row.nullable,
                     name: name,
-                    type: typeId
+                    type: typeId,
+                    epsilon: epsilonValue
                 });
             }
             return normalized;
@@ -5174,8 +5404,63 @@
                     typeSelect.value = field.type || "string";
                     typeSelect.onchange = function () {
                         parameterDialogUserDataFields[fieldIndex].type = typeSelect.value;
+                        renderUserDataFieldsEditor();
                     };
                     typeCell.appendChild(typeSelect);
+
+                    var histCell = document.createElement("td");
+                    histCell.className = "user-data-col-hist";
+                    var histWrap = document.createElement("div");
+                    histWrap.className = "hist-delta-cell";
+                    var histFlag = document.createElement("input");
+                    histFlag.type = "checkbox";
+                    var epsilonInput = document.createElement("input");
+                    epsilonInput.type = "number";
+                    epsilonInput.step = "any";
+                    epsilonInput.min = "0";
+                    var eps = field.epsilon != null ? Number(field.epsilon) : -1;
+                    if (isNaN(eps)) eps = -1;
+                    var isString = (field.type || "") === "string";
+                    if (isString) {
+                        histFlag.checked = eps === 0;
+                        epsilonInput.hidden = true;
+                    } else {
+                        histFlag.checked = eps >= 0;
+                        epsilonInput.disabled = !histFlag.checked;
+                        epsilonInput.value = histFlag.checked ? String(eps) : "";
+                    }
+                    histFlag.onchange = function () {
+                        if (!histFlag.checked) {
+                            parameterDialogUserDataFields[fieldIndex].epsilon = -1;
+                            epsilonInput.value = "";
+                            epsilonInput.disabled = true;
+                        } else {
+                            parameterDialogUserDataFields[fieldIndex].epsilon = 0;
+                            epsilonInput.disabled = isString;
+                            if (!isString) {
+                                epsilonInput.value = "0";
+                            }
+                        }
+                    };
+                    epsilonInput.oninput = function () {
+                        if (epsilonInput.value !== "" && Number(epsilonInput.value) < 0) {
+                            epsilonInput.value = "0";
+                        }
+                    };
+                    epsilonInput.onchange = function () {
+                        var value = Number(epsilonInput.value);
+                        if (isNaN(value) || value < 0) {
+                            value = 0;
+                            epsilonInput.value = "0";
+                        }
+                        parameterDialogUserDataFields[fieldIndex].epsilon = value;
+                    };
+                    histWrap.appendChild(histFlag);
+                    if (!isString) {
+                        histWrap.appendChild(epsilonInput);
+                    }
+                    histCell.appendChild(histWrap);
+
                     var actionsCell = document.createElement("td");
                     actionsCell.className = "user-data-field-actions";
                     var upButton = document.createElement("button");
@@ -5214,6 +5499,7 @@
                     row.appendChild(nullableCell);
                     row.appendChild(nameCell);
                     row.appendChild(typeCell);
+                    row.appendChild(histCell);
                     row.appendChild(actionsCell);
                     body.appendChild(row);
                 })(rowIndex);
@@ -5238,7 +5524,8 @@
             parameterDialogUserDataFields.push({
                 nullable: false,
                 name: "",
-                type: "string"
+                type: "string",
+                epsilon: -1
             });
             renderUserDataFieldsEditor();
         }
@@ -5274,12 +5561,17 @@
                 if (typeId !== "int" && typeId !== "float" && typeId !== "bool" && typeId !== "string") {
                     typeId = "float";
                 }
+                var epsilonValue = row.epsilon != null ? Number(row.epsilon) : -1;
+                if (isNaN(epsilonValue)) {
+                    epsilonValue = -1;
+                }
                 normalized.push({
                     cluster: formatReportableIdToken(row.cluster != null ? row.cluster : row.cl),
                     attribute: formatReportableIdToken(
                         row.attribute != null ? row.attribute : (row.attr != null ? row.attr : row.attrId)
                     ),
-                    type: typeId
+                    type: typeId,
+                    epsilon: epsilonValue
                 });
             }
             return normalized;
@@ -5300,7 +5592,7 @@
                 if (rows.length >= REPORTABLE_DATA_MAX_COUNT) {
                     return;
                 }
-                rows.push({ cluster: clusterText, attribute: attributeText, type: type });
+                rows.push({ cluster: clusterText, attribute: attributeText, type: type, epsilon: -1 });
             }
             if (manuf === "zbeacon") {
                 pushUnique(0x0402, 0x0000, "float");
@@ -5501,8 +5793,62 @@
                     field.type = typeSelect.value;
                     typeSelect.onchange = function () {
                         parameterDialogReportableData[fieldIndex].type = typeSelect.value;
+                        renderReportableDataEditor();
                     };
                     typeCell.appendChild(typeSelect);
+
+                    var histCell = document.createElement("td");
+                    histCell.className = "reportable-col-hist";
+                    var histWrap = document.createElement("div");
+                    histWrap.className = "hist-delta-cell";
+                    var histFlag = document.createElement("input");
+                    histFlag.type = "checkbox";
+                    var epsilonInput = document.createElement("input");
+                    epsilonInput.type = "number";
+                    epsilonInput.step = "any";
+                    epsilonInput.min = "0";
+                    var eps = field.epsilon != null ? Number(field.epsilon) : -1;
+                    if (isNaN(eps)) eps = -1;
+                    var isString = (field.type || "") === "string";
+                    if (isString) {
+                        histFlag.checked = eps === 0;
+                        epsilonInput.hidden = true;
+                    } else {
+                        histFlag.checked = eps >= 0;
+                        epsilonInput.disabled = !histFlag.checked;
+                        epsilonInput.value = histFlag.checked ? String(eps) : "";
+                    }
+                    histFlag.onchange = function () {
+                        if (!histFlag.checked) {
+                            parameterDialogReportableData[fieldIndex].epsilon = -1;
+                            epsilonInput.value = "";
+                            epsilonInput.disabled = true;
+                        } else {
+                            parameterDialogReportableData[fieldIndex].epsilon = isString ? 0 : 0;
+                            epsilonInput.disabled = isString;
+                            if (!isString) {
+                                epsilonInput.value = "0";
+                            }
+                        }
+                    };
+                    epsilonInput.oninput = function () {
+                        if (epsilonInput.value !== "" && Number(epsilonInput.value) < 0) {
+                            epsilonInput.value = "0";
+                        }
+                    };
+                    epsilonInput.onchange = function () {
+                        var value = Number(epsilonInput.value);
+                        if (isNaN(value) || value < 0) {
+                            value = 0;
+                            epsilonInput.value = "0";
+                        }
+                        parameterDialogReportableData[fieldIndex].epsilon = value;
+                    };
+                    histWrap.appendChild(histFlag);
+                    if (!isString) {
+                        histWrap.appendChild(epsilonInput);
+                    }
+                    histCell.appendChild(histWrap);
 
                     var actionsCell = document.createElement("td");
                     actionsCell.className = "user-data-field-actions";
@@ -5542,6 +5888,7 @@
                     row.appendChild(clusterCell);
                     row.appendChild(attributeCell);
                     row.appendChild(typeCell);
+                    row.appendChild(histCell);
                     row.appendChild(actionsCell);
                     body.appendChild(row);
                 })(rowIndex);
@@ -5569,7 +5916,8 @@
             parameterDialogReportableData.push({
                 cluster: defaultCluster,
                 attribute: attrs.length ? attrs[0].id : "0x0000",
-                type: reportableDefaultTypeForCluster(defaultCluster)
+                type: reportableDefaultTypeForCluster(defaultCluster),
+                epsilon: -1
             });
             renderReportableDataEditor();
         }
@@ -6043,6 +6391,7 @@
                     && document.getElementById("deviceFullControl").checked),
                 debug: !!(document.getElementById("deviceDebug")
                     && document.getElementById("deviceDebug").checked),
+                historyEpsilon: readDeviceHistoryEpsilonFromForm(),
                 type: typeId || "unknown",
                 transport: parameterDialogTransport || "zigbee"
             };
@@ -7483,11 +7832,13 @@
                     gaugeNumeric = parseBindingNumericValue(rawState);
                     gaugeDisplay = rawState || "";
                 }
-                controls.appendChild(buildConsoleGaugeElement(
+                var gaugeEl = buildConsoleGaugeElement(
                     binding,
                     gaugeNumeric,
                     gaugeDisplay
-                ));
+                );
+                attachHistoryOpen(gaugeEl, device, binding);
+                controls.appendChild(gaugeEl);
             } else if (parseReportableParamId(param)) {
                 var reportableValueLabel = document.createElement("span");
                 reportableValueLabel.className = "console-sensor-value";
@@ -7507,6 +7858,7 @@
                             : reportableRaw)
                         : "—";
                 }
+                attachHistoryOpen(reportableValueLabel, device, binding);
                 controls.appendChild(reportableValueLabel);
             } else if (isMeasurementDeviceType(typeId) && param !== "battery") {
                 var valueLabel = document.createElement("span");
@@ -16652,6 +17004,25 @@
                             </div>
                         </div>
                         <div class="status-group">
+                            <h3 class="group-title">Historical storage</h3>
+                            <div class="status-row">
+                                <span class="status-row-label">Entries</span>
+                                <p id="statusHistoryEntries" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Pages</span>
+                                <p id="statusHistoryPages" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">PSRAM usage</span>
+                                <p id="statusHistoryPsram" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Values stored</span>
+                                <p id="statusHistoryValues" class="status-value">—</p>
+                            </div>
+                        </div>
+                        <div class="status-group">
                             <h3 class="group-title">Devices</h3>
                             <div class="status-row">
                                 <span class="status-row-label">Zigbee devices</span>
@@ -17247,6 +17618,29 @@
                             <span>use queue for base device command</span>
                         </div>
                         <p class="field-hint">When on, Place/Devices/Manual live commands use the paced action queue (all device kinds). When off, only automation actions use the queue. Configure dialog writes stay immediate. Default off.</p>
+                        <div class="field">
+                            <label for="historyMaxStoreDays">Max History store days</label>
+                            <input id="historyMaxStoreDays" type="number" min="1" max="20" step="1" value="7">
+                        </div>
+                        <div class="field">
+                            <label for="historySweepIntervalMin">History sweep interval (minutes)</label>
+                            <input id="historySweepIntervalMin" type="number" min="1" max="120" step="1" value="10">
+                        </div>
+                        <div class="field">
+                            <label for="historyMaxSizeKiB">Maximum history size (kB)</label>
+                            <input id="historyMaxSizeKiB" type="number" min="4" step="1" value="4096">
+                        </div>
+                        <div class="field">
+                            <label for="historyEntrySize">Entry size</label>
+                            <select id="historyEntrySize">
+                                <option value="256">256</option>
+                                <option value="512">512</option>
+                                <option value="1024" selected>1024</option>
+                                <option value="2048">2048</option>
+                                <option value="4096">4096</option>
+                            </select>
+                            <p class="field-hint">History entry (page directory) size. Applied on next boot with Maximum history size.</p>
+                        </div>
                     </div>
                     <div class="dialog-actions hardware-tab-actions">
                         <button type="button" class="btn btn-primary" onclick="saveHardware()">Save</button>
@@ -17437,11 +17831,19 @@
                             <h3 class="group-title">User data fields</h3>
                             <div class="table-wrap">
                                 <table class="data-table" id="deviceUserDataFieldsTable">
+                                    <colgroup>
+                                        <col class="user-data-col-nullable">
+                                        <col class="user-data-col-name">
+                                        <col class="user-data-col-type">
+                                        <col class="user-data-col-hist">
+                                        <col class="user-data-col-actions">
+                                    </colgroup>
                                     <thead>
                                         <tr>
                                             <th class="col-check">Nullable</th>
                                             <th>Name</th>
                                             <th>Type</th>
+                                            <th>Hist/delta</th>
                                             <th></th>
                                         </tr>
                                     </thead>
@@ -17458,6 +17860,7 @@
                                         <col class="reportable-col-cluster">
                                         <col class="reportable-col-attribute">
                                         <col class="reportable-col-type">
+                                        <col class="reportable-col-hist">
                                         <col class="reportable-col-actions">
                                     </colgroup>
                                     <thead>
@@ -17465,6 +17868,7 @@
                                             <th>Cluster</th>
                                             <th>Attribute</th>
                                             <th>Type</th>
+                                            <th>Hist/delta</th>
                                             <th></th>
                                         </tr>
                                     </thead>
@@ -17518,6 +17922,15 @@
                         <div class="field field-check">
                             <input id="deviceDebug" type="checkbox">
                             <span>DEBUG</span>
+                        </div>
+                        <div class="field device-history-row">
+                            <div class="field-check">
+                                <input id="deviceHistoryEnabled" type="checkbox" onchange="onDeviceHistoryFlagChanged()">
+                                <span>save history</span>
+                            </div>
+                            <label for="deviceHistoryEpsilon">min. change</label>
+                            <input id="deviceHistoryEpsilon" type="number" step="any" min="0" disabled
+                                   oninput="if (this.value !== '' && Number(this.value) < 0) this.value = '0'">
                         </div>
                     </div>
                     <div id="parameter-tab-command" class="parameter-tab-panel tab-panel" role="tabpanel">
@@ -18154,5 +18567,15 @@
         </div>
     </div>
 </div>
+
+    <div id="historyChartOverlay" class="dialog-overlay dialog-overlay-front" hidden>
+        <div class="dialog-panel" role="dialog" aria-label="History" style="width:min(45rem,100%);">
+            <h2 id="historyChartTitle">History</h2>
+            <canvas id="historyChartCanvas" width="680" height="280" style="width:100%;background:#111;border-radius:8px;"></canvas>
+            <div class="dialog-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeHistoryChart()">Close</button>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
