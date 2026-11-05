@@ -1474,7 +1474,8 @@
             payload: null,
             layout: null,
             smooth: true,
-            smoothWindow: 7
+            smoothWindow: 12,
+            smoothType: "ema"
         };
         var HISTORY_RANGE_PRESETS = [
             { hours: 1, label: "1h" },
@@ -1827,10 +1828,16 @@
                 historyChartState.payload = payload || { valueType: "float", points: [] };
                 historySyncSmoothControls();
                 drawHistoryChart(canvas, historyChartState.payload, startUnix, endUnix);
+                window.requestAnimationFrame(function () {
+                    historyRedrawFromPayload();
+                });
             }).catch(function () {
                 historyChartState.payload = { valueType: "float", points: [] };
                 historySyncSmoothControls();
                 drawHistoryChart(canvas, historyChartState.payload, startUnix, endUnix);
+                window.requestAnimationFrame(function () {
+                    historyRedrawFromPayload();
+                });
             });
         }
 
@@ -1845,13 +1852,17 @@
             historyChartState.hours = 24;
             historyChartState.rangeEndUnix = Math.floor(Date.now() / 1000);
             if (historyChartState.smoothWindow < 1) {
-                historyChartState.smoothWindow = 7;
+                historyChartState.smoothWindow = 12;
+            }
+            if (historyChartState.smoothType !== "avg" && historyChartState.smoothType !== "ema") {
+                historyChartState.smoothType = "ema";
             }
             historySyncSmoothControls();
             if (title) {
                 title.textContent = query.title || "History";
             }
             overlay.hidden = false;
+            historyChartEnsureResizeObserver();
             historyFetchAndDraw();
         }
 
@@ -1890,7 +1901,7 @@
             var input = document.getElementById("historyChartSmoothWindow");
             var value = input ? Number(input.value) : historyChartState.smoothWindow;
             if (!isFinite(value) || value < 1) {
-                value = 7;
+                value = 12;
             }
             value = Math.floor(value);
             if (value < 1) {
@@ -1902,6 +1913,19 @@
             historyChartState.smoothWindow = value;
             if (input && String(input.value) !== String(value)) {
                 input.value = String(value);
+            }
+            return value;
+        }
+
+        function historySmoothType() {
+            var select = document.getElementById("historyChartSmoothType");
+            var value = select ? String(select.value || "") : String(historyChartState.smoothType || "");
+            if (value !== "avg" && value !== "ema") {
+                value = "ema";
+            }
+            historyChartState.smoothType = value;
+            if (select && select.value !== value) {
+                select.value = value;
             }
             return value;
         }
@@ -1922,6 +1946,7 @@
             var wrap = document.getElementById("historyChartSmoothControls");
             var flag = document.getElementById("historyChartSmooth");
             var input = document.getElementById("historyChartSmoothWindow");
+            var typeSelect = document.getElementById("historyChartSmoothType");
             var allowSmooth = historyChartAllowsSmooth();
             if (wrap) {
                 wrap.hidden = !allowSmooth;
@@ -1933,8 +1958,12 @@
                 flag.checked = !!historyChartState.smooth;
             }
             if (input) {
-                input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 7);
+                input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 12);
                 input.disabled = !historyChartState.smooth;
+            }
+            if (typeSelect) {
+                typeSelect.value = historyChartState.smoothType === "ema" ? "ema" : "avg";
+                typeSelect.disabled = !historyChartState.smooth;
             }
         }
 
@@ -1945,6 +1974,7 @@
             var flag = document.getElementById("historyChartSmooth");
             historyChartState.smooth = !!(flag && flag.checked);
             historySmoothWindowSize();
+            historySmoothType();
             historySyncSmoothControls();
             historyRedrawFromPayload();
         }
@@ -1962,26 +1992,64 @@
             historyRedrawFromPayload();
         }
 
-        function historySmoothSeries(series, windowSize) {
+        function historySmoothSeriesAvg(series, windowSize) {
             var windowCount = Math.max(1, Math.floor(Number(windowSize) || 5));
             if (!series || !series.length || windowCount <= 1) {
                 return series || [];
             }
+            var left = Math.floor((windowCount - 1) / 2);
+            var right = windowCount - 1 - left;
             var smoothed = [];
-            var sum = 0;
             var index;
             for (index = 0; index < series.length; index++) {
-                sum += series[index].value;
-                if (index >= windowCount) {
-                    sum -= series[index - windowCount].value;
+                var start = Math.max(0, index - left);
+                var end = Math.min(series.length - 1, index + right);
+                var sum = 0;
+                var count = 0;
+                var sampleIndex;
+                for (sampleIndex = start; sampleIndex <= end; sampleIndex++) {
+                    sum += series[sampleIndex].value;
+                    count++;
                 }
-                var count = index + 1 < windowCount ? index + 1 : windowCount;
                 smoothed.push({
                     unix: series[index].unix,
                     value: sum / count
                 });
             }
             return smoothed;
+        }
+
+        function historySmoothSeriesEma(series, windowSize) {
+            var windowCount = Math.max(1, Math.floor(Number(windowSize) || 5));
+            if (!series || !series.length) {
+                return series || [];
+            }
+            if (windowCount <= 1) {
+                return series.slice();
+            }
+            var alpha = 2 / (windowCount + 1);
+            var smoothed = [];
+            var ema = series[0].value;
+            smoothed.push({
+                unix: series[0].unix,
+                value: ema
+            });
+            var index;
+            for (index = 1; index < series.length; index++) {
+                ema = alpha * series[index].value + (1 - alpha) * ema;
+                smoothed.push({
+                    unix: series[index].unix,
+                    value: ema
+                });
+            }
+            return smoothed;
+        }
+
+        function historySmoothSeries(series, windowSize, smoothType) {
+            if (smoothType === "ema") {
+                return historySmoothSeriesEma(series, windowSize);
+            }
+            return historySmoothSeriesAvg(series, windowSize);
         }
 
         function historyRedrawFromPayload() {
@@ -2012,6 +2080,37 @@
             historyFetchAndDraw();
         }
 
+        function historyChartSyncLegendVisibility(legend) {
+            if (!legend) {
+                return;
+            }
+            var count = legend.children.length;
+            if (count <= 1) {
+                legend.innerHTML = "";
+                legend.hidden = true;
+            } else {
+                legend.hidden = false;
+            }
+        }
+
+        function historyChartEnsureResizeObserver() {
+            var wrap = document.getElementById("historyChartCanvasWrap");
+            if (!wrap || wrap.__historyChartRo || typeof ResizeObserver !== "function") {
+                return;
+            }
+            wrap.__historyChartRo = new ResizeObserver(function () {
+                if (!historyChartState.payload || !historyChartState.query) {
+                    return;
+                }
+                var nextWidth = Math.floor(wrap.getBoundingClientRect().width);
+                if (!(nextWidth > 0) || nextWidth === wrap.__historyChartLastW) {
+                    return;
+                }
+                historyRedrawFromPayload();
+            });
+            wrap.__historyChartRo.observe(wrap);
+        }
+
         function drawHistoryChart(canvas, payload, rangeStartUnix, rangeEndUnix) {
             if (!canvas || !canvas.getContext) {
                 return;
@@ -2019,16 +2118,26 @@
             var wrap = document.getElementById("historyChartCanvasWrap");
             var legend = document.getElementById("historyChartLegend");
             var tip = document.getElementById("historyChartTooltip");
-            var cssWidth = wrap ? wrap.clientWidth : 680;
+            historyChartEnsureResizeObserver();
+            canvas.style.width = "100%";
+            canvas.style.height = "320px";
+            var cssWidth = wrap ? Math.floor(wrap.getBoundingClientRect().width) : 0;
             if (!(cssWidth > 0)) {
-                cssWidth = 680;
+                cssWidth = wrap && wrap.clientWidth > 0 ? wrap.clientWidth : 0;
             }
+            if (!(cssWidth > 0)) {
+                window.requestAnimationFrame(function () {
+                    if (historyChartState.payload) {
+                        historyRedrawFromPayload();
+                    }
+                });
+                return;
+            }
+            wrap.__historyChartLastW = cssWidth;
             var cssHeight = 320;
             var dpr = window.devicePixelRatio || 1;
             canvas.width = Math.floor(cssWidth * dpr);
             canvas.height = Math.floor(cssHeight * dpr);
-            canvas.style.width = cssWidth + "px";
-            canvas.style.height = cssHeight + "px";
             var ctx = canvas.getContext("2d");
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             var width = cssWidth;
@@ -2094,6 +2203,7 @@
 
             if (legend) {
                 legend.innerHTML = "";
+                legend.hidden = true;
             }
             if (tip) {
                 tip.hidden = true;
@@ -2164,6 +2274,7 @@
                     item.appendChild(document.createTextNode(segment.label));
                     legend.appendChild(item);
                 });
+                historyChartSyncLegendVisibility(legend);
                 historyChartState.layout = {
                     kind: "discrete",
                     padLeft: padLeft,
@@ -2186,7 +2297,7 @@
                 return isFinite(point.value);
             });
             if (historyChartState.smooth && historyChartAllowsSmooth()) {
-                series = historySmoothSeries(series, historySmoothWindowSize());
+                series = historySmoothSeries(series, historySmoothWindowSize(), historySmoothType());
             }
             if (!series.length) {
                 historyChartState.layout = null;
@@ -2223,26 +2334,17 @@
             ctx.beginPath();
             var firstX = xForUnix(Math.max(t0, Math.min(t1, series[0].unix)));
             var firstY = yForValue(series[0].value);
+            var lastX = firstX;
+            var lastY = firstY;
+            var seriesIndex;
             ctx.moveTo(firstX, padTop + plotH);
             ctx.lineTo(firstX, firstY);
-            var seriesIndex;
-            for (seriesIndex = 0; seriesIndex < series.length; seriesIndex++) {
-                var current = series[seriesIndex];
-                var next = seriesIndex + 1 < series.length ? series[seriesIndex + 1] : null;
-                var xNow = xForUnix(Math.max(t0, Math.min(t1, current.unix)));
-                var yNow = yForValue(current.value);
-                if (seriesIndex > 0) {
-                    ctx.lineTo(xNow, yForValue(series[seriesIndex - 1].value));
-                    ctx.lineTo(xNow, yNow);
-                }
-                if (next) {
-                    var xNext = xForUnix(Math.max(t0, Math.min(t1, next.unix)));
-                    ctx.lineTo(xNext, yNow);
-                } else {
-                    ctx.lineTo(xForUnix(t1), yNow);
-                    ctx.lineTo(xForUnix(t1), padTop + plotH);
-                }
+            for (seriesIndex = 1; seriesIndex < series.length; seriesIndex++) {
+                lastX = xForUnix(Math.max(t0, Math.min(t1, series[seriesIndex].unix)));
+                lastY = yForValue(series[seriesIndex].value);
+                ctx.lineTo(lastX, lastY);
             }
+            ctx.lineTo(lastX, padTop + plotH);
             ctx.closePath();
             ctx.fillStyle = accent;
             ctx.globalAlpha = 0.15;
@@ -2250,36 +2352,17 @@
             ctx.globalAlpha = 1;
             ctx.beginPath();
             ctx.moveTo(firstX, firstY);
-            for (seriesIndex = 0; seriesIndex < series.length; seriesIndex++) {
-                var sample = series[seriesIndex];
-                var nx = xForUnix(Math.max(t0, Math.min(t1, sample.unix)));
-                var ny = yForValue(sample.value);
-                if (seriesIndex > 0) {
-                    ctx.lineTo(nx, yForValue(series[seriesIndex - 1].value));
-                    ctx.lineTo(nx, ny);
-                }
-                if (seriesIndex + 1 < series.length) {
-                    var nx2 = xForUnix(Math.max(t0, Math.min(t1, series[seriesIndex + 1].unix)));
-                    ctx.lineTo(nx2, ny);
-                } else {
-                    ctx.lineTo(xForUnix(t1), ny);
-                }
+            for (seriesIndex = 1; seriesIndex < series.length; seriesIndex++) {
+                ctx.lineTo(
+                    xForUnix(Math.max(t0, Math.min(t1, series[seriesIndex].unix))),
+                    yForValue(series[seriesIndex].value)
+                );
             }
             ctx.strokeStyle = accent;
             ctx.lineWidth = 2;
             ctx.stroke();
-            if (legend) {
-                var lineItem = document.createElement("span");
-                lineItem.className = "history-chart-legend-item";
-                var lineSwatch = document.createElement("span");
-                lineSwatch.className = "history-chart-legend-swatch";
-                lineSwatch.style.background = accent;
-                lineItem.appendChild(lineSwatch);
-                lineItem.appendChild(document.createTextNode(historyChartState.query && historyChartState.query.title
-                    ? historyChartState.query.title
-                    : "value"));
-                legend.appendChild(lineItem);
-            }
+            /* Single numeric series: title is already the dialog caption — no legend. */
+            historyChartSyncLegendVisibility(legend);
             historyChartState.layout = {
                 kind: "numeric",
                 padLeft: padLeft,
@@ -19506,8 +19589,13 @@
                             <span>Smooth</span>
                         </div>
                         <label for="historyChartSmoothWindow">samples</label>
-                        <input id="historyChartSmoothWindow" type="number" min="1" max="128" step="1" value="7"
+                        <input id="historyChartSmoothWindow" type="number" min="1" max="128" step="1" value="12"
                                onchange="onHistoryChartSmoothChange()" oninput="onHistoryChartSmoothWindowInput()">
+                        <select id="historyChartSmoothType" aria-label="Smooth type"
+                                onchange="onHistoryChartSmoothChange()">
+                            <option value="avg">Avg</option>
+                            <option value="ema" selected>Ema</option>
+                        </select>
                     </div>
                 </div>
                 <div class="history-chart-range">
