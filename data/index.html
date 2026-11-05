@@ -1474,7 +1474,8 @@
             payload: null,
             layout: null,
             smooth: true,
-            smoothWindow: 7
+            smoothWindow: 7,
+            smoothType: "avg"
         };
         var HISTORY_RANGE_PRESETS = [
             { hours: 1, label: "1h" },
@@ -1853,6 +1854,9 @@
             if (historyChartState.smoothWindow < 1) {
                 historyChartState.smoothWindow = 7;
             }
+            if (historyChartState.smoothType !== "ema") {
+                historyChartState.smoothType = "avg";
+            }
             historySyncSmoothControls();
             if (title) {
                 title.textContent = query.title || "History";
@@ -1913,6 +1917,19 @@
             return value;
         }
 
+        function historySmoothType() {
+            var select = document.getElementById("historyChartSmoothType");
+            var value = select ? String(select.value || "") : String(historyChartState.smoothType || "");
+            if (value !== "ema") {
+                value = "avg";
+            }
+            historyChartState.smoothType = value;
+            if (select && select.value !== value) {
+                select.value = value;
+            }
+            return value;
+        }
+
         function historyChartIsDiscretePayload(payload) {
             var valueType = payload && payload.valueType ? String(payload.valueType) : "float";
             return valueType === "bool" || valueType === "string";
@@ -1929,6 +1946,7 @@
             var wrap = document.getElementById("historyChartSmoothControls");
             var flag = document.getElementById("historyChartSmooth");
             var input = document.getElementById("historyChartSmoothWindow");
+            var typeSelect = document.getElementById("historyChartSmoothType");
             var allowSmooth = historyChartAllowsSmooth();
             if (wrap) {
                 wrap.hidden = !allowSmooth;
@@ -1943,6 +1961,10 @@
                 input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 7);
                 input.disabled = !historyChartState.smooth;
             }
+            if (typeSelect) {
+                typeSelect.value = historyChartState.smoothType === "ema" ? "ema" : "avg";
+                typeSelect.disabled = !historyChartState.smooth;
+            }
         }
 
         function onHistoryChartSmoothChange() {
@@ -1952,6 +1974,7 @@
             var flag = document.getElementById("historyChartSmooth");
             historyChartState.smooth = !!(flag && flag.checked);
             historySmoothWindowSize();
+            historySmoothType();
             historySyncSmoothControls();
             historyRedrawFromPayload();
         }
@@ -1969,26 +1992,64 @@
             historyRedrawFromPayload();
         }
 
-        function historySmoothSeries(series, windowSize) {
+        function historySmoothSeriesAvg(series, windowSize) {
             var windowCount = Math.max(1, Math.floor(Number(windowSize) || 5));
             if (!series || !series.length || windowCount <= 1) {
                 return series || [];
             }
+            var left = Math.floor((windowCount - 1) / 2);
+            var right = windowCount - 1 - left;
             var smoothed = [];
-            var sum = 0;
             var index;
             for (index = 0; index < series.length; index++) {
-                sum += series[index].value;
-                if (index >= windowCount) {
-                    sum -= series[index - windowCount].value;
+                var start = Math.max(0, index - left);
+                var end = Math.min(series.length - 1, index + right);
+                var sum = 0;
+                var count = 0;
+                var sampleIndex;
+                for (sampleIndex = start; sampleIndex <= end; sampleIndex++) {
+                    sum += series[sampleIndex].value;
+                    count++;
                 }
-                var count = index + 1 < windowCount ? index + 1 : windowCount;
                 smoothed.push({
                     unix: series[index].unix,
                     value: sum / count
                 });
             }
             return smoothed;
+        }
+
+        function historySmoothSeriesEma(series, windowSize) {
+            var windowCount = Math.max(1, Math.floor(Number(windowSize) || 5));
+            if (!series || !series.length) {
+                return series || [];
+            }
+            if (windowCount <= 1) {
+                return series.slice();
+            }
+            var alpha = 2 / (windowCount + 1);
+            var smoothed = [];
+            var ema = series[0].value;
+            smoothed.push({
+                unix: series[0].unix,
+                value: ema
+            });
+            var index;
+            for (index = 1; index < series.length; index++) {
+                ema = alpha * series[index].value + (1 - alpha) * ema;
+                smoothed.push({
+                    unix: series[index].unix,
+                    value: ema
+                });
+            }
+            return smoothed;
+        }
+
+        function historySmoothSeries(series, windowSize, smoothType) {
+            if (smoothType === "ema") {
+                return historySmoothSeriesEma(series, windowSize);
+            }
+            return historySmoothSeriesAvg(series, windowSize);
         }
 
         function historyRedrawFromPayload() {
@@ -2236,7 +2297,7 @@
                 return isFinite(point.value);
             });
             if (historyChartState.smooth && historyChartAllowsSmooth()) {
-                series = historySmoothSeries(series, historySmoothWindowSize());
+                series = historySmoothSeries(series, historySmoothWindowSize(), historySmoothType());
             }
             if (!series.length) {
                 historyChartState.layout = null;
@@ -19548,6 +19609,11 @@
                         <label for="historyChartSmoothWindow">samples</label>
                         <input id="historyChartSmoothWindow" type="number" min="1" max="128" step="1" value="7"
                                onchange="onHistoryChartSmoothChange()" oninput="onHistoryChartSmoothWindowInput()">
+                        <select id="historyChartSmoothType" aria-label="Smooth type"
+                                onchange="onHistoryChartSmoothChange()">
+                            <option value="avg" selected>Avg</option>
+                            <option value="ema">Ema</option>
+                        </select>
                     </div>
                 </div>
                 <div class="history-chart-range">
