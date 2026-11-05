@@ -325,11 +325,17 @@
                     historyChartState.payload = payload || { valueType: "float", points: [] };
                     historySyncSmoothControls();
                     drawHistoryChart(canvas, historyChartState.payload, startUnix, endUnix);
+                    window.requestAnimationFrame(function () {
+                        historyRedrawFromPayload();
+                    });
                 })
                 .catch(function () {
                     historyChartState.payload = { valueType: "float", points: [] };
                     historySyncSmoothControls();
                     drawHistoryChart(canvas, historyChartState.payload, startUnix, endUnix);
+                    window.requestAnimationFrame(function () {
+                        historyRedrawFromPayload();
+                    });
                 });
         }
         function historySmoothWindowSize() {
@@ -414,6 +420,7 @@
             historySyncSmoothControls();
             if (title) title.textContent = query.title || "History";
             overlay.hidden = false;
+            historyChartEnsureResizeObserver();
             historyFetchAndDraw();
         }
         function closeHistoryChart() {
@@ -446,18 +453,62 @@
             historyChartState.hours = Math.max(1 / 60, (endUnix - startUnix) / 3600);
             historyFetchAndDraw();
         }
+        function historyChartSyncLegendVisibility(legend) {
+            if (!legend) {
+                return;
+            }
+            var count = legend.children.length;
+            if (count <= 1) {
+                legend.innerHTML = "";
+                legend.hidden = true;
+            } else {
+                legend.hidden = false;
+            }
+        }
+
+        function historyChartEnsureResizeObserver() {
+            var wrap = document.getElementById("historyChartCanvasWrap");
+            if (!wrap || wrap.__historyChartRo || typeof ResizeObserver !== "function") {
+                return;
+            }
+            wrap.__historyChartRo = new ResizeObserver(function () {
+                if (!historyChartState.payload || !historyChartState.query) {
+                    return;
+                }
+                var nextWidth = Math.floor(wrap.getBoundingClientRect().width);
+                if (!(nextWidth > 0) || nextWidth === wrap.__historyChartLastW) {
+                    return;
+                }
+                historyRedrawFromPayload();
+            });
+            wrap.__historyChartRo.observe(wrap);
+        }
+
         function drawHistoryChart(canvas, payload, rangeStartUnix, rangeEndUnix) {
             if (!canvas || !canvas.getContext) return;
             var wrap = document.getElementById("historyChartCanvasWrap");
             var legend = document.getElementById("historyChartLegend");
             var tip = document.getElementById("historyChartTooltip");
-            var cssWidth = wrap && wrap.clientWidth > 0 ? wrap.clientWidth : 680;
+            historyChartEnsureResizeObserver();
+            canvas.style.width = "100%";
+            canvas.style.height = "320px";
+            var cssWidth = wrap ? Math.floor(wrap.getBoundingClientRect().width) : 0;
+            if (!(cssWidth > 0)) {
+                cssWidth = wrap && wrap.clientWidth > 0 ? wrap.clientWidth : 0;
+            }
+            if (!(cssWidth > 0)) {
+                window.requestAnimationFrame(function () {
+                    if (historyChartState.payload) {
+                        historyRedrawFromPayload();
+                    }
+                });
+                return;
+            }
+            wrap.__historyChartLastW = cssWidth;
             var cssHeight = 320;
             var dpr = window.devicePixelRatio || 1;
             canvas.width = Math.floor(cssWidth * dpr);
             canvas.height = Math.floor(cssHeight * dpr);
-            canvas.style.width = cssWidth + "px";
-            canvas.style.height = cssHeight + "px";
             var ctx = canvas.getContext("2d");
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             var width = cssWidth, height = cssHeight;
@@ -492,7 +543,10 @@
                 ctx.globalAlpha = 1; ctx.fillStyle = muted;
                 ctx.fillText(historyFormatAxisTime(tickUnix, hoursSpan), tickX, padTop + plotH + 8);
             }
-            if (legend) legend.innerHTML = "";
+            if (legend) {
+                legend.innerHTML = "";
+                legend.hidden = true;
+            }
             if (tip) tip.hidden = true;
             if (!points.length) {
                 ctx.fillStyle = muted; ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.font = "13px sans-serif";
@@ -541,6 +595,7 @@
                     item.appendChild(document.createTextNode(segment.label));
                     legend.appendChild(item);
                 });
+                historyChartSyncLegendVisibility(legend);
                 historyChartState.layout = {
                     kind: "discrete", padLeft: padLeft, padTop: bandTop, plotW: plotW, plotH: bandH,
                     t0: t0, t1: t1, segments: segments
@@ -608,18 +663,8 @@
                 }
             }
             ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.stroke();
-            if (legend) {
-                var lineItem = document.createElement("span");
-                lineItem.className = "history-chart-legend-item";
-                var lineSwatch = document.createElement("span");
-                lineSwatch.className = "history-chart-legend-swatch";
-                lineSwatch.style.background = accent;
-                lineItem.appendChild(lineSwatch);
-                lineItem.appendChild(document.createTextNode(
-                    historyChartState.query && historyChartState.query.title ? historyChartState.query.title : "value"
-                ));
-                legend.appendChild(lineItem);
-            }
+            /* Single numeric series: title is already the dialog caption — no legend. */
+            historyChartSyncLegendVisibility(legend);
             historyChartState.layout = {
                 kind: "numeric", padLeft: padLeft, padTop: padTop, plotW: plotW, plotH: plotH,
                 t0: t0, t1: t1, minV: minV, maxV: maxV, series: series
