@@ -26,6 +26,7 @@ public:
     void requestTimeSync();
     void noteKeepaliveQuiet();
     void holdForFirmwareOta();
+    bool isOutboundIdle() const;
     const char *slaveFirmwareVersion() const;
     void clearSlaveFirmwareVersion();
     bool isSlaveResetPaused() const;

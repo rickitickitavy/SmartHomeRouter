@@ -49,6 +49,10 @@ bool FirmwareOta::isUpdatingSlave() const {
     return currentPhase == Phase::Slave;
 }
 
+bool FirmwareOta::suppressNonOtaSpi() const {
+    return currentPhase == Phase::Slave || slaveVerifyResendSettling;
+}
+
 bool FirmwareOta::isVerifyingSlave() const {
     return currentPhase == Phase::VerifyingSlave;
 }
@@ -289,6 +293,8 @@ void FirmwareOta::fail(const char *message) {
     slaveVerifyDeadlineMs = 0;
     slaveVerifyResetPending = false;
     slaveVerifyAwaitingReadyForResend = false;
+    slaveVerifyResendSettling = false;
+    slaveVerifyResendSettleMs = 0;
     endSlaveSpiClockOverride();
     STATUS_RGB.setUpdateBlinkManual(false);
     clearStagingFiles();
@@ -463,51 +469,148 @@ void FirmwareOta::abortStaging() {
 }
 
 bool FirmwareOta::sendLastSlaveFrame(bool isResend) {
+    uint8_t localPayload[SPI_MAX_PAYLOAD];
+    uint16_t localLength = 0;
+    uint8_t localSeq = 0;
+    bool beginWasQueued = false;
+    bool beginWasAcked = false;
+    uint8_t frameFails = 0;
+    uint32_t offsetSnapshot = 0;
+
+    portENTER_CRITICAL(&gFirmwareOtaMux);
+    beginWasQueued = beginQueued;
+    beginWasAcked = beginAcked;
+    frameFails = slaveFrameFails;
+    offsetSnapshot = imageOffset;
     if (lastSlavePayloadLength == 0) {
-        fail("Firmware OTA frame missing");
+        portEXIT_CRITICAL(&gFirmwareOtaMux);
+        // Never enqueue a zero-length OTA frame. Before begin is staged this is
+        // expected under loop/hostSpi races — let the next pump pack begin.
+        if (!beginWasQueued) {
+            LOGGER.warning(
+                "SPI firmware OTA resend skipped; begin not staged yet "
+                "fails=" + String((int)frameFails) + " offset=" + String((unsigned long)offsetSnapshot)
+            );
+            return false;
+        }
+        LOGGER.warning(
+            "SPI firmware OTA last frame empty beginQueued=1 beginAcked="
+            + String(beginWasAcked ? 1 : 0) + " fails=" + String((int)frameFails)
+            + " offset=" + String((unsigned long)offsetSnapshot)
+        );
         return false;
     }
+    localLength = lastSlavePayloadLength;
+    memcpy(localPayload, lastSlavePayload, localLength);
+    localSeq = lastSlaveSeq;
+    portEXIT_CRITICAL(&gFirmwareOtaMux);
+
     bool queued = false;
-    if (isResend && lastSlaveSeq != 0) {
+    if (isResend && localSeq != 0) {
         queued = INTER_CHIP_HOST.tryEnqueueWithSeq(
             SpiCmdFirmwareOta,
-            lastSlaveSeq,
-            lastSlavePayload,
-            lastSlavePayloadLength
+            localSeq,
+            localPayload,
+            localLength
         );
     } else {
-        queued = INTER_CHIP_HOST.tryEnqueue(SpiCmdFirmwareOta, lastSlavePayload, lastSlavePayloadLength);
+        queued = INTER_CHIP_HOST.tryEnqueue(SpiCmdFirmwareOta, localPayload, localLength);
+        portENTER_CRITICAL(&gFirmwareOtaMux);
         lastSlaveSeq = INTER_CHIP_HOST.lastEnqueuedSeq();
+        portEXIT_CRITICAL(&gFirmwareOtaMux);
     }
     if (!queued) {
+        portENTER_CRITICAL(&gFirmwareOtaMux);
         waitingForSlaveResult = false;
+        portEXIT_CRITICAL(&gFirmwareOtaMux);
         LOGGER.warning("SPI firmware frame queue full, will retry");
         return false;
     }
+    portENTER_CRITICAL(&gFirmwareOtaMux);
     waitingForSlaveResult = true;
+    portEXIT_CRITICAL(&gFirmwareOtaMux);
     return true;
 }
 
 void FirmwareOta::onSlaveFrameLost() {
+    uint8_t frameFails = 0;
+    uint16_t payloadLength = 0;
+    bool beginWasQueued = false;
+    bool beginWasAcked = false;
+    bool imageComplete = false;
+    uint8_t lostSeq = 0;
+    uint32_t offsetSnapshot = 0;
+
+    bool lostEndFrame = false;
+    portENTER_CRITICAL(&gFirmwareOtaMux);
     waitingForSlaveResult = false;
-    slaveFrameFails++;
+    if (slaveFrameFails < 255) {
+        slaveFrameFails++;
+    }
+    frameFails = slaveFrameFails;
+    payloadLength = lastSlavePayloadLength;
+    beginWasQueued = beginQueued;
+    beginWasAcked = beginAcked;
+    lostSeq = lastSlaveSeq;
+    offsetSnapshot = imageOffset;
+    lostEndFrame = payloadLength > 0 && (lastSlavePayload[0] & SPI_OTA_END) != 0;
+    // Count only ACKed bytes plus the in-flight END payload; require END flag for escape.
+    imageComplete = lostEndFrame && (imageOffset + lastSlaveDataBytes >= slaveImageSize);
+    portEXIT_CRITICAL(&gFirmwareOtaMux);
+
     LOGGER.warning(
-        "SPI firmware frame lost seq=" + String((int)lastSlaveSeq) + " fail="
-        + String((int)slaveFrameFails) + "/" + String((int)kMaxSlaveFrameFails)
+        "SPI firmware frame lost seq=" + String((int)lostSeq) + " fail="
+        + String((int)frameFails) + "/" + String((int)kMaxSlaveFrameFails)
     );
-    if (slaveFrameFails >= kMaxSlaveFrameFails) {
-        // Last frame often times out while slave finalizes flash; image may already be complete.
-        const bool imageComplete = imageOffset + lastSlaveDataBytes >= slaveImageSize;
-        if (beginAcked && imageComplete) {
+    if (frameFails >= kMaxSlaveFrameFails) {
+        // END ACK can drop while slave finalizes flash — only then treat as complete.
+        // Mid-image loss must not jump to verify (that left slaves on the old build).
+        if (beginWasAcked && imageComplete) {
+            portENTER_CRITICAL(&gFirmwareOtaMux);
             imageOffset = slaveImageSize;
             lastSlavePayloadLength = 0;
             lastSlaveDataBytes = 0;
+            portEXIT_CRITICAL(&gFirmwareOtaMux);
             INTER_CHIP_HOST.noteKeepaliveQuiet();
             LOGGER.info("Slave END ACK lost after complete image; verifying slave version");
             beginSlaveVersionVerify();
             return;
         }
         fail("Slave firmware update failed after repeated SPI frame loss");
+        return;
+    }
+    if (payloadLength == 0) {
+        if (!beginWasQueued) {
+            LOGGER.warning(
+                "SPI firmware OTA empty buffer before begin staged; waiting to pack begin "
+                "offset=" + String((unsigned long)offsetSnapshot)
+            );
+            return;
+        }
+        if (!beginWasAcked) {
+            // Begin was marked queued but buffer was cleared without ACK — re-pack begin.
+            portENTER_CRITICAL(&gFirmwareOtaMux);
+            beginQueued = false;
+            streamPos = 0;
+            imageOffset = 0;
+            portEXIT_CRITICAL(&gFirmwareOtaMux);
+            LOGGER.warning(
+                "SPI firmware OTA empty buffer before begin ACK; will re-pack begin "
+                "fails=" + String((int)frameFails)
+            );
+            return;
+        }
+        // Buffer empty after begin ACK: never invent bytes and never advance the
+        // stream past what the slave ACKed (streamPos can race ahead of imageOffset).
+        portENTER_CRITICAL(&gFirmwareOtaMux);
+        streamPos = imageOffset;
+        lastSlavePayloadLength = 0;
+        lastSlaveDataBytes = 0;
+        portEXIT_CRITICAL(&gFirmwareOtaMux);
+        LOGGER.warning(
+            "SPI firmware OTA empty buffer after begin ACK; resync stream to offset="
+            + String((unsigned long)offsetSnapshot) + " fails=" + String((int)frameFails)
+        );
         return;
     }
     sendLastSlaveFrame(true);
@@ -551,9 +654,6 @@ bool FirmwareOta::packSlaveChunkFromStream(
 }
 
 bool FirmwareOta::enqueueNextSlaveChunk() {
-    if (waitingForSlaveResult) {
-        return true;
-    }
     if (!INTER_CHIP_HOST.isNormal()) {
         fail("Slave link is not ready");
         return false;
@@ -567,6 +667,7 @@ bool FirmwareOta::enqueueNextSlaveChunk() {
     if (lastSlavePayloadLength > 0) {
         const bool isResend = slaveFrameFails > 0;
         portEXIT_CRITICAL(&gFirmwareOtaMux);
+        // sendLastSlaveFrame re-checks length under the same mux (loop vs hostSpi TOCTOU).
         return sendLastSlaveFrame(isResend);
     }
     slavePackClaimed = true;
@@ -603,8 +704,20 @@ bool FirmwareOta::enqueueNextSlaveChunk() {
     }
 
     if (packedLength == 0) {
+        bool imageComplete = false;
         portENTER_CRITICAL(&gFirmwareOtaMux);
         slavePackClaimed = false;
+        imageComplete = imageOffset >= slaveImageSize;
+        if (!imageComplete) {
+            // Pack cursor ran past ACKed bytes — resync and pack again; do not verify yet.
+            streamPos = imageOffset;
+            portEXIT_CRITICAL(&gFirmwareOtaMux);
+            LOGGER.warning(
+                "SPI firmware OTA pack exhausted before ACK complete; resync streamPos="
+                + String((unsigned long)imageOffset) + "/" + String((unsigned long)slaveImageSize)
+            );
+            return true;
+        }
         portEXIT_CRITICAL(&gFirmwareOtaMux);
         beginSlaveVersionVerify();
         return true;
@@ -620,11 +733,17 @@ bool FirmwareOta::enqueueNextSlaveChunk() {
 }
 
 void FirmwareOta::onSpiFrame(const SpiFrame &frame) {
-    if (currentPhase != Phase::Slave || !waitingForSlaveResult) {
+    if (currentPhase != Phase::Slave) {
         return;
     }
     if (frame.cmd == SpiEvtTimeout) {
         if (frame.length < 1 || frame.payload[0] != SpiCmdFirmwareOta) {
+            return;
+        }
+        portENTER_CRITICAL(&gFirmwareOtaMux);
+        const bool waiting = waitingForSlaveResult;
+        portEXIT_CRITICAL(&gFirmwareOtaMux);
+        if (!waiting) {
             return;
         }
         onSlaveFrameLost();
@@ -633,8 +752,14 @@ void FirmwareOta::onSpiFrame(const SpiFrame &frame) {
     if (frame.cmd != SpiEvtCmdResult || frame.length < 1) {
         return;
     }
+    portENTER_CRITICAL(&gFirmwareOtaMux);
+    if (!waitingForSlaveResult) {
+        portEXIT_CRITICAL(&gFirmwareOtaMux);
+        return;
+    }
     waitingForSlaveResult = false;
     if (frame.payload[0] == 0) {
+        portEXIT_CRITICAL(&gFirmwareOtaMux);
         onSlaveFrameLost();
         return;
     }
@@ -643,11 +768,11 @@ void FirmwareOta::onSpiFrame(const SpiFrame &frame) {
         beginAcked = true;
         lastSlavePayloadLength = 0;
         lastSlaveDataBytes = 0;
+        portEXIT_CRITICAL(&gFirmwareOtaMux);
         LOGGER.info("Slave firmware begin acked, sending image");
         enqueueNextSlaveChunk();
         return;
     }
-    portENTER_CRITICAL(&gFirmwareOtaMux);
     imageOffset += lastSlaveDataBytes;
     lastSlavePayloadLength = 0;
     lastSlaveDataBytes = 0;
@@ -703,6 +828,8 @@ void FirmwareOta::startSlaveUploadCycle() {
     slavePackClaimed = false;
     slaveVerifyResetPending = false;
     slaveVerifyAwaitingReadyForResend = false;
+    slaveVerifyResendSettling = false;
+    slaveVerifyResendSettleMs = 0;
     if (slaveSpiCycleCount < 255) {
         slaveSpiCycleCount++;
     }
@@ -725,6 +852,8 @@ void FirmwareOta::beginSlaveVersionVerify() {
     lastSlaveDataBytes = 0;
     slaveVerifyResetPending = false;
     slaveVerifyAwaitingReadyForResend = false;
+    slaveVerifyResendSettling = false;
+    slaveVerifyResendSettleMs = 0;
     INTER_CHIP_HOST.clearSlaveFirmwareVersion();
     slaveVerifyDeadlineMs = millis() + kSlaveVerifyWaitMs;
     currentPhase = Phase::VerifyingSlave;
@@ -746,6 +875,8 @@ void FirmwareOta::pumpSlaveVersionVerify() {
         INTER_CHIP_HOST.clearSlaveFirmwareVersion();
         INTER_CHIP_HOST.resetSlaveSynchronous();
         slaveVerifyAwaitingReadyForResend = true;
+        slaveVerifyResendSettling = false;
+        slaveVerifyResendSettleMs = 0;
         LOGGER.info(
             "Slave reset after version verify fail; waiting ready then full SPI resend "
             + String((int)slaveSpiCycleCount) + "/" + String((int)kSlaveVerifyMaxCycles)
@@ -756,9 +887,31 @@ void FirmwareOta::pumpSlaveVersionVerify() {
         if (!INTER_CHIP_HOST.isNormal()) {
             return;
         }
+        // After settings/store dump, wait for a quiet SPI link before OTA cycle 2+
+        // (avoids host task WDT from OTA+MQTT+registry flood).
+        if (!slaveVerifyResendSettling) {
+            slaveVerifyResendSettling = true;
+            slaveVerifyResendSettleMs = millis() + kSlaveVerifyResendSettleMs;
+            INTER_CHIP_HOST.holdForFirmwareOta();
+            LOGGER.info(
+                "Slave ready after verify fail; settling SPI "
+                + String((unsigned long)kSlaveVerifyResendSettleMs) + "ms before resend "
+                + String((int)(slaveSpiCycleCount + 1)) + "/" + String((int)kSlaveVerifyMaxCycles)
+            );
+            return;
+        }
+        INTER_CHIP_HOST.holdForFirmwareOta();
+        if ((long)(millis() - slaveVerifyResendSettleMs) < 0) {
+            return;
+        }
+        if (!INTER_CHIP_HOST.isOutboundIdle()) {
+            return;
+        }
         slaveVerifyAwaitingReadyForResend = false;
+        slaveVerifyResendSettling = false;
+        slaveVerifyResendSettleMs = 0;
         LOGGER.info(
-            "Slave ready after verify fail; starting full SPI transfer "
+            "Slave SPI quiet after verify fail; starting full SPI transfer "
             + String((int)(slaveSpiCycleCount + 1)) + "/" + String((int)kSlaveVerifyMaxCycles)
         );
         startSlaveUploadCycle();
