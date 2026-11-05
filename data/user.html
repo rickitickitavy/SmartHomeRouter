@@ -94,8 +94,8 @@
             payload: null,
             layout: null,
             smooth: true,
-            smoothWindow: 7,
-            smoothType: "avg"
+            smoothWindow: 12,
+            smoothType: "ema"
         };
         var HISTORY_STATE_COLORS = [
             "#03a9f4", "#4caf50", "#ff9800", "#f44336", "#9c27b0",
@@ -342,7 +342,7 @@
         function historySmoothWindowSize() {
             var input = document.getElementById("historyChartSmoothWindow");
             var value = input ? Number(input.value) : historyChartState.smoothWindow;
-            if (!isFinite(value) || value < 1) value = 7;
+            if (!isFinite(value) || value < 1) value = 12;
             value = Math.floor(value);
             if (value < 1) value = 1;
             if (value > 128) value = 128;
@@ -353,8 +353,8 @@
         function historySmoothType() {
             var select = document.getElementById("historyChartSmoothType");
             var value = select ? String(select.value || "") : String(historyChartState.smoothType || "");
-            if (value !== "ema") {
-                value = "avg";
+            if (value !== "avg" && value !== "ema") {
+                value = "ema";
             }
             historyChartState.smoothType = value;
             if (select && select.value !== value) {
@@ -380,7 +380,7 @@
             if (!allowSmooth) return;
             if (flag) flag.checked = !!historyChartState.smooth;
             if (input) {
-                input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 7);
+                input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 12);
                 input.disabled = !historyChartState.smooth;
             }
             if (typeSelect) {
@@ -463,8 +463,10 @@
             historyChartState.payload = null;
             historyChartState.hours = 24;
             historyChartState.rangeEndUnix = Math.floor(Date.now() / 1000);
-            if (historyChartState.smoothWindow < 1) historyChartState.smoothWindow = 7;
-            if (historyChartState.smoothType !== "ema") historyChartState.smoothType = "avg";
+            if (historyChartState.smoothWindow < 1) historyChartState.smoothWindow = 12;
+            if (historyChartState.smoothType !== "avg" && historyChartState.smoothType !== "ema") {
+                historyChartState.smoothType = "ema";
+            }
             historySyncSmoothControls();
             if (title) title.textContent = query.title || "History";
             overlay.hidden = false;
@@ -678,37 +680,26 @@
             }
             var firstX = xForUnix(Math.max(t0, Math.min(t1, series[0].unix)));
             var firstY = yForValue(series[0].value);
-            ctx.beginPath(); ctx.moveTo(firstX, padTop + plotH); ctx.lineTo(firstX, firstY);
-            for (var seriesIndex = 0; seriesIndex < series.length; seriesIndex++) {
-                var current = series[seriesIndex];
-                var xNow = xForUnix(Math.max(t0, Math.min(t1, current.unix)));
-                var yNow = yForValue(current.value);
-                if (seriesIndex > 0) {
-                    ctx.lineTo(xNow, yForValue(series[seriesIndex - 1].value));
-                    ctx.lineTo(xNow, yNow);
-                }
-                if (seriesIndex + 1 < series.length) {
-                    ctx.lineTo(xForUnix(Math.max(t0, Math.min(t1, series[seriesIndex + 1].unix))), yNow);
-                } else {
-                    ctx.lineTo(xForUnix(t1), yNow);
-                    ctx.lineTo(xForUnix(t1), padTop + plotH);
-                }
+            var lastX = firstX;
+            var lastY = firstY;
+            ctx.beginPath();
+            ctx.moveTo(firstX, padTop + plotH);
+            ctx.lineTo(firstX, firstY);
+            for (var seriesIndex = 1; seriesIndex < series.length; seriesIndex++) {
+                lastX = xForUnix(Math.max(t0, Math.min(t1, series[seriesIndex].unix)));
+                lastY = yForValue(series[seriesIndex].value);
+                ctx.lineTo(lastX, lastY);
             }
-            ctx.closePath(); ctx.fillStyle = accent; ctx.globalAlpha = 0.15; ctx.fill(); ctx.globalAlpha = 1;
-            ctx.beginPath(); ctx.moveTo(firstX, firstY);
-            for (seriesIndex = 0; seriesIndex < series.length; seriesIndex++) {
-                var sample = series[seriesIndex];
-                var nx = xForUnix(Math.max(t0, Math.min(t1, sample.unix)));
-                var ny = yForValue(sample.value);
-                if (seriesIndex > 0) {
-                    ctx.lineTo(nx, yForValue(series[seriesIndex - 1].value));
-                    ctx.lineTo(nx, ny);
-                }
-                if (seriesIndex + 1 < series.length) {
-                    ctx.lineTo(xForUnix(Math.max(t0, Math.min(t1, series[seriesIndex + 1].unix))), ny);
-                } else {
-                    ctx.lineTo(xForUnix(t1), ny);
-                }
+            ctx.lineTo(lastX, padTop + plotH);
+            ctx.closePath();
+            ctx.fillStyle = accent; ctx.globalAlpha = 0.15; ctx.fill(); ctx.globalAlpha = 1;
+            ctx.beginPath();
+            ctx.moveTo(firstX, firstY);
+            for (seriesIndex = 1; seriesIndex < series.length; seriesIndex++) {
+                ctx.lineTo(
+                    xForUnix(Math.max(t0, Math.min(t1, series[seriesIndex].unix))),
+                    yForValue(series[seriesIndex].value)
+                );
             }
             ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.stroke();
             /* Single numeric series: title is already the dialog caption — no legend. */
@@ -4799,12 +4790,12 @@
                             <span>Smooth</span>
                         </div>
                         <label for="historyChartSmoothWindow">samples</label>
-                        <input id="historyChartSmoothWindow" type="number" min="1" max="128" step="1" value="7"
+                        <input id="historyChartSmoothWindow" type="number" min="1" max="128" step="1" value="12"
                                onchange="onHistoryChartSmoothChange()" oninput="onHistoryChartSmoothWindowInput()">
                         <select id="historyChartSmoothType" aria-label="Smooth type"
                                 onchange="onHistoryChartSmoothChange()">
-                            <option value="avg" selected>Avg</option>
-                            <option value="ema">Ema</option>
+                            <option value="avg">Avg</option>
+                            <option value="ema" selected>Ema</option>
                         </select>
                     </div>
                 </div>
