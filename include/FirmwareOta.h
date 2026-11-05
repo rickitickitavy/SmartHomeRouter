@@ -118,7 +118,7 @@ private:
     bool packSlaveChunkFromStream(uint8_t *payloadOut, uint16_t *packedLengthOut, uint32_t *dataBytesOut);
     bool enqueueNextSlaveChunk();
     bool sendLastSlaveFrame(bool isResend);
-    void onSlaveFrameLost();
+    void onSlaveFrameLost(bool fromNack);
     bool prepareJoinedPackage();
     void startSlaveUploadCycle();
     void beginSlaveVersionVerify();

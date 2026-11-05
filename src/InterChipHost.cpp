@@ -294,6 +294,11 @@ bool InterChipHost::enqueueInternal(
         return false;
     }
     if (FIRMWARE_OTA.isUpdatingSlave() && cmd == SpiCmdFirmwareOta) {
+        // Never queue a new OTA seq while one is awaiting reply — that raced ahead
+        // (ACKs arrived as seq=N while host already expected N+1; RF gauge stuck at 0%).
+        if (hasPending && pendingCmd == SpiCmdFirmwareOta) {
+            return false;
+        }
         // At most one OTA frame in the outbound queue — avoid flood on retry/pump races.
         for (int i = 0; i < kOutQueue; i++) {
             if (!outbound[i].used || outbound[i].frame.cmd != SpiCmdFirmwareOta) {

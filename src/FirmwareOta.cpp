@@ -500,9 +500,17 @@ bool FirmwareOta::sendLastSlaveFrame(bool isResend) {
         );
         return false;
     }
+    // Already waiting on an in-flight frame: do not enqueue a newer seq ahead of it
+    // (that produced ignore result seq=N expect=N+1 and stuck RF at 0%).
+    if (waitingForSlaveResult && !isResend) {
+        portEXIT_CRITICAL(&gFirmwareOtaMux);
+        return true;
+    }
     localLength = lastSlavePayloadLength;
     memcpy(localPayload, lastSlavePayload, localLength);
     localSeq = lastSlaveSeq;
+    // Claim in-flight before tryEnqueue so pump/hostSpi cannot race a second seq.
+    waitingForSlaveResult = true;
     portEXIT_CRITICAL(&gFirmwareOtaMux);
 
     bool queued = false;
@@ -526,13 +534,10 @@ bool FirmwareOta::sendLastSlaveFrame(bool isResend) {
         LOGGER.warning("SPI firmware frame queue full, will retry");
         return false;
     }
-    portENTER_CRITICAL(&gFirmwareOtaMux);
-    waitingForSlaveResult = true;
-    portEXIT_CRITICAL(&gFirmwareOtaMux);
     return true;
 }
 
-void FirmwareOta::onSlaveFrameLost() {
+void FirmwareOta::onSlaveFrameLost(bool fromNack) {
     uint8_t frameFails = 0;
     uint16_t payloadLength = 0;
     bool beginWasQueued = false;
@@ -559,13 +564,14 @@ void FirmwareOta::onSlaveFrameLost() {
     portEXIT_CRITICAL(&gFirmwareOtaMux);
 
     LOGGER.warning(
-        "SPI firmware frame lost seq=" + String((int)lostSeq) + " fail="
-        + String((int)frameFails) + "/" + String((int)kMaxSlaveFrameFails)
+        String(fromNack ? "SPI firmware frame nack seq=" : "SPI firmware frame lost seq=")
+        + String((int)lostSeq) + " fail=" + String((int)frameFails) + "/"
+        + String((int)kMaxSlaveFrameFails)
     );
     if (frameFails >= kMaxSlaveFrameFails) {
-        // END ACK can drop while slave finalizes flash — only then treat as complete.
-        // Mid-image loss must not jump to verify (that left slaves on the old build).
-        if (beginWasAcked && imageComplete) {
+        // Only a quiet TIMEOUT on END (not NACK) may mean slave is applying and ACK was dropped.
+        // END NACKs usually mean byte-count mismatch / premature END — never pretend success.
+        if (!fromNack && beginWasAcked && imageComplete) {
             portENTER_CRITICAL(&gFirmwareOtaMux);
             imageOffset = slaveImageSize;
             lastSlavePayloadLength = 0;
@@ -574,6 +580,10 @@ void FirmwareOta::onSlaveFrameLost() {
             INTER_CHIP_HOST.noteKeepaliveQuiet();
             LOGGER.info("Slave END ACK lost after complete image; verifying slave version");
             beginSlaveVersionVerify();
+            return;
+        }
+        if (fromNack && lostEndFrame) {
+            fail("Slave rejected firmware OTA END (image incomplete or apply not armed)");
             return;
         }
         fail("Slave firmware update failed after repeated SPI frame loss");
@@ -742,11 +752,16 @@ void FirmwareOta::onSpiFrame(const SpiFrame &frame) {
         }
         portENTER_CRITICAL(&gFirmwareOtaMux);
         const bool waiting = waitingForSlaveResult;
+        const uint8_t expectSeq = lastSlaveSeq;
         portEXIT_CRITICAL(&gFirmwareOtaMux);
         if (!waiting) {
             return;
         }
-        onSlaveFrameLost();
+        // Ignore stale timeouts for a previous OTA seq after we already moved on.
+        if (expectSeq != 0 && frame.seq != 0 && frame.seq != expectSeq) {
+            return;
+        }
+        onSlaveFrameLost(false);
         return;
     }
     if (frame.cmd != SpiEvtCmdResult || frame.length < 1) {
@@ -757,10 +772,19 @@ void FirmwareOta::onSpiFrame(const SpiFrame &frame) {
         portEXIT_CRITICAL(&gFirmwareOtaMux);
         return;
     }
+    // Late/duplicate ACKs for an older seq must not advance imageOffset (premature END).
+    if (lastSlaveSeq != 0 && frame.seq != lastSlaveSeq) {
+        portEXIT_CRITICAL(&gFirmwareOtaMux);
+        LOGGER.warning(
+            "SPI firmware OTA ignore result seq=" + String((int)frame.seq) + " expect="
+            + String((int)lastSlaveSeq)
+        );
+        return;
+    }
     waitingForSlaveResult = false;
     if (frame.payload[0] == 0) {
         portEXIT_CRITICAL(&gFirmwareOtaMux);
-        onSlaveFrameLost();
+        onSlaveFrameLost(true);
         return;
     }
     slaveFrameFails = 0;
@@ -1164,6 +1188,11 @@ bool FirmwareOta::handleSlaveFrame(const SpiFrame &frame) {
     if ((flags & SPI_OTA_BEGIN) != 0) {
         return queueSlaveBegin(frame);
     }
+    // END retry after we already armed/committed: succeed without rewriting.
+    if ((flags & SPI_OTA_END) != 0
+        && (slaveApplyArmed || slaveApplyPending || slaveRestartPending)) {
+        return true;
+    }
     if (!slaveOtaActive || slaveBeginPending) {
         return false;
     }
@@ -1189,6 +1218,10 @@ bool FirmwareOta::handleSlaveFrame(const SpiFrame &frame) {
         return true;
     }
     if (!slaveOtaActive || slaveBytesRemaining != 0) {
+        LOGGER.warning(
+            "Slave OTA END rejected remaining=" + String((unsigned long)slaveBytesRemaining)
+            + " active=" + String(slaveOtaActive ? 1 : 0)
+        );
         Update.abort();
         slaveOtaActive = false;
         slaveBytesRemaining = 0;

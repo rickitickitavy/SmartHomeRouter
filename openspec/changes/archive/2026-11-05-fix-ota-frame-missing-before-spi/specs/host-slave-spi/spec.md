@@ -18,3 +18,36 @@ While the host is streaming a slave firmware-OTA sequence (begin / chunk / end),
 
 - **WHEN** the host Arduino loop pumps firmware-OTA progress while the host SPI task delivers OTA command results or timeouts for the same transfer
 - **THEN** clearing the last-frame buffer and deciding to resend remain consistent so a result that clears the buffer cannot be followed by a resend of a zero-length frame for that same step
+
+### Requirement: Only one in-flight slave OTA frame at a time
+
+While streaming slave firmware OTA, the host SHALL have at most one firmware-OTA command awaiting a slave reply. The host MUST NOT enqueue a new OTA sequence id while a previous OTA command is still pending a result. Success and failure results (and local timeouts) SHALL be applied only when their sequence id matches the in-flight OTA frame; mismatched late results SHALL be ignored without advancing the image byte offset.
+
+#### Scenario: No second OTA seq while reply pending
+
+- **WHEN** a slave firmware-OTA frame has been sent and the host is still waiting for its command result
+- **THEN** the host does not enqueue another firmware-OTA frame with a different sequence id
+
+#### Scenario: Late ACK for previous seq is ignored
+
+- **WHEN** the host is waiting for sequence N and a command-result for sequence N−1 (or any other seq) arrives
+- **THEN** the host ignores that result and does not advance the slave image offset
+
+#### Scenario: Matching ACK advances offset
+
+- **WHEN** the host is waiting for sequence N and a successful command-result for sequence N arrives
+- **THEN** the host advances the image offset by that frame’s data length and may enqueue the next OTA frame
+
+### Requirement: END NACK must not be treated as complete-image success
+
+If the slave negatively acknowledges a firmware-OTA END frame, the host SHALL NOT treat the transfer as complete and SHALL NOT enter post-transfer version verify solely because the fail budget was exhausted on those NACKs. A verify-after-END-timeout escape MAY apply only when the losses were reply timeouts on an END frame after prior bytes were accounted for—not when the slave explicitly rejected END.
+
+#### Scenario: Repeated END NACK fails the update
+
+- **WHEN** the slave returns failure for the END frame until the host’s frame-loss budget is exhausted
+- **THEN** the joined slave update fails with an error and the host does not claim “END ACK lost after complete image”
+
+#### Scenario: END timeout after full image may verify
+
+- **WHEN** the in-flight frame is END, prior image bytes are complete, and the host exhausts the fail budget on reply timeouts (not NACKs)
+- **THEN** the host MAY proceed to slave version verification as today

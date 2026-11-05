@@ -83,3 +83,14 @@ Fragile zones `slave-spi-ota` and `firmware-update-process` cover the hard paths
 ## Open Questions
 
 - None deferrable: apply still needs explicit fragile-zone approval before code edits.
+
+
+### 6. Single in-flight OTA seq (4.0.40)
+
+**Choice:** Set `waitingForSlaveResult` before `tryEnqueue`; refuse new OTA enqueue while `hasPending && pendingCmd == SpiCmdFirmwareOta`. Apply CmdResult/timeout only when `seq` matches `lastSlaveSeq`.
+
+**Why:** Field logs showed `ignore result seq=N expect=N+1` with RF at 0% — host had raced a second seq ahead of the in-flight ACK.
+
+### 7. END NACK vs timeout (4.0.39)
+
+**Choice:** Distinguish NACK vs timeout in `onSlaveFrameLost`; complete-image verify escape only for END **timeouts**, not NACKs. Slave idempotent-ACK END if apply already armed.

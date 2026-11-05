@@ -12,13 +12,19 @@
 - [x] 2.3 After begin staged, on empty buffer during loss/retry: log warning with beginQueued/beginAcked/slaveFrameFails/waiting/imageOffset, do not invent SPI bytes, recover via pack-next or fail with an accurate message after budget; verify no zero-length `tryEnqueue` of `SpiCmdFirmwareOta` remains on that path
 - [x] 2.4 Bump `FIRMWARE_VERSION` build by 1 in `include/Defines.h` for the apply source change and verify the new string builds into the host image
 
-## 3. Integration checks
+## 3. In-flight seq and END semantics (follow-up)
 
-- [ ] 3.1 On device, upload a joined ZIP **with** `slave.bin` repeatedly and verify logs show slave SPI transfer cycle → begin queued/acked → image progress without pre-begin `Firmware OTA frame missing`
-- [ ] 3.2 Upload a host-only package (no `slave.bin`) and verify host-only apply still succeeds unchanged
-- [ ] 3.3 Confirm a normal mid-transfer frame loss within budget still resends the packed last frame (seq preserved) and does not abort solely for empty buffer
+- [x] 3.1 Seq-match OTA CmdResult/timeout; refuse enqueue of a new OTA seq while an OTA reply is pending; claim waiting before tryEnqueue — verify no systematic `ignore result seq=N expect=N+1` flood with RF stuck at 0%
+- [x] 3.2 On-wire END timeout; END NACK does not take complete-image verify escape; settle SPI before verify-fail resend — verify in code review / device logs
+- [x] 3.3 Firmware build at **4.0.40** for this reopen sync/archive
+
+## 4. Integration checks
+
+- [ ] 4.1 On device with 4.0.40: joined ZIP with `slave.bin` — RF % climbs; slave reaches expected version; no false complete-image verify
+- [ ] 4.2 Host-only package still applies host only
+- [ ] 4.3 Mid-transfer frame loss within budget still resends packed last frame (seq preserved)
 
 ## Workflow follow-up
 
-- Archive the change after review and successful device validation.
+- Archive after sync (user-requested reopen cycle); device tasks 4.x may remain open.
 - Keep fragile-zone allow entries temporary; remove after the edit session ends.
