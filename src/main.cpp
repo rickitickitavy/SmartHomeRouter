@@ -21,6 +21,7 @@
 #include "ActionCommandQueue.h"
 #include "AutomationStore.h"
 #include "CameraStore.h"
+#include "SceneStore.h"
 #include "AutomationEngine.h"
 #include "EmailSender.h"
 #include "HistoryStore.h"
@@ -74,6 +75,7 @@ static ConsoleStore *consoleStore = nullptr;
 #if defined(BOARD_ROLE_HOST)
 static AutomationStore *automationStore = nullptr;
 static CameraStore *cameraStore = nullptr;
+static SceneStore *sceneStore = nullptr;
 static AutomationEngine *automationEngine = nullptr;
 static EmailSender *emailSender = nullptr;
 static HistoryStore historyStore;
@@ -151,6 +153,9 @@ static void pumpHostDeferredStoreWork() {
     }
     if (cameraStore != nullptr) {
         cameraStore->persistIfDue();
+    }
+    if (sceneStore != nullptr) {
+        sceneStore->persistIfDue();
     }
 #endif
 }
@@ -2034,6 +2039,8 @@ static void setupHost() {
     automationStore->begin(true);
     cameraStore = new CameraStore();
     cameraStore->begin(true);
+    sceneStore = new SceneStore();
+    sceneStore->begin(true);
     automationEngine = new AutomationEngine();
     emailSender = new EmailSender(settingsManager);
     topicMap = settingsManager->deviceMap();
@@ -2042,7 +2049,7 @@ static void setupHost() {
     wifiController = new WiFiController(settingsManager, forceAp);
     mqttClient = new MqttClient(settingsManager, topicMap);
     mqttBroker = new MqttBroker(settingsManager);
-    webConsole = new WebConsole(settingsManager, userStore, consoleStore, automationStore, cameraStore);
+    webConsole = new WebConsole(settingsManager, userStore, consoleStore, automationStore, cameraStore, sceneStore);
     webConsole->setDeviceServices(
         foundDevices,
         startDeviceSearch,

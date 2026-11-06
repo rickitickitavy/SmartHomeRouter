@@ -6,6 +6,7 @@
     <title>Control consoles</title>
     <link rel="stylesheet" type="text/css" href="css/all.css"/>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css"/>
+    <script src="/js/scene.js"></script>
     <script>
 
 
@@ -93,9 +94,8 @@
             rangeEndUnix: 0,
             payload: null,
             layout: null,
-            smooth: true,
-            smoothWindow: 12,
-            smoothType: "ema"
+            smooth: false,
+            smoothWindow: 5
         };
         var HISTORY_STATE_COLORS = [
             "#03a9f4", "#4caf50", "#ff9800", "#f44336", "#9c27b0",
@@ -342,24 +342,12 @@
         function historySmoothWindowSize() {
             var input = document.getElementById("historyChartSmoothWindow");
             var value = input ? Number(input.value) : historyChartState.smoothWindow;
-            if (!isFinite(value) || value < 1) value = 12;
+            if (!isFinite(value) || value < 1) value = 5;
             value = Math.floor(value);
             if (value < 1) value = 1;
             if (value > 128) value = 128;
             historyChartState.smoothWindow = value;
             if (input && String(input.value) !== String(value)) input.value = String(value);
-            return value;
-        }
-        function historySmoothType() {
-            var select = document.getElementById("historyChartSmoothType");
-            var value = select ? String(select.value || "") : String(historyChartState.smoothType || "");
-            if (value !== "avg" && value !== "ema") {
-                value = "ema";
-            }
-            historyChartState.smoothType = value;
-            if (select && select.value !== value) {
-                select.value = value;
-            }
             return value;
         }
         function historyChartIsDiscretePayload(payload) {
@@ -374,18 +362,13 @@
             var wrap = document.getElementById("historyChartSmoothControls");
             var flag = document.getElementById("historyChartSmooth");
             var input = document.getElementById("historyChartSmoothWindow");
-            var typeSelect = document.getElementById("historyChartSmoothType");
             var allowSmooth = historyChartAllowsSmooth();
             if (wrap) wrap.hidden = !allowSmooth;
             if (!allowSmooth) return;
             if (flag) flag.checked = !!historyChartState.smooth;
             if (input) {
-                input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 12);
+                input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 5);
                 input.disabled = !historyChartState.smooth;
-            }
-            if (typeSelect) {
-                typeSelect.value = historyChartState.smoothType === "ema" ? "ema" : "avg";
-                typeSelect.disabled = !historyChartState.smooth;
             }
         }
         function onHistoryChartSmoothChange() {
@@ -393,7 +376,6 @@
             var flag = document.getElementById("historyChartSmooth");
             historyChartState.smooth = !!(flag && flag.checked);
             historySmoothWindowSize();
-            historySmoothType();
             historySyncSmoothControls();
             historyRedrawFromPayload();
         }
@@ -426,25 +408,7 @@
             }
             return smoothed;
         }
-        function historySmoothSeriesEma(series, windowSize) {
-            var windowCount = Math.max(1, Math.floor(Number(windowSize) || 5));
-            if (!series || !series.length) return series || [];
-            if (windowCount <= 1) return series.slice();
-            var alpha = 2 / (windowCount + 1);
-            var smoothed = [];
-            var ema = series[0].value;
-            smoothed.push({ unix: series[0].unix, value: ema });
-            var index;
-            for (index = 1; index < series.length; index++) {
-                ema = alpha * series[index].value + (1 - alpha) * ema;
-                smoothed.push({ unix: series[index].unix, value: ema });
-            }
-            return smoothed;
-        }
-        function historySmoothSeries(series, windowSize, smoothType) {
-            if (smoothType === "ema") {
-                return historySmoothSeriesEma(series, windowSize);
-            }
+        function historySmoothSeries(series, windowSize) {
             return historySmoothSeriesAvg(series, windowSize);
         }
         function historyRedrawFromPayload() {
@@ -463,10 +427,7 @@
             historyChartState.payload = null;
             historyChartState.hours = 24;
             historyChartState.rangeEndUnix = Math.floor(Date.now() / 1000);
-            if (historyChartState.smoothWindow < 1) historyChartState.smoothWindow = 12;
-            if (historyChartState.smoothType !== "avg" && historyChartState.smoothType !== "ema") {
-                historyChartState.smoothType = "ema";
-            }
+            if (historyChartState.smoothWindow < 1) historyChartState.smoothWindow = 5;
             historySyncSmoothControls();
             if (title) title.textContent = query.title || "History";
             overlay.hidden = false;
@@ -656,7 +617,7 @@
                 return { unix: historyEpoch2010ToUnix(point.t), value: Number(point.v) };
             }).filter(function (point) { return isFinite(point.value); });
             if (historyChartState.smooth && historyChartAllowsSmooth()) {
-                series = historySmoothSeries(series, historySmoothWindowSize(), historySmoothType());
+                series = historySmoothSeries(series, historySmoothWindowSize());
             }
             if (!series.length) { historyChartState.layout = null; return; }
             var values = series.map(function (point) { return point.value; });
@@ -1039,6 +1000,48 @@
             document.documentElement.setAttribute("data-theme", normalizeThemeId(themeId));
         }
 
+        function accountFullscreenElement() {
+            return document.fullscreenElement
+                || document.webkitFullscreenElement
+                || document.msFullscreenElement
+                || null;
+        }
+
+        function syncAccountFullscreenButton() {
+            var button = document.getElementById("accountFullscreenBtn");
+            if (!button) {
+                return;
+            }
+            var active = !!accountFullscreenElement();
+            button.setAttribute("aria-pressed", active ? "true" : "false");
+            button.title = active ? "Exit full screen" : "Full screen";
+            button.setAttribute("aria-label", button.title);
+            button.classList.toggle("is-active", active);
+        }
+
+        function toggleAccountFullscreen() {
+            var active = accountFullscreenElement();
+            if (active) {
+                var exitFn = document.exitFullscreen
+                    || document.webkitExitFullscreen
+                    || document.msExitFullscreen;
+                if (exitFn) {
+                    Promise.resolve(exitFn.call(document)).catch(function () {});
+                }
+                return;
+            }
+            var root = document.documentElement;
+            var requestFn = root.requestFullscreen
+                || root.webkitRequestFullscreen
+                || root.msRequestFullscreen;
+            if (requestFn) {
+                Promise.resolve(requestFn.call(root)).catch(function () {});
+            }
+        }
+
+        document.addEventListener("fullscreenchange", syncAccountFullscreenButton);
+        document.addEventListener("webkitfullscreenchange", syncAccountFullscreenButton);
+
         function isOperatorUser(user) {
             if (!user) {
                 return false;
@@ -1047,7 +1050,7 @@
                 return true;
             }
             return !!(user.editDevices || user.addDevices || user.removeDevices || user.editUsers
-                || user.editConsoles || user.monitor);
+                || user.editConsoles || user.editScenes || user.monitor);
         }
 
         function showLoginForm() {
@@ -1609,8 +1612,18 @@
                     err.textContent = "Could not save theme";
                 });
             };
+            var fullscreenBtn = document.createElement("button");
+            fullscreenBtn.type = "button";
+            fullscreenBtn.id = "accountFullscreenBtn";
+            fullscreenBtn.className = "btn btn-secondary btn-icon";
+            fullscreenBtn.title = "Full screen";
+            fullscreenBtn.setAttribute("aria-label", "Full screen");
+            fullscreenBtn.setAttribute("aria-pressed", "false");
+            fullscreenBtn.textContent = "⛶";
+            fullscreenBtn.onclick = toggleAccountFullscreen;
             row.appendChild(select);
             row.appendChild(saveBtn);
+            row.appendChild(fullscreenBtn);
             field.appendChild(row);
             panel.appendChild(field);
             var signOutWrap = document.createElement("div");
@@ -3582,6 +3595,38 @@
                             ].join("|");
                         }
                         cellBody.appendChild(buildConsoleCameraView(cell, cameraLiveCacheKey));
+                    } else if (cell.content === "scene") {
+                        var sceneHost = document.createElement("div");
+                        sceneHost.className = "scene-cell-host";
+                        if (window.SceneKit) {
+                            SceneKit.mountSceneCell(sceneHost, cell.sceneId || "", {
+                                renderPin: function (pinEl, pin) {
+                                    pinEl.classList.add("scene-cell-pin-live");
+                                    if (pin.kind === "automation") {
+                                        pinEl.textContent = "A";
+                                        pinEl.title = pin.automationId || "automation";
+                                        return;
+                                    }
+                                    var pinBinding = {
+                                        ieee: pin.ieee || "",
+                                        channel: pin.channel || 1,
+                                        title: "",
+                                        unit: "",
+                                        decimals: -1,
+                                        param: pin.param || "",
+                                        viewStyle: pin.viewStyle === "gauge" ? "gauge" : "icon"
+                                    };
+                                    if (typeof buildBindingRow === "function") {
+                                        pinEl.appendChild(buildBindingRow(pinBinding));
+                                    } else {
+                                        pinEl.textContent = "•";
+                                    }
+                                }
+                            });
+                        } else {
+                            sceneHost.textContent = cell.sceneId || "Scene";
+                        }
+                        cellBody.appendChild(sceneHost);
                     } else if (cell.content === "device" && cell.binding) {
                         if (live && typeof placeBuildDeviceRow === "function") {
                             cellBody.appendChild(placeBuildDeviceRow(cell.binding));
@@ -4786,17 +4831,12 @@
                     </div>
                     <div id="historyChartSmoothControls" class="history-chart-smooth">
                         <div class="field-check">
-                            <input id="historyChartSmooth" type="checkbox" checked onchange="onHistoryChartSmoothChange()">
+                            <input id="historyChartSmooth" type="checkbox" onchange="onHistoryChartSmoothChange()">
                             <span>Smooth</span>
                         </div>
                         <label for="historyChartSmoothWindow">samples</label>
-                        <input id="historyChartSmoothWindow" type="number" min="1" max="128" step="1" value="12"
+                        <input id="historyChartSmoothWindow" type="number" min="1" max="128" step="1" value="5"
                                onchange="onHistoryChartSmoothChange()" oninput="onHistoryChartSmoothWindowInput()">
-                        <select id="historyChartSmoothType" aria-label="Smooth type"
-                                onchange="onHistoryChartSmoothChange()">
-                            <option value="avg">Avg</option>
-                            <option value="ema" selected>Ema</option>
-                        </select>
                     </div>
                 </div>
                 <div class="history-chart-range">

@@ -53,6 +53,7 @@ constexpr uint8_t SPI_USER_FLAG_BLOCKED = 0x20;
 constexpr uint8_t SPI_USER_FLAG_EDIT_CONSOLES = 0x40;
 constexpr uint8_t SPI_USER_FLAG_MONITOR = 0x80;
 constexpr uint8_t SPI_USER_FLAG2_CONTROL_DEVICES = 0x01;
+constexpr uint8_t SPI_USER_FLAG2_EDIT_SCENES = 0x02;
 constexpr size_t SPI_USER_SYNC_NAME_LEN = 32;
 constexpr size_t SPI_USER_SYNC_SALT_LEN = 16;
 constexpr size_t SPI_USER_SYNC_HASH_LEN = 32;

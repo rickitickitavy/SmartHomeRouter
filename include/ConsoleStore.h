@@ -69,6 +69,7 @@ struct ConsoleCompositeCell {
     char *cameraId;
     uint8_t cameraMode;
     uint8_t cameraChannel;
+    char *sceneId;
     ConsoleCompositeCell *next;
 };
 

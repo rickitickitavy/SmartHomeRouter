@@ -210,6 +210,9 @@ uint8_t ConsoleStore::parseCellContentId(const char *text) {
     if (text != nullptr && strcmp(text, "camera") == 0) {
         return CONSOLE_CELL_CONTENT_CAMERA;
     }
+    if (text != nullptr && strcmp(text, "scene") == 0) {
+        return CONSOLE_CELL_CONTENT_SCENE;
+    }
     return CONSOLE_CELL_CONTENT_EMPTY;
 }
 
@@ -222,6 +225,9 @@ const char *ConsoleStore::cellContentJsonId(uint8_t content) {
     }
     if (content == CONSOLE_CELL_CONTENT_CAMERA) {
         return "camera";
+    }
+    if (content == CONSOLE_CELL_CONTENT_SCENE) {
+        return "scene";
     }
     return "empty";
 }
@@ -395,6 +401,7 @@ void ConsoleStore::freeCompositeCellList(ConsoleCompositeCell *&listHead) {
         ConsoleCompositeCell *next = listHead->next;
         free(listHead->text);
         free(listHead->cameraId);
+        free(listHead->sceneId);
         if (listHead->binding != nullptr) {
             ConsoleBinding *binding = listHead->binding;
             listHead->binding = nullptr;
@@ -1225,6 +1232,7 @@ bool ConsoleStore::parseCompositeRows(const char *widgetJson, ConsoleCompositeRo
                 String alignVText;
                 String cameraIdText;
                 String cameraModeText;
+                String sceneIdText;
                 double cameraChannelValue = 1.0;
                 bool contour = false;
                 extractJsonDouble(cellObject.c_str(), "width", widthValue);
@@ -1235,6 +1243,7 @@ bool ConsoleStore::parseCompositeRows(const char *widgetJson, ConsoleCompositeRo
                 extractJsonString(cellObject.c_str(), "alignV", alignVText);
                 extractJsonString(cellObject.c_str(), "cameraId", cameraIdText);
                 extractJsonString(cellObject.c_str(), "cameraMode", cameraModeText);
+                extractJsonString(cellObject.c_str(), "sceneId", sceneIdText);
                 extractJsonDouble(cellObject.c_str(), "cameraChannel", cameraChannelValue);
                 extractJsonBool(cellObject.c_str(), "contour", contour);
                 if (widthValue <= 0.0 || widthValue != widthValue) {
@@ -1289,6 +1298,15 @@ bool ConsoleStore::parseCompositeRows(const char *widgetJson, ConsoleCompositeRo
                         cell->cameraChannel = 2;
                     } else {
                         cell->cameraChannel = 1;
+                    }
+                } else if (cell->content == CONSOLE_CELL_CONTENT_SCENE) {
+                    cell->sceneId = duplicateBoundedString(sceneIdText.c_str(), SCENE_ID_BUF - 1);
+                    if (cell->sceneId == nullptr) {
+                        free(cell);
+                        freeCompositeCellList(row->cells);
+                        free(row);
+                        freeCompositeRowList(*outRows);
+                        return false;
                     }
                 }
                 cell->next = nullptr;
@@ -1880,6 +1898,10 @@ void ConsoleStore::appendCompositeRowsJson(PsramJsonBuffer &json, const ConsoleC
                 json += cell->cameraMode == CAMERA_MODE_LIVE ? "live" : "jpegRefresh";
                 json += "\",\"cameraChannel\":";
                 json += String((unsigned int)(cell->cameraChannel == 2 ? 2 : 1));
+            } else if (cell->content == CONSOLE_CELL_CONTENT_SCENE) {
+                json += ",\"sceneId\":\"";
+                appendJsonEscaped(json, cell->sceneId != nullptr ? cell->sceneId : "", SCENE_ID_BUF);
+                json += "\"";
             }
             json += "}";
         }
