@@ -9,11 +9,12 @@
     function defaultPolygon(sceneSize) {
         var size = sceneSize > 0 ? sceneSize : 1;
         var half = size * 0.35;
+        // CCW in XZ when viewed from +Y so the floor normal faces up.
         return [
             { x: -half, z: -half },
-            { x: half, z: -half },
+            { x: -half, z: half },
             { x: half, z: half },
-            { x: -half, z: half }
+            { x: half, z: -half }
         ];
     }
 
@@ -380,48 +381,303 @@
         return sum / projected.length;
     }
 
-    function wallBoxFaces(seg, baseY, wallHeight, thickness, colorHex, alpha) {
+    function wallLength(seg) {
+        var dx = seg.x2 - seg.x1;
+        var dz = seg.z2 - seg.z1;
+        return Math.sqrt(dx * dx + dz * dz);
+    }
+
+    function pointOnWall(seg, t) {
+        return {
+            x: seg.x1 + (seg.x2 - seg.x1) * t,
+            z: seg.z1 + (seg.z2 - seg.z1) * t
+        };
+    }
+
+    function endpointsNear(ax, az, bx, bz, epsilon) {
+        return pointsNearEqual(ax, az, bx, bz, epsilon == null ? 1e-4 : epsilon);
+    }
+
+    function wallConnectedAt(walls, wallIndex, end, epsilon) {
+        var wall = walls[wallIndex];
+        if (!wall) {
+            return false;
+        }
+        var x = end === 1 ? wall.x1 : wall.x2;
+        var z = end === 1 ? wall.z1 : wall.z2;
+        var index;
+        for (index = 0; index < walls.length; index++) {
+            if (index === wallIndex) {
+                continue;
+            }
+            var other = walls[index];
+            if (endpointsNear(x, z, other.x1, other.z1, epsilon)
+                || endpointsNear(x, z, other.x2, other.z2, epsilon)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Thick wall box with optional end trims so joined corners do not X-overlap.
+    function wallBoxFaces(seg, baseY, wallHeight, thickness, colorHex, alpha, options) {
         var faces = [];
+        options = options || {};
         var dx = seg.x2 - seg.x1;
         var dz = seg.z2 - seg.z1;
         var len = Math.sqrt(dx * dx + dz * dz);
         if (len < 1e-9) {
             return faces;
         }
-        var nx = -dz / len;
-        var nz = dx / len;
-        var half = Math.max(0.005, thickness * 0.5);
+        var ux = dx / len;
+        var uz = dz / len;
+        var nx = -uz;
+        var nz = ux;
+        var half = Math.max(0.004, thickness * 0.5);
+        var trimStart = options.trimStart || 0;
+        var trimEnd = options.trimEnd || 0;
+        if (trimStart + trimEnd > len * 0.85) {
+            var scale = (len * 0.85) / (trimStart + trimEnd);
+            trimStart *= scale;
+            trimEnd *= scale;
+        }
+        var x1 = seg.x1 + ux * trimStart;
+        var z1 = seg.z1 + uz * trimStart;
+        var x2 = seg.x2 - ux * trimEnd;
+        var z2 = seg.z2 - uz * trimEnd;
         var y0 = baseY;
         var y1 = baseY + wallHeight;
-        var aOut = { x: seg.x1 + nx * half, y: y0, z: seg.z1 + nz * half };
-        var bOut = { x: seg.x2 + nx * half, y: y0, z: seg.z2 + nz * half };
-        var bIn = { x: seg.x2 - nx * half, y: y0, z: seg.z2 - nz * half };
-        var aIn = { x: seg.x1 - nx * half, y: y0, z: seg.z1 - nz * half };
+        var aOut = { x: x1 + nx * half, y: y0, z: z1 + nz * half };
+        var bOut = { x: x2 + nx * half, y: y0, z: z2 + nz * half };
+        var bIn = { x: x2 - nx * half, y: y0, z: z2 - nz * half };
+        var aIn = { x: x1 - nx * half, y: y0, z: z1 - nz * half };
         var aOutTop = { x: aOut.x, y: y1, z: aOut.z };
         var bOutTop = { x: bOut.x, y: y1, z: bOut.z };
         var bInTop = { x: bIn.x, y: y1, z: bIn.z };
         var aInTop = { x: aIn.x, y: y1, z: aIn.z };
-        // outer, inner, start cap, end cap, top
         faces.push({ points: [aOut, bOut, bOutTop, aOutTop], color: colorHex, alpha: alpha });
         faces.push({ points: [bIn, aIn, aInTop, bInTop], color: colorHex, alpha: alpha });
-        faces.push({ points: [aIn, aOut, aOutTop, aInTop], color: colorHex, alpha: alpha * 0.95 });
-        faces.push({ points: [bOut, bIn, bInTop, bOutTop], color: colorHex, alpha: alpha * 0.95 });
-        faces.push({ points: [aOutTop, bOutTop, bInTop, aInTop], color: colorHex, alpha: alpha * 0.9 });
+        if (!options.skipStartCap) {
+            faces.push({ points: [aIn, aOut, aOutTop, aInTop], color: colorHex, alpha: alpha });
+        }
+        if (!options.skipEndCap) {
+            faces.push({ points: [bOut, bIn, bInTop, bOutTop], color: colorHex, alpha: alpha });
+        }
+        faces.push({ points: [aOutTop, bOutTop, bInTop, aInTop], color: colorHex, alpha: alpha });
         return faces;
     }
 
-    function openingFace(seg, baseY, wallHeight, thickness, colorHex, alpha) {
-        // Thin inset panel on wall centerline, shorter than full wall height.
-        var lift = wallHeight * 0.15;
-        var panelHeight = wallHeight * 0.7;
+    function cornerPostFaces(x, z, baseY, wallHeight, thickness, colorHex) {
+        var half = Math.max(0.004, thickness * 0.5);
         return wallBoxFaces(
-            seg,
-            baseY + lift,
-            panelHeight,
-            Math.max(0.008, thickness * 0.55),
+            { x1: x - half, z1: z, x2: x + half, z2: z },
+            baseY,
+            wallHeight,
+            thickness,
             colorHex,
-            alpha
+            1,
+            { trimStart: 0, trimEnd: 0 }
         );
+    }
+
+    function projectOpeningOntoWall(wall, opening, maxDist) {
+        var len = wallLength(wall);
+        if (len < 1e-9) {
+            return null;
+        }
+        var a = projectOnSeg(opening.x1, opening.z1, wall);
+        var b = projectOnSeg(opening.x2, opening.z2, wall);
+        var distA = distPointToSeg(opening.x1, opening.z1, wall);
+        var distB = distPointToSeg(opening.x2, opening.z2, wall);
+        if (distA > maxDist || distB > maxDist) {
+            return null;
+        }
+        var t0 = Math.min(a.t, b.t);
+        var t1 = Math.max(a.t, b.t);
+        if (t0 < 0) {
+            t0 = 0;
+        }
+        if (t1 > 1) {
+            t1 = 1;
+        }
+        if (t1 - t0 < 0.02) {
+            return null;
+        }
+        return { t0: t0, t1: t1 };
+    }
+
+    function wallSlab(wall, t0, t1, baseY, height, thickness, colorHex, alpha, options) {
+        if (height <= 1e-6 || t1 - t0 <= 1e-4) {
+            return [];
+        }
+        var a = pointOnWall(wall, t0);
+        var b = pointOnWall(wall, t1);
+        return wallBoxFaces(
+            { x1: a.x, z1: a.z, x2: b.x, z2: b.z },
+            baseY,
+            height,
+            thickness,
+            colorHex,
+            alpha,
+            options || {}
+        );
+    }
+
+    function wallFacesWithOpenings(wall, openings, baseY, wallHeight, thickness, joinOptions) {
+        var faces = [];
+        var wallColor = "#cfd6e0";
+        var half = Math.max(0.004, thickness * 0.5);
+        var join = joinOptions || {};
+        var trimStart = join.connectedStart ? half : 0;
+        var trimEnd = join.connectedEnd ? half : 0;
+        var skipStartCap = !!join.connectedStart;
+        var skipEndCap = !!join.connectedEnd;
+        var cuts = [];
+        openings.forEach(function (opening) {
+            var span = projectOpeningOntoWall(wall, opening.seg, Math.max(thickness * 2, 0.04));
+            if (!span) {
+                return;
+            }
+            cuts.push({
+                t0: span.t0,
+                t1: span.t1,
+                color: opening.color,
+                y0: opening.y0,
+                y1: opening.y1
+            });
+        });
+        cuts.sort(function (left, right) {
+            return left.t0 - right.t0;
+        });
+
+        function solidSpan(t0, t1, y0, height, color) {
+            if (t1 <= t0 || height <= 1e-6) {
+                return;
+            }
+            var options = {
+                trimStart: 0,
+                trimEnd: 0,
+                skipStartCap: true,
+                skipEndCap: true
+            };
+            // Apply join trims only on the full-length ends of the original wall.
+            if (t0 <= 1e-4) {
+                options.trimStart = trimStart;
+                options.skipStartCap = skipStartCap;
+            }
+            if (t1 >= 1 - 1e-4) {
+                options.trimEnd = trimEnd;
+                options.skipEndCap = skipEndCap;
+            }
+            faces = faces.concat(wallSlab(wall, t0, t1, y0, height, thickness, color, 1, options));
+        }
+
+        var cursor = 0;
+        if (!cuts.length) {
+            solidSpan(0, 1, baseY, wallHeight, wallColor);
+            return faces;
+        }
+        cuts.forEach(function (cut) {
+            var t0 = Math.max(cursor, cut.t0);
+            var t1 = Math.max(t0, cut.t1);
+            if (t0 > cursor + 1e-4) {
+                solidSpan(cursor, t0, baseY, wallHeight, wallColor);
+            }
+            if (cut.y0 > baseY + 1e-4) {
+                solidSpan(t0, t1, baseY, cut.y0 - baseY, wallColor);
+            }
+            if (cut.y1 < baseY + wallHeight - 1e-4) {
+                solidSpan(t0, t1, cut.y1, (baseY + wallHeight) - cut.y1, wallColor);
+            }
+            // Thin colored jambs only — never fill the opening.
+            var openingLen = (t1 - t0) * wallLength(wall);
+            var jamb = Math.min(0.005, openingLen * 0.1);
+            if (jamb * 2.2 < openingLen) {
+                var dt = jamb / wallLength(wall);
+                faces = faces.concat(wallSlab(
+                    wall, t0, t0 + dt, cut.y0, cut.y1 - cut.y0, thickness, cut.color, 1,
+                    { skipStartCap: true, skipEndCap: true }
+                ));
+                faces = faces.concat(wallSlab(
+                    wall, t1 - dt, t1, cut.y0, cut.y1 - cut.y0, thickness, cut.color, 1,
+                    { skipStartCap: true, skipEndCap: true }
+                ));
+            }
+            cursor = Math.max(cursor, t1);
+        });
+        if (cursor < 1 - 1e-4) {
+            solidSpan(cursor, 1, baseY, wallHeight, wallColor);
+        }
+        return faces;
+    }
+
+    function closedLoopFromWalls(walls) {
+        if (!walls || walls.length < 3) {
+            return null;
+        }
+        var epsilon = 1e-4;
+        var used = walls.map(function () { return false; });
+        var points = [{ x: walls[0].x1, z: walls[0].z1 }, { x: walls[0].x2, z: walls[0].z2 }];
+        used[0] = true;
+        var guard;
+        for (guard = 0; guard < walls.length + 2; guard++) {
+            var tip = points[points.length - 1];
+            var found = -1;
+            var reverse = false;
+            var index;
+            for (index = 0; index < walls.length; index++) {
+                if (used[index]) {
+                    continue;
+                }
+                if (endpointsNear(tip.x, tip.z, walls[index].x1, walls[index].z1, epsilon)) {
+                    found = index;
+                    reverse = false;
+                    break;
+                }
+                if (endpointsNear(tip.x, tip.z, walls[index].x2, walls[index].z2, epsilon)) {
+                    found = index;
+                    reverse = true;
+                    break;
+                }
+            }
+            if (found < 0) {
+                break;
+            }
+            used[found] = true;
+            var next = reverse
+                ? { x: walls[found].x1, z: walls[found].z1 }
+                : { x: walls[found].x2, z: walls[found].z2 };
+            points.push(next);
+        }
+        var allUsed = used.every(function (flag) { return flag; });
+        if (!allUsed || points.length < 4) {
+            return null;
+        }
+        var first = points[0];
+        var last = points[points.length - 1];
+        if (!endpointsNear(first.x, first.z, last.x, last.z, epsilon)) {
+            return null;
+        }
+        points.pop();
+        return points;
+    }
+
+    function makeFloorFace(points2d, baseY, colorHex) {
+        if (!points2d || points2d.length < 3) {
+            return null;
+        }
+        var floorPoints = points2d.map(function (corner) {
+            return { x: corner.x, y: baseY + 0.001, z: corner.z };
+        });
+        if (faceNormal(floorPoints).y < 0) {
+            floorPoints = floorPoints.slice().reverse();
+        }
+        return {
+            points: floorPoints,
+            color: colorHex || DEFAULT_FLOOR_COLOR,
+            alpha: 1,
+            forceDraw: true
+        };
     }
 
     function buildSceneFaces(model) {
@@ -430,39 +686,67 @@
         var thickness = model.wallThickness || DEFAULT_WALL_THICKNESS;
         (model.floors || []).forEach(function (floor) {
             var baseY = floor.y || 0;
-            var polygon = floor.polygon || [];
-            if (polygon.length >= 3) {
-                var floorPoints = polygon.map(function (corner) {
-                    return { x: corner.x, y: baseY, z: corner.z };
-                });
-                faces.push({
-                    points: floorPoints,
-                    color: floor.color || DEFAULT_FLOOR_COLOR,
-                    alpha: 0.92
-                });
+            var walls = floor.walls || [];
+            var loop = closedLoopFromWalls(walls);
+            var floorFace = makeFloorFace(floor.polygon, baseY, floor.color);
+            // Prefer a closed wall loop for the visible floor plate so the room is never empty.
+            if (loop) {
+                floorFace = makeFloorFace(loop, baseY, floor.color) || floorFace;
             }
-            (floor.walls || []).forEach(function (seg) {
-                faces = faces.concat(wallBoxFaces(
-                    seg,
-                    baseY,
-                    wallHeight,
-                    thickness,
-                    "#d8dee8",
-                    0.96
-                ));
-            });
+            if (floorFace) {
+                faces.push(floorFace);
+            }
+
+            var openings = [];
             (floor.windows || []).forEach(function (seg) {
-                faces = faces.concat(openingFace(seg, baseY, wallHeight, thickness, "#4fc3f7", 0.88));
+                openings.push({
+                    seg: seg,
+                    color: "#4fc3f7",
+                    y0: baseY + wallHeight * 0.28,
+                    y1: baseY + wallHeight * 0.78
+                });
             });
             (floor.doors || []).forEach(function (seg) {
-                faces = faces.concat(openingFace(seg, baseY, wallHeight, thickness, "#ffb74d", 0.9));
+                openings.push({
+                    seg: seg,
+                    color: "#ffb74d",
+                    y0: baseY,
+                    y1: baseY + wallHeight * 0.92
+                });
+            });
+
+            var cornerKeys = {};
+            walls.forEach(function (seg, index) {
+                var join = {
+                    connectedStart: wallConnectedAt(walls, index, 1),
+                    connectedEnd: wallConnectedAt(walls, index, 2)
+                };
+                faces = faces.concat(wallFacesWithOpenings(
+                    seg, openings, baseY, wallHeight, thickness, join
+                ));
+                if (join.connectedStart) {
+                    cornerKeys[seg.x1.toFixed(5) + "," + seg.z1.toFixed(5)] = {
+                        x: seg.x1, z: seg.z1
+                    };
+                }
+                if (join.connectedEnd) {
+                    cornerKeys[seg.x2.toFixed(5) + "," + seg.z2.toFixed(5)] = {
+                        x: seg.x2, z: seg.z2
+                    };
+                }
+            });
+            Object.keys(cornerKeys).forEach(function (key) {
+                var corner = cornerKeys[key];
+                faces = faces.concat(cornerPostFaces(
+                    corner.x, corner.z, baseY, wallHeight, thickness, "#cfd6e0"
+                ));
             });
         });
         return faces;
     }
 
     function paintFaces(ctx, faces, yaw, pitch, distance, width, height, pixelsPerUnit, center) {
-        var light = normalize3({ x: 0.45, y: 0.85, z: 0.3 });
+        var light = normalize3({ x: 0.35, y: 0.9, z: 0.25 });
         var shift = center || { x: 0, y: 0, z: 0 };
         var prepared = faces.map(function (face) {
             var projected = face.points.map(function (point) {
@@ -472,23 +756,25 @@
                     z: point.z - shift.z
                 }, yaw, pitch, distance, width, height, pixelsPerUnit);
             });
-            var normal = faceNormal(face.points);
-            // Skip faces aimed away from the camera (reduces underside clutter).
-            var camDir = normalize3({
-                x: Math.sin(yaw) * Math.cos(pitch),
-                y: Math.sin(pitch),
-                z: Math.cos(yaw) * Math.cos(pitch)
-            });
-            var facing = normal.x * camDir.x + normal.y * camDir.y + normal.z * camDir.z;
-            if (facing < -0.05) {
+            // Screen-space cull (canvas Y grows downward).
+            var facingScreen = 0;
+            if (projected.length >= 3) {
+                facingScreen = (projected[1].x - projected[0].x) * (projected[2].y - projected[0].y)
+                    - (projected[1].y - projected[0].y) * (projected[2].x - projected[0].x);
+            }
+            if (!face.forceDraw && facingScreen > 0) {
                 return null;
             }
-            var shade = 0.42 + 0.58 * Math.max(0, facing);
+            var normal = faceNormal(face.points);
+            var facing = Math.max(0.2, Math.abs(
+                normal.x * light.x + normal.y * light.y + normal.z * light.z
+            ));
+            var shade = 0.45 + 0.55 * facing;
             return {
                 projected: projected,
                 depth: averageDepth(projected),
                 fill: shadeRgba(face.color, shade, face.alpha == null ? 1 : face.alpha),
-                stroke: shadeRgba(face.color, shade * 0.75, 0.5)
+                stroke: shadeRgba(face.color, shade * 0.7, 0.65)
             };
         }).filter(function (face) {
             return !!face;
@@ -721,6 +1007,25 @@
             next = 0.25;
         }
         this.model.wallThickness = next;
+        this.notify();
+        this.draw();
+    };
+
+    SceneDesigner.prototype.getWallHeight = function () {
+        return this.model.wallHeight > 0 ? this.model.wallHeight : DEFAULT_WALL_HEIGHT;
+    };
+
+    SceneDesigner.prototype.setWallHeight = function (value) {
+        var next = Number(value);
+        if (!isFinite(next)) {
+            return;
+        }
+        if (next < 0.05) {
+            next = 0.05;
+        } else if (next > 1.5) {
+            next = 1.5;
+        }
+        this.model.wallHeight = next;
         this.notify();
         this.draw();
     };

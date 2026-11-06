@@ -12431,11 +12431,13 @@
             syncSceneGeometryToolButtons();
             syncSceneFloorColorPicker();
             syncSceneWallThicknessInput();
+            syncSceneWallHeightInput();
             window.requestAnimationFrame(function () {
                 ensureSceneDesigner();
                 syncSceneGeometryToolButtons();
                 syncSceneFloorColorPicker();
                 syncSceneWallThicknessInput();
+                syncSceneWallHeightInput();
             });
         }
 
@@ -12473,13 +12475,42 @@
             syncSceneGeometryToolButtons();
         }
 
+        function ensureSceneFloorColorPicker() {
+            var host = document.getElementById("sceneFloorColorControl");
+            if (!host) {
+                return null;
+            }
+            if (host.getAttribute("data-ready") === "1" && typeof host.setColor === "function") {
+                return host;
+            }
+            host.innerHTML = "";
+            var control = buildConsoleColorPickerControl("#6a8fad", function (hex) {
+                var designer = ensureSceneDesigner();
+                if (!designer) {
+                    return;
+                }
+                designer.setCurrentFloorColor(hex);
+                sceneGeometryDirty = true;
+            });
+            control.setAttribute("aria-label", "Floor color");
+            host.appendChild(control);
+            host.getColor = function () {
+                return control.getColor();
+            };
+            host.setColor = function (hex) {
+                control.setColor(hex);
+            };
+            host.setAttribute("data-ready", "1");
+            return host;
+        }
+
         function syncSceneFloorColorPicker() {
-            var picker = document.getElementById("sceneFloorColor");
+            var host = ensureSceneFloorColorPicker();
             var designer = sceneDesigner || ensureSceneDesigner();
-            if (!picker || !designer) {
+            if (!host || !designer || typeof host.setColor !== "function") {
                 return;
             }
-            picker.value = designer.getCurrentFloorColor();
+            host.setColor(designer.getCurrentFloorColor());
         }
 
         function syncSceneWallThicknessInput() {
@@ -12491,13 +12522,13 @@
             input.value = String(designer.getWallThickness());
         }
 
-        function onSceneFloorColorInput(event) {
-            var designer = ensureSceneDesigner();
-            if (!designer || !event || !event.target) {
+        function syncSceneWallHeightInput() {
+            var input = document.getElementById("sceneWallHeight");
+            var designer = sceneDesigner || ensureSceneDesigner();
+            if (!input || !designer) {
                 return;
             }
-            designer.setCurrentFloorColor(event.target.value);
-            sceneGeometryDirty = true;
+            input.value = String(designer.getWallHeight());
         }
 
         function onSceneWallThicknessInput(event) {
@@ -12506,6 +12537,15 @@
                 return;
             }
             designer.setWallThickness(event.target.value);
+            sceneGeometryDirty = true;
+        }
+
+        function onSceneWallHeightInput(event) {
+            var designer = ensureSceneDesigner();
+            if (!designer || !event || !event.target) {
+                return;
+            }
+            designer.setWallHeight(event.target.value);
             sceneGeometryDirty = true;
         }
 
@@ -20178,13 +20218,18 @@
             </button>
             <div class="scene-floor-color" title="Floor color">
                 <span class="mdi mdi-palette" aria-hidden="true"></span>
-                <input id="sceneFloorColor" type="color" value="#6a8fad" aria-label="Floor color"
-                       oninput="onSceneFloorColorInput(event)">
+                <div id="sceneFloorColorControl" class="console-color-picker-control-host"
+                     aria-label="Floor color"></div>
             </div>
             <div class="scene-wall-thickness" title="Wall thickness">
                 <span class="mdi mdi-arrow-expand-horizontal" aria-hidden="true"></span>
                 <input id="sceneWallThickness" type="number" min="0.01" max="0.25" step="0.01" value="0.04"
                        aria-label="Wall thickness" oninput="onSceneWallThicknessInput(event)">
+            </div>
+            <div class="scene-wall-height" title="Wall height">
+                <span class="mdi mdi-arrow-expand-vertical" aria-hidden="true"></span>
+                <input id="sceneWallHeight" type="number" min="0.05" max="1.5" step="0.01" value="0.15"
+                       aria-label="Wall height" oninput="onSceneWallHeightInput(event)">
             </div>
         </div>
         <div class="scene-designer-canvas-wrap">

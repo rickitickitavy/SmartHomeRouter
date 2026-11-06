@@ -5051,7 +5051,8 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 }
 
 .scene-floor-color,
-.scene-wall-thickness {
+.scene-wall-thickness,
+.scene-wall-height {
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
@@ -5063,17 +5064,12 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     color: var(--text);
 }
 
-.scene-floor-color input[type="color"] {
-    width: 2rem;
-    height: 2rem;
-    padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--bg);
-    cursor: pointer;
+.scene-floor-color .console-color-picker-control-host {
+    min-height: 36px;
 }
 
-.scene-wall-thickness input[type="number"] {
+.scene-wall-thickness input[type="number"],
+.scene-wall-height input[type="number"] {
     width: 4.5rem;
     min-height: 36px;
     padding: 0 0.4rem;
