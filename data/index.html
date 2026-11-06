@@ -12196,16 +12196,13 @@
 
         function syncSceneGeometryToolButtons() {
             var designer = sceneDesigner;
-            var tool = designer ? designer.tool : "wall";
             var viewOn = designer ? !!designer.viewMode : false;
             var buttons = document.querySelectorAll("#sceneGeometryDialog [data-scene-tool]");
             var index;
             for (index = 0; index < buttons.length; index++) {
                 var button = buttons[index];
-                var value = button.getAttribute("data-scene-tool");
-                var active = value === tool;
-                button.classList.toggle("is-active", active);
-                button.setAttribute("aria-pressed", active ? "true" : "false");
+                button.classList.remove("is-active");
+                button.setAttribute("aria-pressed", "false");
             }
             var viewBtn = document.getElementById("sceneViewToggleBtn");
             if (viewBtn) {
@@ -12432,9 +12429,13 @@
             }
             sceneGeometryDirty = false;
             syncSceneGeometryToolButtons();
+            syncSceneFloorColorPicker();
+            syncSceneWallThicknessInput();
             window.requestAnimationFrame(function () {
                 ensureSceneDesigner();
                 syncSceneGeometryToolButtons();
+                syncSceneFloorColorPicker();
+                syncSceneWallThicknessInput();
             });
         }
 
@@ -12468,8 +12469,44 @@
             if (designer.viewMode) {
                 designer.setViewMode(false);
             }
-            designer.setTool(tool);
+            designer.applyTool(tool);
             syncSceneGeometryToolButtons();
+        }
+
+        function syncSceneFloorColorPicker() {
+            var picker = document.getElementById("sceneFloorColor");
+            var designer = sceneDesigner || ensureSceneDesigner();
+            if (!picker || !designer) {
+                return;
+            }
+            picker.value = designer.getCurrentFloorColor();
+        }
+
+        function syncSceneWallThicknessInput() {
+            var input = document.getElementById("sceneWallThickness");
+            var designer = sceneDesigner || ensureSceneDesigner();
+            if (!input || !designer) {
+                return;
+            }
+            input.value = String(designer.getWallThickness());
+        }
+
+        function onSceneFloorColorInput(event) {
+            var designer = ensureSceneDesigner();
+            if (!designer || !event || !event.target) {
+                return;
+            }
+            designer.setCurrentFloorColor(event.target.value);
+            sceneGeometryDirty = true;
+        }
+
+        function onSceneWallThicknessInput(event) {
+            var designer = ensureSceneDesigner();
+            if (!designer || !event || !event.target) {
+                return;
+            }
+            designer.setWallThickness(event.target.value);
+            sceneGeometryDirty = true;
         }
 
         function sceneGeometryAddFloor() {
@@ -12477,6 +12514,7 @@
             if (designer) {
                 designer.addFloor();
                 syncSceneGeometryToolButtons();
+                syncSceneFloorColorPicker();
             }
         }
 
@@ -20138,6 +20176,16 @@
                     aria-label="View scene" aria-pressed="false" onclick="sceneGeometryToggleView()">
                 <span class="mdi mdi-cube-outline" aria-hidden="true"></span>
             </button>
+            <div class="scene-floor-color" title="Floor color">
+                <span class="mdi mdi-palette" aria-hidden="true"></span>
+                <input id="sceneFloorColor" type="color" value="#6a8fad" aria-label="Floor color"
+                       oninput="onSceneFloorColorInput(event)">
+            </div>
+            <div class="scene-wall-thickness" title="Wall thickness">
+                <span class="mdi mdi-arrow-expand-horizontal" aria-hidden="true"></span>
+                <input id="sceneWallThickness" type="number" min="0.01" max="0.25" step="0.01" value="0.04"
+                       aria-label="Wall thickness" oninput="onSceneWallThicknessInput(event)">
+            </div>
         </div>
         <div class="scene-designer-canvas-wrap">
             <canvas id="sceneGeometryCanvas"></canvas>
