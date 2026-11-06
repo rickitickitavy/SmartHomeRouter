@@ -20212,7 +20212,8 @@
                     aria-label="Remove selected element" onclick="sceneGeometryRemoveSelected()">
                 <span class="mdi mdi-trash-can-outline" aria-hidden="true"></span>
             </button>
-            <button type="button" id="sceneViewToggleBtn" class="btn btn-secondary btn-icon" title="View scene"
+            <button type="button" id="sceneViewToggleBtn"
+                    class="btn btn-secondary btn-icon scene-view-toggle-btn" title="View scene"
                     aria-label="View scene" aria-pressed="false" onclick="sceneGeometryToggleView()">
                 <span class="mdi mdi-cube-outline" aria-hidden="true"></span>
             </button>
@@ -20223,7 +20224,7 @@
             </div>
             <div class="scene-wall-thickness" title="Wall thickness">
                 <span class="mdi mdi-arrow-expand-horizontal" aria-hidden="true"></span>
-                <input id="sceneWallThickness" type="number" min="0.01" max="0.25" step="0.01" value="0.04"
+                <input id="sceneWallThickness" type="number" min="0.005" max="0.25" step="0.005" value="0.01"
                        aria-label="Wall thickness" oninput="onSceneWallThicknessInput(event)">
             </div>
             <div class="scene-wall-height" title="Wall height">

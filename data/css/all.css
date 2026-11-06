@@ -5050,6 +5050,10 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     color: var(--accent);
 }
 
+.scene-designer-toolbar .scene-view-toggle-btn {
+    margin-left: 0.75rem;
+}
+
 .scene-floor-color,
 .scene-wall-thickness,
 .scene-wall-height {

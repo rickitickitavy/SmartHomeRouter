@@ -3,7 +3,7 @@
     "use strict";
 
     var DEFAULT_FLOOR_COLOR = "#6a8fad";
-    var DEFAULT_WALL_THICKNESS = 0.04;
+    var DEFAULT_WALL_THICKNESS = 0.01;
     var DEFAULT_WALL_HEIGHT = 0.15;
 
     function defaultPolygon(sceneSize) {
@@ -64,6 +64,8 @@
         if (!floor.color || typeof floor.color !== "string") {
             floor.color = DEFAULT_FLOOR_COLOR;
         }
+        // Keep every floor on the same ground plane.
+        floor.y = 0;
         if (!Array.isArray(floor.walls)) {
             floor.walls = [];
         }
@@ -76,6 +78,7 @@
         if (!Array.isArray(floor.polygon) || floor.polygon.length < 3) {
             floor.polygon = polygonFromWalls(floor.walls) || defaultPolygon(sceneSize);
         }
+        syncFloorOpenings(floor);
         return floor;
     }
 
@@ -132,6 +135,75 @@
                 seg.x2 = toX;
                 seg.z2 = toZ;
             }
+        });
+        syncFloorOpenings(floor);
+    }
+
+    function bindOpeningToNearestWall(opening, walls) {
+        if (!opening || !walls || !walls.length) {
+            return;
+        }
+        if (typeof opening.wallIndex === "number"
+            && walls[opening.wallIndex]
+            && opening.t0 != null
+            && opening.t1 != null) {
+            return;
+        }
+        var bestIndex = -1;
+        var bestDist = 1e9;
+        var bestT0 = 0;
+        var bestT1 = 1;
+        walls.forEach(function (wall, index) {
+            var dist = Math.max(
+                distPointToSeg(opening.x1, opening.z1, wall),
+                distPointToSeg(opening.x2, opening.z2, wall)
+            );
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestIndex = index;
+                var a = projectOnSeg(opening.x1, opening.z1, wall);
+                var b = projectOnSeg(opening.x2, opening.z2, wall);
+                bestT0 = Math.min(a.t, b.t);
+                bestT1 = Math.max(a.t, b.t);
+            }
+        });
+        if (bestIndex < 0) {
+            return;
+        }
+        if (bestT1 - bestT0 < 0.02) {
+            bestT0 = Math.max(0, Math.min(0.4, bestT0));
+            bestT1 = Math.min(1, bestT0 + 0.2);
+        }
+        opening.wallIndex = bestIndex;
+        opening.t0 = bestT0;
+        opening.t1 = bestT1;
+    }
+
+    function syncOpeningGeometry(opening, walls) {
+        if (!opening || !walls) {
+            return;
+        }
+        bindOpeningToNearestWall(opening, walls);
+        var wall = walls[opening.wallIndex];
+        if (!wall || opening.t0 == null || opening.t1 == null) {
+            return;
+        }
+        var a = pointOnWall(wall, opening.t0);
+        var b = pointOnWall(wall, opening.t1);
+        opening.x1 = a.x;
+        opening.z1 = a.z;
+        opening.x2 = b.x;
+        opening.z2 = b.z;
+    }
+
+    function syncFloorOpenings(floor) {
+        if (!floor) {
+            return;
+        }
+        ["windows", "doors"].forEach(function (listName) {
+            (floor[listName] || []).forEach(function (opening) {
+                syncOpeningGeometry(opening, floor.walls || []);
+            });
         });
     }
 
@@ -419,7 +491,16 @@
         return false;
     }
 
-    // Thick wall box with optional end trims so joined corners do not X-overlap.
+    function pushWallFace(faces, points, colorHex) {
+        faces.push({
+            points: points,
+            color: colorHex,
+            alpha: 1,
+            forceDraw: true
+        });
+    }
+
+    // Thick wall box. forceDraw keeps both faces + top cap visible (real thickness).
     function wallBoxFaces(seg, baseY, wallHeight, thickness, colorHex, alpha, options) {
         var faces = [];
         options = options || {};
@@ -433,7 +514,7 @@
         var uz = dz / len;
         var nx = -uz;
         var nz = ux;
-        var half = Math.max(0.004, thickness * 0.5);
+        var half = Math.max(0.0005, thickness * 0.5);
         var trimStart = options.trimStart || 0;
         var trimEnd = options.trimEnd || 0;
         if (trimStart + trimEnd > len * 0.85) {
@@ -455,29 +536,194 @@
         var bOutTop = { x: bOut.x, y: y1, z: bOut.z };
         var bInTop = { x: bIn.x, y: y1, z: bIn.z };
         var aInTop = { x: aIn.x, y: y1, z: aIn.z };
-        faces.push({ points: [aOut, bOut, bOutTop, aOutTop], color: colorHex, alpha: alpha });
-        faces.push({ points: [bIn, aIn, aInTop, bInTop], color: colorHex, alpha: alpha });
+        pushWallFace(faces, [aOut, bOut, bOutTop, aOutTop], colorHex);
+        pushWallFace(faces, [bIn, aIn, aInTop, bInTop], colorHex);
         if (!options.skipStartCap) {
-            faces.push({ points: [aIn, aOut, aOutTop, aInTop], color: colorHex, alpha: alpha });
+            pushWallFace(faces, [aIn, aOut, aOutTop, aInTop], colorHex);
         }
         if (!options.skipEndCap) {
-            faces.push({ points: [bOut, bIn, bInTop, bOutTop], color: colorHex, alpha: alpha });
+            pushWallFace(faces, [bOut, bIn, bInTop, bOutTop], colorHex);
         }
-        faces.push({ points: [aOutTop, bOutTop, bInTop, aInTop], color: colorHex, alpha: alpha });
+        pushWallFace(faces, [aOutTop, bOutTop, bInTop, aInTop], colorHex);
         return faces;
     }
 
-    function cornerPostFaces(x, z, baseY, wallHeight, thickness, colorHex) {
-        var half = Math.max(0.004, thickness * 0.5);
-        return wallBoxFaces(
-            { x1: x - half, z1: z, x2: x + half, z2: z },
-            baseY,
-            wallHeight,
-            thickness,
-            colorHex,
-            1,
-            { trimStart: 0, trimEnd: 0 }
-        );
+    function loopSignedArea(points) {
+        var area = 0;
+        var index;
+        for (index = 0; index < points.length; index++) {
+            var a = points[index];
+            var b = points[(index + 1) % points.length];
+            area += a.x * b.z - b.x * a.z;
+        }
+        return area * 0.5;
+    }
+
+    function miterRibbon(loop, half) {
+        var count = loop.length;
+        var ccw = loopSignedArea(loop) > 0;
+        var outer = [];
+        var inner = [];
+        var index;
+        for (index = 0; index < count; index++) {
+            var prev = loop[(index - 1 + count) % count];
+            var cur = loop[index];
+            var next = loop[(index + 1) % count];
+            var e1x = cur.x - prev.x;
+            var e1z = cur.z - prev.z;
+            var e2x = next.x - cur.x;
+            var e2z = next.z - cur.z;
+            var len1 = Math.sqrt(e1x * e1x + e1z * e1z);
+            var len2 = Math.sqrt(e2x * e2x + e2z * e2z);
+            if (len1 < 1e-9 || len2 < 1e-9) {
+                outer.push({ x: cur.x, z: cur.z });
+                inner.push({ x: cur.x, z: cur.z });
+                continue;
+            }
+            e1x /= len1;
+            e1z /= len1;
+            e2x /= len2;
+            e2z /= len2;
+            var n1x = -e1z;
+            var n1z = e1x;
+            var n2x = -e2z;
+            var n2z = e2x;
+            if (!ccw) {
+                n1x = -n1x;
+                n1z = -n1z;
+                n2x = -n2x;
+                n2z = -n2z;
+            }
+            // n* points inward for a CCW (or flipped CW) loop.
+            var mx = n1x + n2x;
+            var mz = n1z + n2z;
+            var mlen = Math.sqrt(mx * mx + mz * mz);
+            if (mlen < 1e-6) {
+                mx = n1x;
+                mz = n1z;
+                mlen = 1;
+            }
+            mx /= mlen;
+            mz /= mlen;
+            var den = mx * n1x + mz * n1z;
+            if (Math.abs(den) < 0.25) {
+                den = den < 0 ? -0.25 : 0.25;
+            }
+            var m = half / den;
+            if (m > half * 2.5) {
+                m = half * 2.5;
+            } else if (m < -half * 2.5) {
+                m = -half * 2.5;
+            }
+            inner.push({ x: cur.x + mx * m, z: cur.z + mz * m });
+            outer.push({ x: cur.x - mx * m, z: cur.z - mz * m });
+        }
+        return { outer: outer, inner: inner };
+    }
+
+    function ribbonSegmentFaces(outerA, outerB, innerA, innerB, y0, y1, colorHex) {
+        var faces = [];
+        var oA0 = { x: outerA.x, y: y0, z: outerA.z };
+        var oB0 = { x: outerB.x, y: y0, z: outerB.z };
+        var iB0 = { x: innerB.x, y: y0, z: innerB.z };
+        var iA0 = { x: innerA.x, y: y0, z: innerA.z };
+        var oA1 = { x: outerA.x, y: y1, z: outerA.z };
+        var oB1 = { x: outerB.x, y: y1, z: outerB.z };
+        var iB1 = { x: innerB.x, y: y1, z: innerB.z };
+        var iA1 = { x: innerA.x, y: y1, z: innerA.z };
+        pushWallFace(faces, [oA0, oB0, oB1, oA1], colorHex);
+        pushWallFace(faces, [iB0, iA0, iA1, iB1], colorHex);
+        pushWallFace(faces, [oA1, oB1, iB1, iA1], colorHex);
+        return faces;
+    }
+
+    function lerp2(a, b, t) {
+        return {
+            x: a.x + (b.x - a.x) * t,
+            z: a.z + (b.z - a.z) * t
+        };
+    }
+
+    function closedLoopWallFaces(loop, openings, baseY, wallHeight, thickness, wallColor) {
+        var faces = [];
+        var half = Math.max(0.0005, thickness * 0.5);
+        var ribbon = miterRibbon(loop, half);
+        var count = loop.length;
+        var y0 = baseY;
+        var y1 = baseY + wallHeight;
+        var edgeIndex;
+        for (edgeIndex = 0; edgeIndex < count; edgeIndex++) {
+            var a = loop[edgeIndex];
+            var b = loop[(edgeIndex + 1) % count];
+            var center = { x1: a.x, z1: a.z, x2: b.x, z2: b.z };
+            var cuts = [];
+            openings.forEach(function (opening) {
+                var span = projectOpeningOntoWall(center, opening.seg, Math.max(thickness * 2.5, 0.03));
+                if (!span) {
+                    return;
+                }
+                cuts.push({
+                    t0: span.t0,
+                    t1: span.t1,
+                    color: opening.color,
+                    y0: opening.y0,
+                    y1: opening.y1
+                });
+            });
+            cuts.sort(function (left, right) {
+                return left.t0 - right.t0;
+            });
+            var oA = ribbon.outer[edgeIndex];
+            var oB = ribbon.outer[(edgeIndex + 1) % count];
+            var iA = ribbon.inner[edgeIndex];
+            var iB = ribbon.inner[(edgeIndex + 1) % count];
+
+            function solidRibbon(t0, t1, yy0, yy1, color) {
+                if (t1 <= t0 + 1e-4 || yy1 <= yy0 + 1e-6) {
+                    return;
+                }
+                faces = faces.concat(ribbonSegmentFaces(
+                    lerp2(oA, oB, t0),
+                    lerp2(oA, oB, t1),
+                    lerp2(iA, iB, t0),
+                    lerp2(iA, iB, t1),
+                    yy0,
+                    yy1,
+                    color
+                ));
+            }
+
+            var cursor = 0;
+            if (!cuts.length) {
+                solidRibbon(0, 1, y0, y1, wallColor);
+            } else {
+                cuts.forEach(function (cut) {
+                    var t0 = Math.max(cursor, cut.t0);
+                    var t1 = Math.max(t0, cut.t1);
+                    if (t0 > cursor + 1e-4) {
+                        solidRibbon(cursor, t0, y0, y1, wallColor);
+                    }
+                    if (cut.y0 > y0 + 1e-4) {
+                        solidRibbon(t0, t1, y0, cut.y0, wallColor);
+                    }
+                    if (cut.y1 < y1 - 1e-4) {
+                        solidRibbon(t0, t1, cut.y1, y1, wallColor);
+                    }
+                    var openingLen = (t1 - t0) * wallLength(center);
+                    var jamb = Math.min(0.004, openingLen * 0.08);
+                    if (jamb * 2.2 < openingLen) {
+                        var dt = jamb / Math.max(wallLength(center), 1e-6);
+                        solidRibbon(t0, t0 + dt, cut.y0, cut.y1, cut.color);
+                        solidRibbon(t1 - dt, t1, cut.y0, cut.y1, cut.color);
+                    }
+                    cursor = Math.max(cursor, t1);
+                });
+                if (cursor < 1 - 1e-4) {
+                    solidRibbon(cursor, 1, y0, y1, wallColor);
+                }
+            }
+        }
+        return faces;
     }
 
     function projectOpeningOntoWall(wall, opening, maxDist) {
@@ -526,7 +772,7 @@
     function wallFacesWithOpenings(wall, openings, baseY, wallHeight, thickness, joinOptions) {
         var faces = [];
         var wallColor = "#cfd6e0";
-        var half = Math.max(0.004, thickness * 0.5);
+        var half = Math.max(0.0005, thickness * 0.5);
         var join = joinOptions || {};
         var trimStart = join.connectedStart ? half : 0;
         var trimEnd = join.connectedEnd ? half : 0;
@@ -534,7 +780,7 @@
         var skipEndCap = !!join.connectedEnd;
         var cuts = [];
         openings.forEach(function (opening) {
-            var span = projectOpeningOntoWall(wall, opening.seg, Math.max(thickness * 2, 0.04));
+            var span = projectOpeningOntoWall(wall, opening.seg, Math.max(thickness * 2.5, 0.03));
             if (!span) {
                 return;
             }
@@ -560,7 +806,6 @@
                 skipStartCap: true,
                 skipEndCap: true
             };
-            // Apply join trims only on the full-length ends of the original wall.
             if (t0 <= 1e-4) {
                 options.trimStart = trimStart;
                 options.skipStartCap = skipStartCap;
@@ -589,9 +834,8 @@
             if (cut.y1 < baseY + wallHeight - 1e-4) {
                 solidSpan(t0, t1, cut.y1, (baseY + wallHeight) - cut.y1, wallColor);
             }
-            // Thin colored jambs only — never fill the opening.
             var openingLen = (t1 - t0) * wallLength(wall);
-            var jamb = Math.min(0.005, openingLen * 0.1);
+            var jamb = Math.min(0.004, openingLen * 0.08);
             if (jamb * 2.2 < openingLen) {
                 var dt = jamb / wallLength(wall);
                 faces = faces.concat(wallSlab(
@@ -684,12 +928,14 @@
         var faces = [];
         var wallHeight = model.wallHeight || DEFAULT_WALL_HEIGHT;
         var thickness = model.wallThickness || DEFAULT_WALL_THICKNESS;
+        var wallColor = "#cfd6e0";
         (model.floors || []).forEach(function (floor) {
-            var baseY = floor.y || 0;
+            // All floors share ground level (no stacked multi-storey offset).
+            var baseY = 0;
+            syncFloorOpenings(floor);
             var walls = floor.walls || [];
             var loop = closedLoopFromWalls(walls);
             var floorFace = makeFloorFace(floor.polygon, baseY, floor.color);
-            // Prefer a closed wall loop for the visible floor plate so the room is never empty.
             if (loop) {
                 floorFace = makeFloorFace(loop, baseY, floor.color) || floorFace;
             }
@@ -715,7 +961,13 @@
                 });
             });
 
-            var cornerKeys = {};
+            if (loop) {
+                faces = faces.concat(closedLoopWallFaces(
+                    loop, openings, baseY, wallHeight, thickness, wallColor
+                ));
+                return;
+            }
+
             walls.forEach(function (seg, index) {
                 var join = {
                     connectedStart: wallConnectedAt(walls, index, 1),
@@ -723,22 +975,6 @@
                 };
                 faces = faces.concat(wallFacesWithOpenings(
                     seg, openings, baseY, wallHeight, thickness, join
-                ));
-                if (join.connectedStart) {
-                    cornerKeys[seg.x1.toFixed(5) + "," + seg.z1.toFixed(5)] = {
-                        x: seg.x1, z: seg.z1
-                    };
-                }
-                if (join.connectedEnd) {
-                    cornerKeys[seg.x2.toFixed(5) + "," + seg.z2.toFixed(5)] = {
-                        x: seg.x2, z: seg.z2
-                    };
-                }
-            });
-            Object.keys(cornerKeys).forEach(function (key) {
-                var corner = cornerKeys[key];
-                faces = faces.concat(cornerPostFaces(
-                    corner.x, corner.z, baseY, wallHeight, thickness, "#cfd6e0"
                 ));
             });
         });
@@ -812,6 +1048,7 @@
         this.viewMode = false;
         this.yaw = 0.85;
         this.pitch = 0.62;
+        this.viewZoom = 1;
         this.dragOrbit = false;
         this.dragHandle = null;
         this.dragCornerFrom = null;
@@ -869,7 +1106,8 @@
                 return;
             }
             event.preventDefault();
-            self.pitch = Math.max(0.28, Math.min(1.25, self.pitch + event.deltaY * 0.0015));
+            var factor = Math.exp(-event.deltaY * 0.0012);
+            self.viewZoom = Math.max(0.35, Math.min(3.5, self.viewZoom * factor));
             self.draw();
         }, { passive: false });
     };
@@ -962,10 +1200,22 @@
     SceneDesigner.prototype.addFloor = function () {
         var last = this.model.floors[this.model.floors.length - 1];
         var floor = defaultFloorRect(this.model.sceneSize || 1);
-        floor.y = last ? (last.y + (last.height || 0.3)) : 0;
+        floor.y = 0;
         if (last && last.color) {
             floor.color = last.color;
         }
+        // Offset in plan so the new floor is visible beside the previous one.
+        var offset = (this.model.floors.length) * ((this.model.sceneSize || 1) * 0.2);
+        (floor.polygon || []).forEach(function (corner) {
+            corner.x += offset;
+            corner.z += offset;
+        });
+        (floor.walls || []).forEach(function (seg) {
+            seg.x1 += offset;
+            seg.z1 += offset;
+            seg.x2 += offset;
+            seg.z2 += offset;
+        });
         this.model.floors.push(floor);
         this.floorIndex = this.model.floors.length - 1;
         this.selection = { list: "polygon", index: 0 };
@@ -1001,8 +1251,8 @@
         if (!isFinite(next)) {
             return;
         }
-        if (next < 0.01) {
-            next = 0.01;
+        if (next < 0.005) {
+            next = 0.005;
         } else if (next > 0.25) {
             next = 0.25;
         }
@@ -1054,7 +1304,19 @@
         var midX = (wall.x1 + wall.x2) * 0.5;
         var midZ = (wall.z1 + wall.z2) * 0.5;
         var half = openingLen * 0.5;
+        var t0 = ((midX - ux * half) - wall.x1) * ux + ((midZ - uz * half) - wall.z1) * uz;
+        t0 /= len;
+        var t1 = ((midX + ux * half) - wall.x1) * ux + ((midZ + uz * half) - wall.z1) * uz;
+        t1 /= len;
+        if (t0 > t1) {
+            var swap = t0;
+            t0 = t1;
+            t1 = swap;
+        }
         var seg = {
+            wallIndex: this.selection.index,
+            t0: t0,
+            t1: t1,
             x1: midX - ux * half,
             z1: midZ - uz * half,
             x2: midX + ux * half,
@@ -1257,6 +1519,15 @@
         wall.x2 = bestProj.x;
         wall.z2 = bestProj.z;
         floor.walls.splice(bestIndex + 1, 0, second);
+        // Wall indices after the split shift — rebind openings by proximity.
+        ["windows", "doors"].forEach(function (listName) {
+            (floor[listName] || []).forEach(function (opening) {
+                delete opening.wallIndex;
+                delete opening.t0;
+                delete opening.t1;
+            });
+        });
+        syncFloorOpenings(floor);
         this.selection = { list: "walls", index: bestIndex + 1 };
         this.notify();
         this.draw();
@@ -1387,6 +1658,21 @@
             seg.x2 = point.x;
             seg.z2 = point.z;
         }
+        if (this.dragHandle.list === "windows" || this.dragHandle.list === "doors") {
+            var hostWall = (typeof seg.wallIndex === "number")
+                ? floor.walls[seg.wallIndex]
+                : null;
+            if (hostWall) {
+                var p1 = projectOnSeg(seg.x1, seg.z1, hostWall);
+                var p2 = projectOnSeg(seg.x2, seg.z2, hostWall);
+                seg.t0 = Math.min(p1.t, p2.t);
+                seg.t1 = Math.max(p1.t, p2.t);
+                syncOpeningGeometry(seg, floor.walls);
+            } else {
+                bindOpeningToNearestWall(seg, floor.walls || []);
+                syncOpeningGeometry(seg, floor.walls || []);
+            }
+        }
         this.dragCornerFrom = { x: point.x, z: point.z };
         this.draw();
     };
@@ -1428,6 +1714,10 @@
                         } else {
                             seg.x2 = snapped.x;
                             seg.z2 = snapped.z;
+                        }
+                        if (this.dragHandle.list === "windows" || this.dragHandle.list === "doors") {
+                            bindOpeningToNearestWall(seg, floor.walls || []);
+                            syncOpeningGeometry(seg, floor.walls || []);
                         }
                     }
                 }
@@ -1520,20 +1810,23 @@
         this.model.floors.forEach(function (floor, index) {
             drawFloorPlate(floor, index === self.floorIndex);
         });
-        function drawSegs(list, listName, color, widthPx) {
+        function drawSegs(list, listName, color, widthPx, activeFloor) {
             (list || []).forEach(function (seg, index) {
-                var selected = self.selection
+                var selected = activeFloor
+                    && self.selection
                     && self.selection.list === listName
                     && self.selection.index === index;
                 var a = toPx({ x: seg.x1, z: seg.z1 });
                 var b = toPx({ x: seg.x2, z: seg.z2 });
                 ctx.strokeStyle = selected ? "#ce93d8" : color;
                 ctx.lineWidth = selected ? widthPx + 2 : widthPx;
+                ctx.globalAlpha = activeFloor ? 1 : 0.45;
                 ctx.lineCap = "butt";
                 ctx.beginPath();
                 ctx.moveTo(a.x, a.y);
                 ctx.lineTo(b.x, b.y);
                 ctx.stroke();
+                ctx.globalAlpha = 1;
             });
         }
         function drawHandles(list, listName, color) {
@@ -1574,10 +1867,16 @@
                 ctx.stroke();
             });
         }
+        // Draw every floor's walls on the scheme; only the active floor is editable/highlighted.
+        this.model.floors.forEach(function (floor, index) {
+            syncFloorOpenings(floor);
+            var active = index === self.floorIndex;
+            var wallColor = active ? "#d7dee8" : "#7a8494";
+            drawSegs(floor.walls, "walls", wallColor, thicknessPx, active);
+            drawSegs(floor.windows, "windows", active ? "#4fc3f7" : "#2f6f86", Math.max(2, thicknessPx * 0.55), active);
+            drawSegs(floor.doors, "doors", active ? "#ffb74d" : "#8a6430", Math.max(2, thicknessPx * 0.55), active);
+        });
         var floor = this.currentFloor();
-        drawSegs(floor.walls, "walls", "#d7dee8", thicknessPx);
-        drawSegs(floor.windows, "windows", "#4fc3f7", Math.max(2, thicknessPx * 0.55));
-        drawSegs(floor.doors, "doors", "#ffb74d", Math.max(2, thicknessPx * 0.55));
         drawPolygonHandles(floor.polygon);
         drawHandles(floor.walls, "walls", "#eceff1");
         drawHandles(floor.windows, "windows", "#4fc3f7");
@@ -1613,12 +1912,12 @@
             camera.distance,
             width,
             height,
-            camera.pixelsPerUnit,
+            camera.pixelsPerUnit * (this.viewZoom || 1),
             { x: camera.centerX, y: camera.centerY, z: camera.centerZ }
         );
         ctx.fillStyle = "#9aa4b5";
         ctx.font = "12px sans-serif";
-        ctx.fillText("View scene · drag to orbit", 10, 18);
+        ctx.fillText("View scene · drag to orbit · wheel zoom", 10, 18);
     };
 
     SceneDesigner.prototype.draw = function () {
