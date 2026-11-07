@@ -5,6 +5,8 @@
     var DEFAULT_FLOOR_COLOR = "#6a8fad";
     var DEFAULT_WALL_THICKNESS = 0.01;
     var DEFAULT_WALL_HEIGHT = 0.15;
+    // Pixels spanning sceneSize at editZoom=1 — independent of canvas size (resize = more workspace).
+    var PLAN_BASE_PX = 520;
     var THREE_SCRIPT_SRC = "/js/three.min.js";
     var threeJsLoadPromise = null;
 
@@ -286,6 +288,29 @@
         return { x: origin.x, z: point.z };
     }
 
+    // Floor Shift: lock the idle axis to the current adjacent vertex (not drag-start of this corner).
+    function resolveFloorPolygonShift(polygon, index, axisOrigin, raw) {
+        if (!polygon || !raw || index == null || index < 0 || index >= polygon.length) {
+            return raw;
+        }
+        var count = polygon.length;
+        if (count < 2) {
+            return raw;
+        }
+        var prev = polygon[(index - 1 + count) % count];
+        var next = polygon[(index + 1) % count];
+        var ox = axisOrigin ? axisOrigin.x : polygon[index].x;
+        var oz = axisOrigin ? axisOrigin.z : polygon[index].z;
+        var dx = Math.abs(raw.x - ox);
+        var dz = Math.abs(raw.z - oz);
+        if (dx >= dz) {
+            var lockZ = Math.abs(prev.z - oz) <= Math.abs(next.z - oz) ? prev.z : next.z;
+            return { x: raw.x, z: lockZ };
+        }
+        var lockX = Math.abs(prev.x - ox) <= Math.abs(next.x - ox) ? prev.x : next.x;
+        return { x: lockX, z: raw.z };
+    }
+
     function pointInPolygon(point, polygon) {
         if (!point || !polygon || polygon.length < 3) {
             return false;
@@ -345,7 +370,11 @@
             }
             return raw;
         }
-        // Corners (floor polygon) + openings: Shift locks horizontal/vertical motion.
+        // Floor polygon corners: Shift locks to current adjacent vertices.
+        if (handle && handle.list === "polygon" && floor && Array.isArray(floor.polygon)) {
+            return resolveFloorPolygonShift(floor.polygon, handle.index, origin, raw);
+        }
+        // Openings: Shift locks horizontal/vertical motion from drag origin.
         return axisLockPoint(origin, raw, true);
     }
 
@@ -381,6 +410,71 @@
             doors: [],
             floors: [defaultFloorRect(1.0)]
         };
+    }
+
+    function polygonsNearlyEqual(left, right, epsilon) {
+        var eps = epsilon == null ? 1e-5 : epsilon;
+        if (!left || !right || left.length !== right.length) {
+            return false;
+        }
+        var index;
+        for (index = 0; index < left.length; index++) {
+            if (Math.abs((left[index].x || 0) - (right[index].x || 0)) > eps
+                || Math.abs((left[index].z || 0) - (right[index].z || 0)) > eps) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Empty = default single floor plate and no walls/openings (import allowed).
+    function isSceneModelEmpty(model) {
+        if (!model || typeof model !== "object") {
+            return true;
+        }
+        if ((model.walls || []).length
+            || (model.windows || []).length
+            || (model.doors || []).length) {
+            return false;
+        }
+        var floors = model.floors || [];
+        if (floors.length === 0) {
+            return true;
+        }
+        if (floors.length !== 1) {
+            return false;
+        }
+        return polygonsNearlyEqual(
+            floors[0].polygon || [],
+            defaultPolygon(model.sceneSize || 1)
+        );
+    }
+
+    // Plan + camera only (no walls/openings) for "export scheme".
+    function schemeModelFrom(model) {
+        var source = model && model.floors ? cloneJson(model) : defaultModel();
+        return {
+            sceneSize: source.sceneSize || 1,
+            wallHeight: source.wallHeight || DEFAULT_WALL_HEIGHT,
+            wallThickness: source.wallThickness || DEFAULT_WALL_THICKNESS,
+            viewZoom: source.viewZoom || 1,
+            yaw: source.yaw,
+            pitch: source.pitch,
+            perspective: true,
+            eyeX: source.eyeX,
+            eyeY: source.eyeY,
+            eyeZ: source.eyeZ,
+            walls: [],
+            windows: [],
+            doors: [],
+            floors: source.floors || [defaultFloorRect(source.sceneSize || 1)]
+        };
+    }
+
+    function planScaleFor(sceneSize, editZoom) {
+        var size = sceneSize > 0 ? sceneSize : 1;
+        var zoom = Math.max(0.35, editZoom || 1);
+        return (PLAN_BASE_PX * zoom) / size;
     }
 
     function orbitEyeFromAngles(model, yaw, pitch, viewZoom) {
@@ -1251,8 +1345,102 @@
             color: colorHex || DEFAULT_FLOOR_COLOR,
             alpha: 1,
             forceDraw: true,
-            layer: 0
+            layer: 0,
+            // Concave multi-room plates need ear-clip; fan spills outside the outline.
+            earClip: true
         };
+    }
+
+    function polygonAreaXZ(points) {
+        var area = 0;
+        var index;
+        for (index = 0; index < points.length; index++) {
+            var a = points[index];
+            var b = points[(index + 1) % points.length];
+            area += a.x * b.z - b.x * a.z;
+        }
+        return area * 0.5;
+    }
+
+    function pointInTriangleXZ(p, a, b, c) {
+        var area = function (p0, p1, p2) {
+            return (p1.x - p0.x) * (p2.z - p0.z) - (p2.x - p0.x) * (p1.z - p0.z);
+        };
+        var a0 = area(p, a, b);
+        var a1 = area(p, b, c);
+        var a2 = area(p, c, a);
+        var hasNeg = (a0 < 0) || (a1 < 0) || (a2 < 0);
+        var hasPos = (a0 > 0) || (a1 > 0) || (a2 > 0);
+        return !(hasNeg && hasPos);
+    }
+
+    function isEarXZ(points, prev, index, next, ccw) {
+        var a = points[prev];
+        var b = points[index];
+        var c = points[next];
+        var cross = (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
+        if (ccw ? cross <= 1e-12 : cross >= -1e-12) {
+            return false;
+        }
+        var i;
+        for (i = 0; i < points.length; i++) {
+            if (i === prev || i === index || i === next) {
+                continue;
+            }
+            if (pointInTriangleXZ(points[i], a, b, c)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    function earClipPositionsXZ(points) {
+        var positions = [];
+        if (!points || points.length < 3) {
+            return positions;
+        }
+        if (points.length === 3) {
+            points.forEach(function (p) {
+                positions.push(p.x, p.y, p.z);
+            });
+            return positions;
+        }
+        var work = points.map(function (p, index) {
+            return { x: p.x, y: p.y, z: p.z, _i: index };
+        });
+        var ccw = polygonAreaXZ(work) > 0;
+        var guard = 0;
+        var maxGuard = work.length * work.length + 8;
+        while (work.length > 3 && guard < maxGuard) {
+            guard += 1;
+            var earFound = false;
+            var i;
+            for (i = 0; i < work.length; i++) {
+                var prev = (i - 1 + work.length) % work.length;
+                var next = (i + 1) % work.length;
+                if (!isEarXZ(work, prev, i, next, ccw)) {
+                    continue;
+                }
+                var a = work[prev];
+                var b = work[i];
+                var c = work[next];
+                positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+                work.splice(i, 1);
+                earFound = true;
+                break;
+            }
+            if (!earFound) {
+                break;
+            }
+        }
+        if (work.length === 3) {
+            positions.push(
+                work[0].x, work[0].y, work[0].z,
+                work[1].x, work[1].y, work[1].z,
+                work[2].x, work[2].y, work[2].z
+            );
+        }
+        return positions;
     }
 
     function buildSceneFaces(model) {
@@ -1348,12 +1536,17 @@
         if (!pts || pts.length < 3) {
             return null;
         }
-        var positions = [];
-        var index;
-        for (index = 1; index < pts.length - 1; index++) {
-            positions.push(pts[0].x, pts[0].y, pts[0].z);
-            positions.push(pts[index].x, pts[index].y, pts[index].z);
-            positions.push(pts[index + 1].x, pts[index + 1].y, pts[index + 1].z);
+        var positions;
+        if (face.earClip) {
+            positions = earClipPositionsXZ(pts);
+        } else {
+            positions = [];
+            var index;
+            for (index = 1; index < pts.length - 1; index++) {
+                positions.push(pts[0].x, pts[0].y, pts[0].z);
+                positions.push(pts[index].x, pts[index].y, pts[index].z);
+                positions.push(pts[index + 1].x, pts[index + 1].y, pts[index + 1].z);
+            }
         }
         if (!positions.length) {
             return null;
@@ -1401,6 +1594,9 @@
         this._flyMoved = false;
         this.dragOrbit = false;
         this.dragHandle = null;
+        this.dragMoved = false;
+        this.dragStartClientX = 0;
+        this.dragStartClientY = 0;
         this.dragCornerFrom = null;
         this.dragCornerOrigin = null;
         this.dragShiftHeld = false;
@@ -1522,9 +1718,29 @@
         window.addEventListener("mouseup", this._onWindowMouseUp);
         window.addEventListener("keydown", this._onWindowKeyDown);
         window.addEventListener("keyup", this._onWindowKeyUp);
+        this._onWindowResize = function () {
+            self.resize();
+        };
+        window.addEventListener("resize", this._onWindowResize);
+        // Grow/shrink canvas with the workspace wrap when the dialog or browser resizes.
+        this._wrapResizeObserver = null;
+        if (typeof ResizeObserver === "function" && this.canvas.parentElement) {
+            this._wrapResizeObserver = new ResizeObserver(function () {
+                self.resize();
+            });
+            this._wrapResizeObserver.observe(this.canvas.parentElement);
+        }
     };
 
     SceneDesigner.prototype.dispose = function () {
+        if (this._wrapResizeObserver) {
+            this._wrapResizeObserver.disconnect();
+            this._wrapResizeObserver = null;
+        }
+        if (this._onWindowResize) {
+            window.removeEventListener("resize", this._onWindowResize);
+            this._onWindowResize = null;
+        }
         if (this.canvas) {
             if (this._onCanvasMouseDown) {
                 this.canvas.removeEventListener("mousedown", this._onCanvasMouseDown);
@@ -1854,13 +2070,24 @@
 
     SceneDesigner.prototype.resize = function () {
         var parent = this.canvas.parentElement;
-        var width = parent ? parent.clientWidth : 640;
-        var height = parent ? Math.max(320, parent.clientHeight || 420) : 420;
-        this.canvas.width = Math.max(320, width);
+        // Exact layout size of the workspace — never invent a larger bitmap than the box
+        // (that made CSS width/height:100% stretch/squash the drawing).
+        var width = parent && parent.clientWidth > 0 ? parent.clientWidth : 640;
+        var height = parent && parent.clientHeight > 0 ? parent.clientHeight : 420;
+        if (this.canvas.width === width && this.canvas.height === height
+            && this.canvas.style.width === width + "px"
+            && this.canvas.style.height === height + "px") {
+            return;
+        }
+        this.canvas.width = width;
         this.canvas.height = height;
+        this.canvas.style.width = width + "px";
+        this.canvas.style.height = height + "px";
         if (this._three && this._three.glCanvas) {
-            this._three.glCanvas.width = this.canvas.width;
-            this._three.glCanvas.height = this.canvas.height;
+            this._three.glCanvas.width = width;
+            this._three.glCanvas.height = height;
+            this._three.glCanvas.style.width = width + "px";
+            this._three.glCanvas.style.height = height + "px";
         }
         this.draw();
     };
@@ -1911,6 +2138,7 @@
         this.floorIndex = 0;
         this.selection = null;
         this.dragHandle = null;
+        this.dragMoved = false;
         this.dragCornerFrom = null;
         this.dragCornerOrigin = null;
         this.dragShiftHeld = false;
@@ -2225,19 +2453,28 @@
         return this.worldFromClient(event.clientX, event.clientY);
     };
 
+    SceneDesigner.prototype.planScale = function () {
+        // Fixed px/world — canvas resize changes visible workspace, not object size.
+        return planScaleFor(this.model.sceneSize || 1, this.editZoom || 1);
+    };
+
     SceneDesigner.prototype.worldFromClient = function (clientX, clientY) {
         var rect = this.canvas.getBoundingClientRect();
         if (rect.width <= 0 || rect.height <= 0) {
             return { x: 0, z: 0 };
         }
-        var px = (clientX - rect.left) / rect.width;
-        var py = (clientY - rect.top) / rect.height;
-        var size = this.model.sceneSize || 1;
-        var zoom = this.viewMode ? 1 : Math.max(0.35, this.editZoom || 1);
+        var planScale = this.planScale();
+        if (planScale <= 0) {
+            return { x: 0, z: 0 };
+        }
         return {
-            x: ((px - 0.5) / zoom) * size,
-            z: ((py - 0.5) / zoom) * size
+            x: (clientX - rect.left - rect.width * 0.5) / planScale,
+            z: (clientY - rect.top - rect.height * 0.5) / planScale
         };
+    };
+
+    SceneDesigner.prototype.dragThresholdPx = function () {
+        return 5;
     };
 
     SceneDesigner.prototype.handleHitSize = function () {
@@ -2271,7 +2508,7 @@
         var self = this;
         var tieEps = threshold * 0.15;
 
-        function consider(candidate, dist, preferFloor) {
+        function consider(candidate, dist, preferWall) {
             if (dist > bestDist + tieEps) {
                 return;
             }
@@ -2280,13 +2517,13 @@
                 best = candidate;
                 return;
             }
-            // Near-tie: floor corners win over walls (independent entities; do not steal floor picks).
-            if (preferFloor && best && best.list !== "polygon") {
+            // Near-tie: wall/window/door endpoints win over floor corners in the same hit zone.
+            if (preferWall && best && best.list === "polygon") {
                 bestDist = dist;
                 best = candidate;
                 return;
             }
-            if (!preferFloor && best && best.list === "polygon") {
+            if (!preferWall && best && best.list !== "polygon") {
                 return;
             }
             if (dist < bestDist) {
@@ -2305,7 +2542,7 @@
                     index: index,
                     end: 0,
                     floorIndex: floorIndex
-                }, Math.sqrt(dx * dx + dz * dz), true);
+                }, Math.sqrt(dx * dx + dz * dz), false);
             });
         });
         // All scene walls/openings — never gated by the selected floor plate.
@@ -2322,7 +2559,7 @@
                         list: listName,
                         index: index,
                         end: handle.end
-                    }, Math.sqrt(dx * dx + dz * dz), false);
+                    }, Math.sqrt(dx * dx + dz * dz), true);
                 });
             });
         });
@@ -2500,7 +2737,11 @@
             if (typeof handle.floorIndex === "number" && handle.floorIndex !== this.floorIndex) {
                 this.floorIndex = handle.floorIndex;
             }
+            // Exclusive single-handle selection; move only after drag threshold.
             this.dragHandle = handle;
+            this.dragMoved = false;
+            this.dragStartClientX = event.clientX;
+            this.dragStartClientY = event.clientY;
             this.selection = {
                 list: handle.list,
                 index: handle.index,
@@ -2538,7 +2779,7 @@
     };
 
     SceneDesigner.prototype.applyHandleDragAtClient = function (clientX, clientY, shiftHeld) {
-        if (!this.dragHandle || this.viewMode) {
+        if (!this.dragHandle || this.viewMode || !this.dragMoved) {
             return;
         }
         var floor = this.floorForHandle(this.dragHandle);
@@ -2617,6 +2858,16 @@
         if (!this.dragHandle) {
             return;
         }
+        // Click-select without crossing drag threshold: keep selection, do not relocate.
+        if (!this.dragMoved) {
+            this.dragHandle = null;
+            this.dragCornerFrom = null;
+            this.dragCornerOrigin = null;
+            this.dragShiftHeld = false;
+            this.dragMoved = false;
+            this.draw();
+            return;
+        }
         var floor = this.floorForHandle(this.dragHandle);
         if (this.dragCornerFrom) {
             var shiftHeld = event ? !!event.shiftKey : this.dragShiftHeld;
@@ -2681,6 +2932,7 @@
         this.dragCornerFrom = null;
         this.dragCornerOrigin = null;
         this.dragShiftHeld = false;
+        this.dragMoved = false;
         this.notify();
         this.draw();
     };
@@ -2713,6 +2965,14 @@
         this.lastDragClientX = event.clientX;
         this.lastDragClientY = event.clientY;
         this.dragShiftHeld = !!event.shiftKey;
+        if (!this.dragMoved) {
+            var moveDx = event.clientX - this.dragStartClientX;
+            var moveDy = event.clientY - this.dragStartClientY;
+            if ((moveDx * moveDx + moveDy * moveDy) < this.dragThresholdPx() * this.dragThresholdPx()) {
+                return;
+            }
+            this.dragMoved = true;
+        }
         this.applyHandleDragAtClient(event.clientX, event.clientY, this.dragShiftHeld);
     };
 
@@ -2727,29 +2987,47 @@
         var width = this.canvas.width;
         var height = this.canvas.height;
         var size = this.model.sceneSize || 1;
-        var thicknessPx = Math.max(4, (this.getWallThickness() / size) * Math.min(width, height));
+        var planScale = this.planScale();
+        var thicknessPx = Math.max(4, this.getWallThickness() * planScale);
         ctx.fillStyle = "#1b1f2a";
         ctx.fillRect(0, 0, width, height);
-        ctx.strokeStyle = "#2e3648";
-        ctx.lineWidth = 1;
-        for (var g = 0; g <= 10; g++) {
-            var gx = (g / 10) * width;
-            var gy = (g / 10) * height;
+        // Square world-space grid (finer): step = sceneSize / 20.
+        var gridStep = size / 20;
+        var halfWorldX = (width * 0.5) / planScale;
+        var halfWorldZ = (height * 0.5) / planScale;
+        var gridMinX = Math.floor(-halfWorldX / gridStep) * gridStep;
+        var gridMaxX = Math.ceil(halfWorldX / gridStep) * gridStep;
+        var gridMinZ = Math.floor(-halfWorldZ / gridStep) * gridStep;
+        var gridMaxZ = Math.ceil(halfWorldZ / gridStep) * gridStep;
+        var gridCoord;
+        var gridIndex;
+        for (gridCoord = gridMinX; gridCoord <= gridMaxX + gridStep * 0.5; gridCoord += gridStep) {
+            gridIndex = Math.round(gridCoord / gridStep);
+            var majorX = gridIndex % 5 === 0;
+            ctx.strokeStyle = majorX ? "#3d4a63" : "#2e3648";
+            ctx.lineWidth = majorX ? 1.75 : 1;
+            var gx = width * 0.5 + gridCoord * planScale;
             ctx.beginPath();
             ctx.moveTo(gx, 0);
             ctx.lineTo(gx, height);
             ctx.stroke();
+        }
+        for (gridCoord = gridMinZ; gridCoord <= gridMaxZ + gridStep * 0.5; gridCoord += gridStep) {
+            gridIndex = Math.round(gridCoord / gridStep);
+            var majorZ = gridIndex % 5 === 0;
+            ctx.strokeStyle = majorZ ? "#3d4a63" : "#2e3648";
+            ctx.lineWidth = majorZ ? 1.75 : 1;
+            var gy = height * 0.5 + gridCoord * planScale;
             ctx.beginPath();
             ctx.moveTo(0, gy);
             ctx.lineTo(width, gy);
             ctx.stroke();
         }
         var self = this;
-        var editZoom = Math.max(0.35, this.editZoom || 1);
         function toPx(point) {
             return {
-                x: width * 0.5 + (point.x / size) * width * editZoom,
-                y: height * 0.5 + (point.z / size) * height * editZoom
+                x: width * 0.5 + point.x * planScale,
+                y: height * 0.5 + point.z * planScale
             };
         }
         function drawFloorPlate(floor, floorIndex, active) {
@@ -3069,8 +3347,11 @@
             return null;
         }
         var size = normalizeScenePinSize(pin);
+        // sizeW/sizeH are both fractions of frame WIDTH so box aspect = sizeW/sizeH
+        // (independent of viewport / bake image aspect). Height via aspect-ratio.
         pinEl.style.width = (size.w * 100) + "%";
-        pinEl.style.height = (size.h * 100) + "%";
+        pinEl.style.height = "auto";
+        pinEl.style.aspectRatio = String(size.w) + " / " + String(size.h);
         pinEl.style.maxWidth = "none";
         pinEl.style.maxHeight = "none";
         pinEl.setAttribute("data-pin-size-w", String(size.w));
@@ -3207,6 +3488,8 @@
 
     global.SceneKit = {
         defaultModel: defaultModel,
+        isSceneModelEmpty: isSceneModelEmpty,
+        schemeModelFrom: schemeModelFrom,
         SceneDesigner: SceneDesigner,
         mountSceneCell: mountSceneCell,
         takeSceneCellHost: takeSceneCellHost,

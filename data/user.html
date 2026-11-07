@@ -3142,7 +3142,7 @@
                                 ? bindingScaleNode.getAttribute("data-binding-scale")
                                 : 1
                         );
-                        // Scene pins: size comes from saved sizeW/sizeH (% of scene frame).
+                        // Scene pins: sizeW/sizeH are fractions of frame width (aspect via ratio).
                         if (iconNode.closest && iconNode.closest(".scene-cell-pin, .scene-bind-pin")) {
                             iconNode.style.minWidth = "0";
                             iconNode.style.minHeight = "0";

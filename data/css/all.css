@@ -5105,17 +5105,17 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     position: relative;
 }
 
+/* Bitmap size is set in JS to match the wrap — do NOT stretch via CSS %. */
 .scene-designer-canvas-wrap canvas {
     display: block;
-    width: 100%;
-    height: 100%;
+    max-width: none;
+    max-height: none;
 }
 
 .scene-designer-canvas-wrap canvas.scene-designer-gl-canvas {
     position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
+    left: 0;
+    top: 0;
     z-index: 0;
     pointer-events: none;
 }
@@ -5162,7 +5162,7 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 }
 
 .scene-bind-pin {
-    /* Explicit % width/height from saved sizeW/sizeH — never shrink-to-fit by edge. */
+    /* Width % + aspect-ratio from sizeW/sizeH (both vs frame width) — not viewport aspect. */
     position: absolute;
     box-sizing: border-box;
     max-width: none;
@@ -5177,6 +5177,7 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     color: var(--text);
     padding: 0.15rem 0.35rem;
     cursor: pointer;
+    container-type: size;
 }
 
 .scene-bind-pin.scene-bind-pin--live {
@@ -5301,7 +5302,7 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 }
 
 .scene-cell-pin {
-    /* Explicit % width/height from saved sizeW/sizeH — scales with scene frame. */
+    /* Width % + aspect-ratio from sizeW/sizeH (both vs frame width) — not viewport aspect. */
     position: absolute;
     box-sizing: border-box;
     max-width: none;
@@ -5310,6 +5311,7 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     pointer-events: auto;
     z-index: 2;
     overflow: visible;
+    container-type: size;
 }
 
 .scene-cell-pin-live {
@@ -5350,7 +5352,7 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 }
 
 /*
- * Scene pins fill their saved box. Box is % of scene frame so console scales with screen.
+ * Scene pins fill their saved box. Box width is % of frame width; height from aspect-ratio.
  */
 .console-composite-cell-body .scene-cell-pin .console-device-row,
 .console-composite-cell-body .scene-cell-pin .console-device-row--gauge,
