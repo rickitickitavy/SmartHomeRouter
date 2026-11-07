@@ -341,10 +341,6 @@ void ConsoleStore::appendBindingLayoutJson(PsramJsonBuffer &json, const ConsoleB
         json += "\"";
     }
     if (binding->viewStyle == CONSOLE_VIEW_STYLE_ICON && binding->iconCfg != nullptr) {
-        if (binding->iconCfg->iconScale > 0.0f && binding->iconCfg->iconScale != 1.0f) {
-            json += ",\"iconScale\":";
-            json += String(binding->iconCfg->iconScale, 4);
-        }
         if (binding->alignH != CONSOLE_ICON_ALIGN_CENTER) {
             json += ",\"iconAlign\":\"";
             json += iconAlignJsonId(binding->alignH);
@@ -726,6 +722,7 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         memset(binding, 0, sizeof(*binding));
         binding->attrId = -1;
         binding->viewStyle = CONSOLE_VIEW_STYLE_DEFAULT;
+        binding->scale = 1.0f;
         binding->fontScale = 1.0f;
         binding->alignH = CONSOLE_ICON_ALIGN_CENTER;
         binding->alignV = CONSOLE_ALIGN_V_CENTER;
@@ -791,7 +788,6 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         int decimals = -1;
         int clusterValue = 0;
         int attrValue = -1;
-        double iconScaleValue = 1.0;
         bool showTitleValue = true;
         extractJsonString(object.c_str(), "automation", automationName);
         if (automationName.length() == 0) {
@@ -818,11 +814,8 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         if (!extractJsonInt(object.c_str(), "attrId", attrValue)) {
             attrValue = -1;
         }
-        if (!extractJsonDouble(object.c_str(), "iconScale", iconScaleValue)
-            || iconScaleValue <= 0.0
-            || iconScaleValue != iconScaleValue) {
-            iconScaleValue = 1.0;
-        }
+        // Scene pin size is sizeW/sizeH on pin JSON; no dialog SCALE on bindings.
+        double scaleValue = 1.0;
         if (!extractJsonBool(object.c_str(), "showTitle", showTitleValue)) {
             showTitleValue = true;
         }
@@ -904,6 +897,7 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         if (isAutomation && binding->viewStyle == CONSOLE_VIEW_STYLE_GAUGE) {
             binding->viewStyle = CONSOLE_VIEW_STYLE_DEFAULT;
         }
+        binding->scale = (float)scaleValue;
         binding->showTitle = showTitleValue;
         binding->titlePosition = parseTitlePositionId(titlePositionText.c_str());
         binding->asLogical = !isAutomation && asLogicalValue;
@@ -1013,7 +1007,7 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
                 return false;
             }
             memset(binding->iconCfg, 0, sizeof(*binding->iconCfg));
-            binding->iconCfg->iconScale = (float)iconScaleValue;
+            binding->iconCfg->iconScale = 1.0f;
             binding->iconCfg->iconAlign = binding->alignH;
             if (iconText.length() > 0) {
                 binding->iconCfg->icon =

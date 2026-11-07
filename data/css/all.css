@@ -5111,6 +5111,24 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     height: 100%;
 }
 
+.scene-designer-canvas-wrap canvas.scene-designer-gl-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+    pointer-events: none;
+}
+
+.scene-designer-canvas-wrap.is-view-mode canvas.scene-designer-gl-canvas {
+    pointer-events: none;
+}
+
+.scene-designer-canvas-wrap canvas.scene-designer-edit-canvas {
+    position: relative;
+    z-index: 1;
+}
+
 .scene-bind-empty {
     position: absolute;
     inset: 0;
@@ -5144,7 +5162,11 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 }
 
 .scene-bind-pin {
+    /* Explicit % width/height from saved sizeW/sizeH — never shrink-to-fit by edge. */
     position: absolute;
+    box-sizing: border-box;
+    max-width: none;
+    max-height: none;
     transform: translate(-50%, -50%);
     pointer-events: auto;
     min-width: 1.75rem;
@@ -5161,15 +5183,17 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     min-width: 0;
     min-height: 0;
     border-radius: 6px;
-    border: 1px solid transparent;
+    border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
     background: transparent;
     padding: 0;
     color: inherit;
     cursor: grab;
     touch-action: none;
+    overflow: visible;
 }
 
-.scene-bind-pin.scene-bind-pin--live.is-dragging {
+.scene-bind-pin.scene-bind-pin--live.is-dragging,
+.scene-bind-pin.scene-bind-pin--live.is-resizing {
     cursor: grabbing;
     z-index: 5;
 }
@@ -5181,6 +5205,8 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 
 .scene-bind-pin.scene-bind-pin--live .console-device-row {
     margin: 0;
+    width: 100%;
+    height: 100%;
     background: transparent;
     pointer-events: none;
 }
@@ -5194,6 +5220,54 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     border-color: var(--accent);
     color: var(--accent);
 }
+
+.scene-bind-pin-handle {
+    position: absolute;
+    z-index: 6;
+    box-sizing: border-box;
+    background: var(--accent);
+    border: 1px solid var(--surface);
+    border-radius: 2px;
+    pointer-events: auto;
+    touch-action: none;
+}
+
+.scene-bind-pin-handle--n,
+.scene-bind-pin-handle--s {
+    left: 50%;
+    width: 1rem;
+    height: 0.35rem;
+    transform: translate(-50%, -50%);
+    cursor: ns-resize;
+}
+
+.scene-bind-pin-handle--e,
+.scene-bind-pin-handle--w {
+    top: 50%;
+    width: 0.35rem;
+    height: 1rem;
+    transform: translate(-50%, -50%);
+    cursor: ew-resize;
+}
+
+.scene-bind-pin-handle--n { top: 0; }
+.scene-bind-pin-handle--s { top: 100%; }
+.scene-bind-pin-handle--e { left: 100%; }
+.scene-bind-pin-handle--w { left: 0; }
+
+.scene-bind-pin-handle--ne,
+.scene-bind-pin-handle--nw,
+.scene-bind-pin-handle--se,
+.scene-bind-pin-handle--sw {
+    width: 0.45rem;
+    height: 0.45rem;
+    transform: translate(-50%, -50%);
+}
+
+.scene-bind-pin-handle--ne { left: 100%; top: 0; cursor: nesw-resize; }
+.scene-bind-pin-handle--nw { left: 0; top: 0; cursor: nwse-resize; }
+.scene-bind-pin-handle--se { left: 100%; top: 100%; cursor: nwse-resize; }
+.scene-bind-pin-handle--sw { left: 0; top: 100%; cursor: nesw-resize; }
 
 .scene-cell-host,
 .scene-cell {
@@ -5227,10 +5301,15 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 }
 
 .scene-cell-pin {
+    /* Explicit % width/height from saved sizeW/sizeH — scales with scene frame. */
     position: absolute;
+    box-sizing: border-box;
+    max-width: none;
+    max-height: none;
     transform: translate(-50%, -50%);
     pointer-events: auto;
     z-index: 2;
+    overflow: visible;
 }
 
 .scene-cell-pin-live {
@@ -5240,7 +5319,108 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 
 .scene-cell-pin-live .console-device-row {
     margin: 0;
+    width: 100%;
+    height: 100%;
     background: transparent;
+}
+
+.scene-cell-pin .console-binary-icon,
+.scene-bind-pin .console-binary-icon {
+    --console-icon-scale: 1;
+    min-width: 0;
+    min-height: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+}
+
+.scene-cell-pin .console-binary-icon .mdi,
+.scene-bind-pin .console-binary-icon .mdi {
+    font-size: clamp(0.75rem, 55cqmin, 4rem);
+}
+
+.scene-cell-pin,
+.scene-bind-pin.scene-bind-pin--live {
+    container-type: size;
+}
+
+/*
+ * Scene pins fill their saved box. Box is % of scene frame so console scales with screen.
+ */
+.console-composite-cell-body .scene-cell-pin .console-device-row,
+.console-composite-cell-body .scene-cell-pin .console-device-row--gauge,
+.scene-cell-pin .console-device-row,
+.scene-cell-pin .console-device-row--gauge,
+.scene-bind-pin .console-device-row,
+.scene-bind-pin .console-device-row--gauge {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow: visible;
+    justify-content: center;
+    align-self: stretch;
+}
+
+.console-composite-cell-body .scene-cell-pin .console-gauge,
+.scene-cell-pin .console-gauge,
+.scene-bind-pin .console-gauge {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+
+.console-composite-cell-body .scene-cell-pin .console-gauge-arc-svg,
+.scene-cell-pin .console-gauge-arc-svg,
+.scene-bind-pin .console-gauge-arc-svg {
+    width: 100%;
+    max-width: none;
+    height: auto;
+}
+
+.console-composite-cell-body .scene-cell-pin .console-gauge-value-svg,
+.scene-cell-pin .console-gauge-value-svg,
+.scene-bind-pin .console-gauge-value-svg {
+    font-size: clamp(8px, 8cqmin, 22px);
+    font-weight: 700;
+}
+
+.console-composite-cell-body .scene-cell-pin .console-gauge-value,
+.scene-cell-pin .console-gauge-value,
+.scene-bind-pin .console-gauge-value {
+    font-size: clamp(8px, 8cqmin, 22px);
+    font-weight: 700;
+}
+
+.console-composite-cell-body .scene-cell-pin .console-device-row-controls,
+.scene-cell-pin .console-device-row-controls,
+.scene-bind-pin .console-device-row-controls {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.console-composite-cell-body .scene-cell-pin .console-gauge-linear-svg,
+.scene-cell-pin .console-gauge-linear-svg,
+.scene-bind-pin .console-gauge-linear-svg {
+    width: 100%;
+    height: 18%;
+    max-width: none;
+}
+
+.console-composite-cell-body .scene-cell-pin .console-gauge--vertical .console-gauge-linear-svg,
+.scene-cell-pin .console-gauge--vertical .console-gauge-linear-svg,
+.scene-bind-pin .console-gauge--vertical .console-gauge-linear-svg {
+    width: 18%;
+    height: 100%;
 }
 
 .scene-cell--empty,

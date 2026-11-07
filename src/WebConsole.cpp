@@ -81,6 +81,19 @@ void WebConsole::begin() {
         response->addHeader("Cache-Control", "no-store");
         request->send(response);
     });
+    server.on("/js/three.min.js", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(
+            200,
+            kEmbeddedThreeJsGzMime,
+            kEmbeddedThreeJsGz,
+            kEmbeddedThreeJsGzLen
+        );
+        if (kEmbeddedWebAssetsGzip) {
+            response->addHeader("Content-Encoding", "gzip");
+        }
+        response->addHeader("Cache-Control", "public, max-age=86400");
+        request->send(response);
+    });
     server.on("/css/all.css", HTTP_GET, [this](AsyncWebServerRequest *request) {
         AsyncWebServerResponse *response = request->beginResponse(
             200,

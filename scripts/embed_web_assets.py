@@ -45,6 +45,12 @@ def generate_embedded_web_assets():
             "length_symbol": "kEmbeddedSceneJsGzLen",
             "mime": "application/javascript",
         },
+        {
+            "source": project_dir / "data" / "js" / "three.min.js",
+            "symbol": "kEmbeddedThreeJsGz",
+            "length_symbol": "kEmbeddedThreeJsGzLen",
+            "mime": "application/javascript",
+        },
     ]
 
     output_dir = project_dir / "include" / "generated"

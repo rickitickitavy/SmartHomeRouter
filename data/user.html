@@ -3079,8 +3079,25 @@
                     var fit = measureBodyFit(bodyEl);
                     bodyEl.style.setProperty("--composite-cell-w", String(fit.fitW) + "px");
                     bodyEl.style.setProperty("--composite-cell-h", String(fit.fitH) + "px");
-                    if (bodyEl.querySelector(".console-gauge-arc-svg")) {
+                    // Scene pins keep editor proportions — do not scale gauges to the full scene cell.
+                    if (bodyEl.querySelector(".console-gauge-arc-svg")
+                        && !bodyEl.querySelector(".scene-cell, .scene-cell-host")) {
                         gaugeBodies.push({ bodyEl: bodyEl, fitW: fit.fitW, fitH: fit.fitH });
+                    }
+                    var scenePinGauges = bodyEl.querySelectorAll(
+                        ".scene-cell-pin .console-gauge-arc-svg, .scene-bind-pin .console-gauge-arc-svg"
+                    );
+                    var pinGaugeIndex;
+                    for (pinGaugeIndex = 0; pinGaugeIndex < scenePinGauges.length; pinGaugeIndex++) {
+                        scenePinGauges[pinGaugeIndex].style.width = "";
+                        scenePinGauges[pinGaugeIndex].style.maxWidth = "";
+                        scenePinGauges[pinGaugeIndex].style.height = "";
+                        var pinValues = scenePinGauges[pinGaugeIndex]
+                            .querySelectorAll(".console-gauge-value-svg");
+                        var pinValueIndex;
+                        for (pinValueIndex = 0; pinValueIndex < pinValues.length; pinValueIndex++) {
+                            pinValues[pinValueIndex].style.fontSize = "";
+                        }
                     }
                     var icons = bodyEl.querySelectorAll(".console-binary-icon");
                     var iconIndex;
@@ -3088,6 +3105,29 @@
                     var iconFit = Math.max(16, Math.min(fit.fitW, fit.fitH) * 0.7);
                     var iconScale = Math.max(0.5, Math.min(4, iconFit / 32));
                     for (iconIndex = 0; iconIndex < icons.length; iconIndex++) {
+                        var iconNode = icons[iconIndex];
+                        var bindingScaleNode = iconNode.closest
+                            ? iconNode.closest("[data-binding-scale]")
+                            : null;
+                        var bindingScale = normalizeIconScale(
+                            bindingScaleNode
+                                ? bindingScaleNode.getAttribute("data-binding-scale")
+                                : 1
+                        );
+                        // Scene pins: size comes from saved sizeW/sizeH (% of scene frame).
+                        if (iconNode.closest && iconNode.closest(".scene-cell-pin, .scene-bind-pin")) {
+                            iconNode.style.minWidth = "0";
+                            iconNode.style.minHeight = "0";
+                            iconNode.style.maxWidth = "";
+                            iconNode.style.maxHeight = "";
+                            iconNode.style.width = "100%";
+                            iconNode.style.height = "100%";
+                            var pinGlyph = iconNode.querySelector(".mdi");
+                            if (pinGlyph) {
+                                pinGlyph.style.transform = "";
+                            }
+                            continue;
+                        }
                         (function (iconWrap, maxW, maxH, scale) {
                             iconWrap.style.setProperty("--console-icon-scale", String(scale));
                             iconWrap.style.minWidth = "0";
@@ -3112,7 +3152,7 @@
                                     ? ("scale(" + String(fitScale) + ")")
                                     : "";
                             });
-                        })(icons[iconIndex], fit.fitW, fit.fitH, iconScale);
+                        })(iconNode, fit.fitW, fit.fitH, iconScale * bindingScale);
                     }
                 }
                 var gIndex;
@@ -3120,6 +3160,13 @@
                     var gaugeBody = gaugeBodies[gIndex];
                     var titleEl = gaugeBody.bodyEl.querySelector(".console-device-row-title");
                     var hasTitle = titleIsVisible(titleEl);
+                    var gaugeScaleNode = gaugeBody.bodyEl.querySelector("[data-binding-scale]")
+                        || gaugeBody.bodyEl;
+                    var gaugeBindingScale = normalizeIconScale(
+                        gaugeScaleNode.getAttribute
+                            ? gaugeScaleNode.getAttribute("data-binding-scale")
+                            : 1
+                    );
                     var provisionalTitleBand = hasTitle
                         ? Math.max(
                             TITLE_FONT_MIN * 1.15,
@@ -3127,7 +3174,8 @@
                         )
                         : 0;
                     var availH = Math.max(28, gaugeBody.fitH - provisionalTitleBand - TITLE_GAP);
-                    var gaugeSize = Math.max(36, Math.min(gaugeBody.fitW, availH * GAUGE_ASPECT));
+                    var gaugeSize = Math.max(36, Math.min(gaugeBody.fitW, availH * GAUGE_ASPECT))
+                        * gaugeBindingScale;
                     var valueFont = Math.max(
                         VALUE_FONT_MIN,
                         Math.min(VALUE_FONT_MAX, VALUE_FONT_BASE * (gaugeSize / VALUE_FONT_REF))
@@ -3150,7 +3198,8 @@
                         titleEl.style.minHeight = "";
                         // Re-fit gauge with the real title height so digits stay larger than labels.
                         availH = Math.max(28, gaugeBody.fitH - titleBand - TITLE_GAP);
-                        gaugeSize = Math.max(36, Math.min(gaugeBody.fitW, availH * GAUGE_ASPECT));
+                        gaugeSize = Math.max(36, Math.min(gaugeBody.fitW, availH * GAUGE_ASPECT))
+                            * gaugeBindingScale;
                         valueFont = Math.max(
                             VALUE_FONT_MIN,
                             Math.min(VALUE_FONT_MAX, VALUE_FONT_BASE * (gaugeSize / VALUE_FONT_REF))
@@ -3168,6 +3217,10 @@
                     var gaugeSvgs = gaugeBody.bodyEl.querySelectorAll(".console-gauge-arc-svg");
                     var svgIndex;
                     for (svgIndex = 0; svgIndex < gaugeSvgs.length; svgIndex++) {
+                        if (gaugeSvgs[svgIndex].closest
+                            && gaugeSvgs[svgIndex].closest(".scene-cell-pin, .scene-bind-pin")) {
+                            continue;
+                        }
                         gaugeSvgs[svgIndex].style.width = String(gaugeSize) + "px";
                         gaugeSvgs[svgIndex].style.maxWidth = "100%";
                         gaugeSvgs[svgIndex].style.height = "auto";

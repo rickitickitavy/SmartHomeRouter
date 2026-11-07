@@ -42,6 +42,7 @@ struct ConsoleBinding {
     uint16_t cluster;
     int32_t attrId;
     uint8_t viewStyle;
+    float scale;
     float fontScale;
     uint8_t alignH;
     uint8_t alignV;
