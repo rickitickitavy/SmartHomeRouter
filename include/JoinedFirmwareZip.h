@@ -27,7 +27,18 @@ struct MemberInfo {
 
 // Fills slave/host members when present. Returns true if at least one image is found.
 bool findMembers(File &zipFile, MemberInfo *slaveOut, MemberInfo *hostOut);
-// Reads optional version.txt (STORE or DEFLATE). Returns false if missing/invalid.
+// Reads a named version member (STORE or DEFLATE). Returns false if missing/invalid.
+bool readNamedVersionText(
+    File &zipFile,
+    const char *memberName,
+    char *destination,
+    size_t destinationSize
+);
+// Prefer slave.version.txt; fall back to legacy version.txt.
+bool readSlaveVersionText(File &zipFile, char *destination, size_t destinationSize);
+// Reads host.version.txt.
+bool readHostVersionText(File &zipFile, char *destination, size_t destinationSize);
+// Legacy alias for readSlaveVersionText.
 bool readVersionText(File &zipFile, char *destination, size_t destinationSize);
 
 // Sequential uncompressed reader over one ZIP member.

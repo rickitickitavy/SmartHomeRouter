@@ -1078,9 +1078,9 @@ static String hostGatewayStatusJson() {
     json += ",\"mqttPacketsTx\":";
     json += String((unsigned long)mqttPacketsTx);
     json += ",\"version\":\"";
-    json += FIRMWARE_VERSION;
+    json += FIRMWARE_VERSION_HOST;
     json += "\",\"masterVersion\":\"";
-    json += FIRMWARE_VERSION;
+    json += FIRMWARE_VERSION_HOST;
     json += "\",\"slaveVersion\":\"";
     json += INTER_CHIP_HOST.slaveFirmwareVersion();
     json += "\",\"pairingActive\":";
@@ -2050,7 +2050,7 @@ static void setupHost() {
         }
     }
     LOGGER.info("role=host");
-    LOGGER.info("z2m-gateway " FIRMWARE_VERSION);
+    LOGGER.info("z2m-gateway host " FIRMWARE_VERSION_HOST);
     LOGGER.info("USB CDC on native ESP32-C6 port (not USB-OTG host)");
     LOGGER.info("Reset " + String((int)esp_reset_reason()));
     WiFi.onEvent(onWiFiArduinoEvent);
@@ -2078,6 +2078,14 @@ static void setupHost() {
             settingsManager->historyMaxStoreDays(),
             settingsManager->historySweepIntervalMin()
         );
+        if (historyStore.snapshotFilePresent()) {
+            if (historyStore.restoreSnapshot()) {
+                LOGGER.info("History snapshot restored from LittleFS");
+            } else {
+                LOGGER.warning("History snapshot restore failed; discarding");
+                historyStore.discardSnapshotFile();
+            }
+        }
         historyStore.syncSeriesFromDevices(settingsManager->deviceMap());
         LOGGER.info(
             "History store ready pages="
@@ -2086,6 +2094,13 @@ static void setupHost() {
             + String((unsigned)settingsManager->historyEntrySize())
         );
     }
+    settingsManager->setPreRestartHandler([]() {
+        if (!historyStore.persistSnapshot()) {
+            LOGGER.warning("History snapshot flush skipped or failed");
+        } else {
+            LOGGER.info("History snapshot saved before restart");
+        }
+    });
     userStore = new UserStore();
     userStore->begin(true);
     userStore->setChangedHandler(onHostUserChanged);
@@ -2276,7 +2291,7 @@ static void setupSlave() {
     INTER_CHIP_SLAVE.begin();
     LOGGER.setLineHook(interChipSlaveLogHook);
     LOGGER.info("role=slave");
-    LOGGER.info("z2m-gateway " FIRMWARE_VERSION " slave");
+    LOGGER.info("z2m-gateway slave " FIRMWARE_VERSION_SLAVE);
     LOGGER.info("Reset " + String((int)esp_reset_reason()));
     LOGGER.info("Zigbee runtime copy only; devices and users stay on the host");
 }

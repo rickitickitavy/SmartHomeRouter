@@ -58,6 +58,12 @@ public:
     void end();
     bool available() const { return slab != nullptr && pageCount > 0; }
 
+    // LittleFS snapshot of filled entries + used pages (restart survival).
+    bool persistSnapshot();
+    bool restoreSnapshot();
+    void discardSnapshotFile();
+    bool snapshotFilePresent() const;
+
     void syncSeriesFromDevices(DeviceTopicMap *deviceMap);
     bool removeSeries(const HistorySeriesKey &key);
     void setRetention(uint8_t maxStoreDays, uint8_t sweepIntervalMin);
@@ -99,6 +105,8 @@ public:
         uint16_t *newestIndex,
         uint16_t *pageCountOut
     ) const;
+    bool exportSnapshotToHeap(uint8_t **outBytes, size_t *outLen) const;
+    bool importSnapshotFromHeap(const uint8_t *bytes, size_t len);
 #endif
 
 private:
@@ -170,6 +178,13 @@ private:
     void purgeOutdated(SeriesRuntime *runtime, uint32_t nowEpoch2010);
     void sweepAll();
     bool keysEqual(const HistorySeriesKey &left, const HistorySeriesKey &right) const;
+    uint32_t crc32Update(uint32_t crc, const uint8_t *data, size_t len) const;
+    uint32_t crc32Finish(uint32_t crc) const;
+    bool littleFsHasConfigSafeSpace(size_t extraBytes) const;
+    bool writeSnapshotFile(const uint8_t *bytes, size_t len) const;
+    bool readSnapshotFile(uint8_t **outBytes, size_t *outLen) const;
+    bool buildSnapshot(uint8_t **outBytes, size_t *outLen) const;
+    bool applySnapshot(const uint8_t *bytes, size_t len);
 };
 
 void historyNoteReportableValue(

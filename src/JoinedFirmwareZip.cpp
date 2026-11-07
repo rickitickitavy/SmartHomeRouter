@@ -148,8 +148,13 @@ bool findMembers(File &zipFile, MemberInfo *slaveOut, MemberInfo *hostOut) {
     return slaveOut->found || hostOut->found;
 }
 
-bool readVersionText(File &zipFile, char *destination, size_t destinationSize) {
-    if (destination == nullptr || destinationSize == 0) {
+bool readNamedVersionText(
+    File &zipFile,
+    const char *memberName,
+    char *destination,
+    size_t destinationSize
+) {
+    if (destination == nullptr || destinationSize == 0 || memberName == nullptr || memberName[0] == '\0') {
         return false;
     }
     destination[0] = '\0';
@@ -181,7 +186,7 @@ bool readVersionText(File &zipFile, char *destination, size_t destinationSize) {
             return false;
         }
         name[nameLength] = '\0';
-        if (nameEquals(name, nameLength, "version.txt")) {
+        if (nameEquals(name, nameLength, memberName)) {
             if (!fillMemberFromLocalHeader(zipFile, localHeaderOffset, &versionMember)) {
                 return false;
             }
@@ -225,6 +230,21 @@ bool readVersionText(File &zipFile, char *destination, size_t destinationSize) {
     memcpy(destination, raw + start, end - start);
     destination[end - start] = '\0';
     return destination[0] != '\0';
+}
+
+bool readSlaveVersionText(File &zipFile, char *destination, size_t destinationSize) {
+    if (readNamedVersionText(zipFile, "slave.version.txt", destination, destinationSize)) {
+        return true;
+    }
+    return readNamedVersionText(zipFile, "version.txt", destination, destinationSize);
+}
+
+bool readHostVersionText(File &zipFile, char *destination, size_t destinationSize) {
+    return readNamedVersionText(zipFile, "host.version.txt", destination, destinationSize);
+}
+
+bool readVersionText(File &zipFile, char *destination, size_t destinationSize) {
+    return readSlaveVersionText(zipFile, destination, destinationSize);
 }
 
 bool MemberReader::open(File &zipFile, const MemberInfo &member) {

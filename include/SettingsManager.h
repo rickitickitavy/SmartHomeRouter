@@ -21,6 +21,7 @@ public:
     void resetWiFi();
     void logSettings();
     void requestRestart();
+    void setPreRestartHandler(void (*handler)());
     bool handlePendingRestart(unsigned long delayMs);
     bool mainEqualsCommitted() const;
     uint32_t spiSpeedHz() const;
@@ -64,6 +65,7 @@ private:
     DeviceTopicMap topicMap;
     bool pendingRestart = false;
     unsigned long restartRequestedMs = 0;
+    void (*preRestartHandler)() = nullptr;
 
     void readSettings(GlobalSettings *destination);
     void writeEepromDirty(const uint8_t *nextImage, const uint8_t *previousImage, size_t length);

@@ -15,7 +15,10 @@ Keep in sync with `~/.cursor/rules/all-projects-questions.mdc` when that file ch
 - NEVER propose or implement a device-command / Zigbee delivery fix for only one device kind (e.g. On/Off only) unless the human explicitly scopes it that way; default is ALL device kinds (see `all-device-kinds` rule).
 - NEVER leave a console UI / live-value / widget fix on only the operator page (`data/index.html`) or only the simple-user page (`data/user.html`); keep both synchronized unless the human explicitly scopes to one page (see `sync-operator-simple-user-ui` rule).
 - NEVER commit or push on `master`, `develop`, or `main` — even if the human asks to commit on the current branch. Use a feature branch only.
-- Every new `/opsx-propose` MUST increase the firmware version build number (third `MAJOR.MINOR.BUILD` component) in `FIRMWARE_VERSION` during propose.
-- EACH TIME you update project source code because the human asked you to (implement, fix, change behavior), increase that project's `FIRMWARE_VERSION` **build** by 1 in the same request (`0.2.22` → `0.2.23`). Do not bump major or minor. Skip only when the repo has no firmware version, or when the request edits only rules, skills, docs, or OpenSpec planning with no source change.
+- Firmware identity is split: `FIRMWARE_VERSION_HOST` and `FIRMWARE_VERSION_SLAVE` (`MAJOR.MINOR.BUILD`). Do not re-unify them into one shared bump for both chips.
+- Every new `/opsx-propose` MUST increase the **host** firmware version build number (third component) in `FIRMWARE_VERSION_HOST` during propose. Bump `FIRMWARE_VERSION_SLAVE` during propose **only** if the proposed change’s implementation will touch slave-side source; otherwise leave slave intact.
+- EACH TIME you update project **host or shared** source code because the human asked you to (implement, fix, change behavior), increase `FIRMWARE_VERSION_HOST` **build** by 1 in the same request (`0.2.22` → `0.2.23`). Do not bump major or minor.
+- EACH TIME you update project **slave** source code because the human asked you to, increase `FIRMWARE_VERSION_SLAVE` **build** by 1 in the same request. If the request did **not** change slave sources, leave `FIRMWARE_VERSION_SLAVE` intact.
+- Skip version bumps only when the repo has no firmware version macros, or when the request edits only rules, skills, docs, or OpenSpec planning with no source change.
 
 Questions → answer only. Explicit tasks → act only within that request.
