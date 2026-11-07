@@ -3452,7 +3452,7 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
     AsyncResponseStream *response = request->beginResponseStream("application/json");
     response->addHeader("Cache-Control", "no-store");
     response->print("{\"version\":\"");
-    response->print(FIRMWARE_VERSION);
+    response->print(FIRMWARE_VERSION_HOST);
     response->print("\",\"mqtt\":{");
     String mqttSection;
     appendMqttSettingsJson(mqttSection);
@@ -4500,7 +4500,9 @@ void WebConsole::handleVersionGet(AsyncWebServerRequest *request) {
         return;
     }
     String json = "{\"version\":\"";
-    json += FIRMWARE_VERSION;
+    json += FIRMWARE_VERSION_HOST;
+    json += "\",\"masterVersion\":\"";
+    json += FIRMWARE_VERSION_HOST;
     json += "\"}";
     AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
     response->addHeader("Cache-Control", "no-store");

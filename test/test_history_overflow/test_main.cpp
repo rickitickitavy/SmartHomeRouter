@@ -158,11 +158,41 @@ void test_slab_overflow_reclaims_by_purging_oldest() {
     store.end();
 }
 
+void test_snapshot_round_trip_and_shrink_entry_size() {
+    HistoryStore store;
+    TEST_ASSERT_TRUE(store.begin(256, 1024));
+    store.setRetention(20, 10);
+    const HistorySeriesKey key = makeKey();
+    float value = 0.0f;
+    fillPages(store, key, 8, &value);
+
+    uint8_t *bytes = nullptr;
+    size_t len = 0;
+    TEST_ASSERT_TRUE(store.exportSnapshotToHeap(&bytes, &len));
+    TEST_ASSERT_NOT_NULL(bytes);
+    TEST_ASSERT_TRUE(len > 0);
+    store.end();
+
+    HistoryStore smaller;
+    TEST_ASSERT_TRUE(smaller.begin(256, 256)); // fewer page records per entry
+    TEST_ASSERT_TRUE(smaller.importSnapshotFromHeap(bytes, len));
+    free(bytes);
+
+    uint16_t oldest = 0;
+    uint16_t newest = 0;
+    uint16_t pageCount = 0;
+    TEST_ASSERT_TRUE(smaller.seriesRingState(key, &oldest, &newest, &pageCount));
+    TEST_ASSERT_TRUE(pageCount > 0);
+    TEST_ASSERT_TRUE(pageCount <= HistoryStore::maxPagesForEntrySize(256));
+    smaller.end();
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_max_pages_for_entry_size_256);
     RUN_TEST(test_overflow_purges_oldest_and_wraps_tail_past_head);
     RUN_TEST(test_global_outdated_purge_drops_old_pages);
     RUN_TEST(test_slab_overflow_reclaims_by_purging_oldest);
+    RUN_TEST(test_snapshot_round_trip_and_shrink_entry_size);
     return UNITY_END();
 }

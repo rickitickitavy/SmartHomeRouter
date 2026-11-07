@@ -332,6 +332,10 @@ bool FirmwareOta::beginStaging(size_t contentLength) {
     rebootReadyMs = 0;
     hasSlaveImage = false;
     hasHostImage = false;
+    slaveUpdateRequired = false;
+    hostUpdateRequired = false;
+    expectedSlaveVersion[0] = '\0';
+    expectedHostVersion[0] = '\0';
     slaveMember = JoinedFirmwareZip::MemberInfo{};
     hostMember = JoinedFirmwareZip::MemberInfo{};
     LittleFS.mkdir("/ota");
@@ -391,18 +395,48 @@ bool FirmwareOta::prepareJoinedPackage() {
     hasSlaveImage = slaveMember.found;
     hasHostImage = hostMember.found;
     expectedSlaveVersion[0] = '\0';
+    expectedHostVersion[0] = '\0';
+    slaveUpdateRequired = hasSlaveImage;
+    hostUpdateRequired = hasHostImage;
     slaveImageSize = hasSlaveImage ? slaveMember.uncompressedSize : 0;
     hostImageSize = hasHostImage ? hostMember.uncompressedSize : 0;
     imageOffset = 0;
     streamPos = 0;
     if (hasSlaveImage) {
-        if (!JoinedFirmwareZip::readVersionText(
+        if (!JoinedFirmwareZip::readSlaveVersionText(
                 packageFile,
                 expectedSlaveVersion,
                 sizeof(expectedSlaveVersion)
             )) {
-            LOGGER.warning("Joined package has no version.txt; will require slave version change after OTA");
+            LOGGER.warning(
+                "Joined package has no slave.version.txt/version.txt; will require slave version change after OTA"
+            );
         }
+    }
+    if (hasHostImage) {
+        if (!JoinedFirmwareZip::readHostVersionText(
+                packageFile,
+                expectedHostVersion,
+                sizeof(expectedHostVersion)
+            )) {
+            LOGGER.warning("Joined package has no host.version.txt");
+        }
+    }
+    if (hasSlaveImage && slaveVersionAlreadyCurrent()) {
+        slaveUpdateRequired = false;
+        LOGGER.info(
+            "Slave already at package version "
+            + String(expectedSlaveVersion) + "; skipping SPI transfer"
+        );
+    }
+    if (hasHostImage && hostVersionAlreadyCurrent()) {
+        hostUpdateRequired = false;
+        LOGGER.info(
+            "Host already at package version "
+            + String(expectedHostVersion) + "; skipping host apply"
+        );
+    }
+    if (slaveUpdateRequired) {
         if (!memberReader.open(packageFile, slaveMember)) {
             givePackageFs();
             closePackageStream();
@@ -418,14 +452,18 @@ bool FirmwareOta::prepareJoinedPackage() {
             return false;
         }
     } else {
-        imageSize = hostImageSize;
+        imageSize = hostUpdateRequired ? hostImageSize : 0;
     }
     givePackageFs();
     LOGGER.info(
         "Joined package OK slave="
-        + (hasSlaveImage ? String((unsigned long)slaveImageSize) : String("skip")) + " host="
-        + (hasHostImage ? String((unsigned long)hostImageSize) : String("skip")) + " expect="
+        + (slaveUpdateRequired ? String((unsigned long)slaveImageSize) : String("skip"))
+        + " host="
+        + (hostUpdateRequired ? String((unsigned long)hostImageSize) : String("skip"))
+        + " expectSlave="
         + (expectedSlaveVersion[0] != '\0' ? expectedSlaveVersion : "(any-new)")
+        + " expectHost="
+        + (expectedHostVersion[0] != '\0' ? expectedHostVersion : "(none)")
     );
     return true;
 }
@@ -945,8 +983,10 @@ void FirmwareOta::pumpSlaveVersionVerify() {
         LOGGER.info(
             "Slave version verified: " + String(INTER_CHIP_HOST.slaveFirmwareVersion())
         );
-        if (hasHostImage) {
+        if (hostUpdateRequired) {
             startHostApply();
+        } else if (hasHostImage) {
+            finishNoOpSuccess("slave updated; host already at package version");
         } else {
             finishSlaveOnlySuccess();
         }
@@ -983,6 +1023,33 @@ void FirmwareOta::finishSlaveOnlySuccess() {
     LOGGER.info("Slave-only firmware update complete (host unchanged)");
 }
 
+bool FirmwareOta::slaveVersionAlreadyCurrent() const {
+    if (expectedSlaveVersion[0] == '\0') {
+        return false;
+    }
+    const char *running = INTER_CHIP_HOST.slaveFirmwareVersion();
+    return running != nullptr && running[0] != '\0' && strcmp(running, expectedSlaveVersion) == 0;
+}
+
+bool FirmwareOta::hostVersionAlreadyCurrent() const {
+    if (expectedHostVersion[0] == '\0') {
+        return false;
+    }
+    return strcmp(FIRMWARE_VERSION_HOST, expectedHostVersion) == 0;
+}
+
+void FirmwareOta::finishNoOpSuccess(const char *reason) {
+    endSlaveSpiClockOverride();
+    STATUS_RGB.setUpdateBlinkManual(false);
+    freeSlaveImageRam();
+    closePackageStream();
+    clearStagingFiles();
+    currentPhase = Phase::Done;
+    LOGGER.info(
+        String("Firmware update no-op: ") + (reason != nullptr ? reason : "already current")
+    );
+}
+
 bool FirmwareOta::startHostApply() {
     endSlaveSpiClockOverride();
     STATUS_RGB.setUpdateBlinkManual(false);
@@ -990,6 +1057,10 @@ bool FirmwareOta::startHostApply() {
     if (!hasHostImage) {
         fail("Joined package has no host.bin");
         return false;
+    }
+    if (!hostUpdateRequired || hostVersionAlreadyCurrent()) {
+        finishNoOpSuccess("host already at package version");
+        return true;
     }
     if (!packageFile) {
         packageFile = LittleFS.open(kPackagePath, "r");
@@ -1110,8 +1181,15 @@ void FirmwareOta::pumpPackagePrepare() {
     if (!prepareJoinedPackage()) {
         return;
     }
-    if (!hasSlaveImage) {
-        LOGGER.info("Joined package has no slave.bin; updating host only");
+    if (!slaveUpdateRequired && !hostUpdateRequired) {
+        finishNoOpSuccess("host and slave already match package versions");
+        return;
+    }
+    if (!slaveUpdateRequired) {
+        LOGGER.info(
+            hasSlaveImage ? "Slave update skipped (version match); updating host only"
+                          : "Joined package has no slave.bin; updating host only"
+        );
         startHostApply();
         return;
     }
@@ -1120,8 +1198,8 @@ void FirmwareOta::pumpPackagePrepare() {
     slaveSpiCycleCount = 0;
     startSlaveUploadCycle();
     LOGGER.info(
-        hasHostImage ? "Joined package stream ready, updating slave then host"
-                     : "Joined package stream ready, updating slave only"
+        hostUpdateRequired ? "Joined package stream ready, updating slave then host"
+                           : "Joined package stream ready, updating slave only"
     );
 }
 

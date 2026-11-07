@@ -639,6 +639,10 @@ void SettingsManager::requestRestart() {
     LOGGER.warning("Restart scheduled");
 }
 
+void SettingsManager::setPreRestartHandler(void (*handler)()) {
+    preRestartHandler = handler;
+}
+
 void SettingsManager::saveMain(bool restart) {
     LOGGER.info("Saving main settings...");
     writeEepromDirty((const uint8_t *)&settings, (const uint8_t *)&committedMain, sizeof(settings));
@@ -668,6 +672,9 @@ bool SettingsManager::handlePendingRestart(unsigned long delayMs) {
         return false;
     }
     LOGGER.warning("RESTARTING...");
+    if (preRestartHandler != nullptr) {
+        preRestartHandler();
+    }
     WiFi.persistent(false);
     WiFi.disconnect(false, false, 2000);
     delay(150);

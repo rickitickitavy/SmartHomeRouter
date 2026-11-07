@@ -8,6 +8,8 @@ constexpr size_t kReportableValueTextMaxChars = kHistoryValueTextMaxChars;
 #include "SettingsManager.h"
 #include "UserDataPayload.h"
 #include "ZigbeeDeviceType.h"
+#include <FS.h>
+#include <LittleFS.h>
 #include <esp_heap_caps.h>
 #endif
 
@@ -20,6 +22,44 @@ namespace {
 
 constexpr size_t kSeriesCapacityMax = 256;
 constexpr time_t kSaneUnixFloor = 1700000000;
+constexpr uint32_t kSnapshotMagic = 0x53485A48u; // 'HZHS' LE
+constexpr uint16_t kSnapshotFormatVersion = 1;
+constexpr size_t kSnapshotConfigHeadroomBytes = 96u * 1024u;
+constexpr const char *kSnapshotPath = "/history/snapshot.bin";
+constexpr const char *kSnapshotTempPath = "/history/snapshot.tmp";
+constexpr const char *kSnapshotDir = "/history";
+
+#pragma pack(push, 1)
+struct SnapshotFileHeader {
+    uint32_t magic;
+    uint16_t formatVersion;
+    uint16_t entrySize;
+    uint16_t pageBytes;
+    uint16_t seriesCount;
+    uint16_t packedPageCount;
+    uint16_t reserved0;
+    uint32_t valuesStored;
+    uint32_t payloadCrc;
+};
+
+struct SnapshotSeriesHeader {
+    uint8_t ieee[8];
+    uint8_t kind;
+    uint8_t channel;
+    uint16_t cluster;
+    uint16_t attribute;
+    uint8_t valueType;
+    uint8_t blockLength;
+    uint8_t hasLast;
+    uint8_t reserved0;
+    float epsilon;
+    float lastFloat;
+    int32_t lastInt;
+    uint8_t lastBool;
+    uint8_t reserved1[3];
+    char lastString[kHistoryValueTextMaxLen];
+};
+#pragma pack(pop)
 
 #if defined(HISTORY_STORE_UNIT_TEST)
 bool gHistoryTestUnixActive = false;
@@ -1166,3 +1206,506 @@ HistoryStoreStats HistoryStore::stats() const {
     result.slabUsedKiB = ((uint32_t)used * HISTORY_PAGE_BYTES) / 1024u;
     return result;
 }
+
+uint32_t HistoryStore::crc32Update(uint32_t crc, const uint8_t *data, size_t len) const {
+    for (size_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (int bit = 0; bit < 8; bit++) {
+            const uint32_t mask = (uint32_t)-(int32_t)(crc & 1u);
+            crc = (crc >> 1) ^ (0xEDB88320u & mask);
+        }
+    }
+    return crc;
+}
+
+uint32_t HistoryStore::crc32Finish(uint32_t crc) const {
+    return ~crc;
+}
+
+bool HistoryStore::littleFsHasConfigSafeSpace(size_t extraBytes) const {
+#if defined(HISTORY_STORE_UNIT_TEST)
+    (void)extraBytes;
+    return true;
+#else
+    const size_t total = LittleFS.totalBytes();
+    const size_t used = LittleFS.usedBytes();
+    const size_t freeBytes = total > used ? (total - used) : 0;
+    return freeBytes >= (extraBytes + kSnapshotConfigHeadroomBytes);
+#endif
+}
+
+bool HistoryStore::snapshotFilePresent() const {
+#if defined(HISTORY_STORE_UNIT_TEST)
+    return false;
+#else
+    return LittleFS.exists(kSnapshotPath);
+#endif
+}
+
+void HistoryStore::discardSnapshotFile() {
+#if !defined(HISTORY_STORE_UNIT_TEST)
+    if (LittleFS.exists(kSnapshotTempPath)) {
+        LittleFS.remove(kSnapshotTempPath);
+    }
+    if (LittleFS.exists(kSnapshotPath)) {
+        LittleFS.remove(kSnapshotPath);
+    }
+#endif
+}
+
+bool HistoryStore::writeSnapshotFile(const uint8_t *bytes, size_t len) const {
+#if defined(HISTORY_STORE_UNIT_TEST)
+    (void)bytes;
+    (void)len;
+    return false;
+#else
+    if (bytes == nullptr || len == 0) {
+        return false;
+    }
+    if (!littleFsHasConfigSafeSpace(len)) {
+        return false;
+    }
+    LittleFS.mkdir(kSnapshotDir);
+    File out = LittleFS.open(kSnapshotTempPath, "w");
+    if (!out) {
+        return false;
+    }
+    const size_t written = out.write(bytes, len);
+    out.flush();
+    out.close();
+    if (written != len) {
+        LittleFS.remove(kSnapshotTempPath);
+        return false;
+    }
+    if (LittleFS.exists(kSnapshotPath)) {
+        LittleFS.remove(kSnapshotPath);
+    }
+    if (!LittleFS.rename(kSnapshotTempPath, kSnapshotPath)) {
+        LittleFS.remove(kSnapshotTempPath);
+        return false;
+    }
+    return true;
+#endif
+}
+
+bool HistoryStore::readSnapshotFile(uint8_t **outBytes, size_t *outLen) const {
+#if defined(HISTORY_STORE_UNIT_TEST)
+    (void)outBytes;
+    (void)outLen;
+    return false;
+#else
+    if (outBytes == nullptr || outLen == nullptr) {
+        return false;
+    }
+    *outBytes = nullptr;
+    *outLen = 0;
+    File in = LittleFS.open(kSnapshotPath, "r");
+    if (!in) {
+        return false;
+    }
+    const size_t len = in.size();
+    if (len < sizeof(SnapshotFileHeader)) {
+        in.close();
+        return false;
+    }
+    uint8_t *bytes = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (bytes == nullptr) {
+        bytes = (uint8_t *)malloc(len);
+    }
+    if (bytes == nullptr) {
+        in.close();
+        return false;
+    }
+    const size_t got = in.read(bytes, len);
+    in.close();
+    if (got != len) {
+        free(bytes);
+        return false;
+    }
+    *outBytes = bytes;
+    *outLen = len;
+    return true;
+#endif
+}
+
+bool HistoryStore::buildSnapshot(uint8_t **outBytes, size_t *outLen) const {
+    if (outBytes == nullptr || outLen == nullptr || !available() || series == nullptr) {
+        return false;
+    }
+    *outBytes = nullptr;
+    *outLen = 0;
+
+    uint16_t usedSeries = 0;
+    const uint16_t mapCap = pageCount > 0 ? pageCount : 1;
+    uint16_t *slotMap = (uint16_t *)malloc((size_t)mapCap * sizeof(uint16_t));
+    uint32_t *oldSlots = (uint32_t *)malloc((size_t)mapCap * sizeof(uint32_t));
+    if (slotMap == nullptr || oldSlots == nullptr) {
+        free(slotMap);
+        free(oldSlots);
+        return false;
+    }
+    for (uint16_t i = 0; i < mapCap; i++) {
+        slotMap[i] = 0xFFFFu;
+    }
+    uint16_t packedPageCount = 0;
+    for (uint16_t index = 0; index < seriesCapacity; index++) {
+        if (!series[index].used || series[index].entryBytes == nullptr) {
+            continue;
+        }
+        usedSeries++;
+        const uint16_t count = entryPageCount(&series[index]);
+        if (count == 0) {
+            continue;
+        }
+        EntryHeader *header = entryHeader(&series[index]);
+        PageRecord *records = entryPageRecords(&series[index]);
+        uint16_t pageIndex = header->oldestIndex;
+        for (uint16_t n = 0; n < count; n++) {
+            const uint32_t slot = records[pageIndex].pageSlot;
+            if (slot != 0xFFFFFFFFu && slot < mapCap && slotMap[slot] == 0xFFFFu) {
+                if (packedPageCount >= mapCap) {
+                    free(slotMap);
+                    free(oldSlots);
+                    return false;
+                }
+                slotMap[slot] = packedPageCount;
+                oldSlots[packedPageCount] = slot;
+                packedPageCount++;
+            }
+            pageIndex = (uint16_t)((pageIndex + 1) % maxPagesPerEntry);
+        }
+    }
+
+    const size_t payloadSeriesBytes =
+        (size_t)usedSeries * (sizeof(SnapshotSeriesHeader) + (size_t)entrySize);
+    const size_t payloadPageBytes = (size_t)packedPageCount * HISTORY_PAGE_BYTES;
+    const size_t totalLen = sizeof(SnapshotFileHeader) + payloadSeriesBytes + payloadPageBytes;
+    uint8_t *bytes = (uint8_t *)heap_caps_malloc(totalLen, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (bytes == nullptr) {
+        bytes = (uint8_t *)malloc(totalLen);
+    }
+    if (bytes == nullptr) {
+        free(slotMap);
+        free(oldSlots);
+        return false;
+    }
+    memset(bytes, 0, totalLen);
+
+    SnapshotFileHeader *fileHeader = (SnapshotFileHeader *)bytes;
+    fileHeader->magic = kSnapshotMagic;
+    fileHeader->formatVersion = kSnapshotFormatVersion;
+    fileHeader->entrySize = entrySize;
+    fileHeader->pageBytes = HISTORY_PAGE_BYTES;
+    fileHeader->seriesCount = usedSeries;
+    fileHeader->packedPageCount = packedPageCount;
+    fileHeader->reserved0 = 0;
+    fileHeader->valuesStored = valuesStored;
+    fileHeader->payloadCrc = 0;
+
+    uint8_t *cursor = bytes + sizeof(SnapshotFileHeader);
+    for (uint16_t index = 0; index < seriesCapacity; index++) {
+        if (!series[index].used || series[index].entryBytes == nullptr) {
+            continue;
+        }
+        SnapshotSeriesHeader *seriesHeader = (SnapshotSeriesHeader *)cursor;
+        cursor += sizeof(SnapshotSeriesHeader);
+        memcpy(seriesHeader->ieee, series[index].key.ieee, 8);
+        seriesHeader->kind = (uint8_t)series[index].key.kind;
+        seriesHeader->channel = series[index].key.channel;
+        seriesHeader->cluster = series[index].key.cluster;
+        seriesHeader->attribute = series[index].key.attribute;
+        seriesHeader->valueType = (uint8_t)series[index].valueType;
+        seriesHeader->blockLength = series[index].blockLength;
+        seriesHeader->hasLast = series[index].hasLast ? 1 : 0;
+        seriesHeader->epsilon = series[index].epsilon;
+        seriesHeader->lastFloat = series[index].lastFloat;
+        seriesHeader->lastInt = series[index].lastInt;
+        seriesHeader->lastBool = series[index].lastBool ? 1 : 0;
+        memcpy(seriesHeader->lastString, series[index].lastString, kHistoryValueTextMaxLen);
+
+        memcpy(cursor, series[index].entryBytes, entrySize);
+        PageRecord *outRecords =
+            (PageRecord *)(cursor + HISTORY_ENTRY_HEADER_BYTES);
+        for (uint16_t pageIndex = 0; pageIndex < maxPagesPerEntry; pageIndex++) {
+            const uint32_t slot = outRecords[pageIndex].pageSlot;
+            if (slot != 0xFFFFFFFFu && slot < mapCap && slotMap[slot] != 0xFFFFu) {
+                outRecords[pageIndex].pageSlot = slotMap[slot];
+            } else if (slot != 0xFFFFFFFFu) {
+                outRecords[pageIndex].pageSlot = 0xFFFFFFFFu;
+            }
+        }
+        cursor += entrySize;
+    }
+
+    for (uint16_t packed = 0; packed < packedPageCount; packed++) {
+        const uint8_t *src = pagePtr((uint16_t)oldSlots[packed]);
+        if (src == nullptr) {
+            free(slotMap);
+            free(oldSlots);
+            free(bytes);
+            return false;
+        }
+        memcpy(cursor, src, HISTORY_PAGE_BYTES);
+        cursor += HISTORY_PAGE_BYTES;
+    }
+
+    free(slotMap);
+    free(oldSlots);
+    const size_t payloadLen = totalLen - sizeof(SnapshotFileHeader);
+    fileHeader->payloadCrc = crc32Finish(
+        crc32Update(0xFFFFFFFFu, bytes + sizeof(SnapshotFileHeader), payloadLen)
+    );
+    *outBytes = bytes;
+    *outLen = totalLen;
+    return true;
+}
+
+bool HistoryStore::applySnapshot(const uint8_t *bytes, size_t len) {
+    if (bytes == nullptr || len < sizeof(SnapshotFileHeader) || !available() || series == nullptr) {
+        return false;
+    }
+    const SnapshotFileHeader *fileHeader = (const SnapshotFileHeader *)bytes;
+    if (fileHeader->magic != kSnapshotMagic || fileHeader->formatVersion != kSnapshotFormatVersion) {
+        return false;
+    }
+    if (fileHeader->pageBytes != HISTORY_PAGE_BYTES) {
+        return false;
+    }
+    if (!historyIsValidEntrySize(fileHeader->entrySize)) {
+        return false;
+    }
+    const uint16_t savedEntrySize = fileHeader->entrySize;
+    const uint16_t savedMaxPages = maxPagesForEntrySize(savedEntrySize);
+    if (savedMaxPages == 0) {
+        return false;
+    }
+    const size_t expected = sizeof(SnapshotFileHeader)
+        + (size_t)fileHeader->seriesCount * (sizeof(SnapshotSeriesHeader) + (size_t)savedEntrySize)
+        + (size_t)fileHeader->packedPageCount * HISTORY_PAGE_BYTES;
+    if (len < expected) {
+        return false;
+    }
+    const size_t payloadLen = expected - sizeof(SnapshotFileHeader);
+    const uint32_t crc = crc32Finish(
+        crc32Update(0xFFFFFFFFu, bytes + sizeof(SnapshotFileHeader), payloadLen)
+    );
+    if (crc != fileHeader->payloadCrc) {
+        return false;
+    }
+
+    const uint8_t *pageBase = bytes + sizeof(SnapshotFileHeader)
+        + (size_t)fileHeader->seriesCount * (sizeof(SnapshotSeriesHeader) + (size_t)savedEntrySize);
+
+    // Drop existing series so restore owns the slab.
+    for (uint16_t index = 0; index < seriesCapacity; index++) {
+        if (series[index].used) {
+            dropSeries(&series[index]);
+        }
+    }
+    valuesStored = fileHeader->valuesStored;
+
+    const uint8_t *cursor = bytes + sizeof(SnapshotFileHeader);
+    for (uint16_t seriesIndex = 0; seriesIndex < fileHeader->seriesCount; seriesIndex++) {
+        const SnapshotSeriesHeader *seriesHeader = (const SnapshotSeriesHeader *)cursor;
+        cursor += sizeof(SnapshotSeriesHeader);
+        const uint8_t *savedEntry = cursor;
+        cursor += savedEntrySize;
+
+        HistorySeriesKey key{};
+        memcpy(key.ieee, seriesHeader->ieee, 8);
+        key.kind = (HistorySeriesKind)seriesHeader->kind;
+        key.channel = seriesHeader->channel;
+        key.cluster = seriesHeader->cluster;
+        key.attribute = seriesHeader->attribute;
+
+        const EntryHeader *savedHeader = (const EntryHeader *)savedEntry;
+        const PageRecord *savedRecords =
+            (const PageRecord *)(savedEntry + HISTORY_ENTRY_HEADER_BYTES);
+
+        // Collect ring pages newest-first, then keep only what fits current entry size.
+        uint16_t ringCount = 0;
+        if (!(savedHeader->startDate == 0 && savedHeader->lastDate == 0
+                && savedHeader->oldestIndex == 0 && savedHeader->newestIndex == 0
+                && savedRecords[0].pageSlot == 0xFFFFFFFFu)) {
+            if (savedHeader->newestIndex < savedMaxPages) {
+                if (savedHeader->oldestIndex <= savedHeader->newestIndex) {
+                    ringCount = (uint16_t)(savedHeader->newestIndex - savedHeader->oldestIndex + 1);
+                } else {
+                    ringCount =
+                        (uint16_t)(savedMaxPages - savedHeader->oldestIndex + savedHeader->newestIndex
+                                   + 1);
+                }
+            }
+        }
+        if (ringCount > savedMaxPages) {
+            ringCount = savedMaxPages;
+        }
+
+        uint16_t keepCount = ringCount;
+        if (keepCount > maxPagesPerEntry) {
+            keepCount = maxPagesPerEntry;
+        }
+
+        // Walk from newest backward to pick keepCount pages.
+        uint32_t keepPacked[256];
+        uint32_t keepStart[256];
+        uint32_t keepLast[256];
+        uint16_t keepFilled = 0;
+        if (ringCount > 0 && keepCount > 0) {
+            uint16_t pageIndex = savedHeader->newestIndex;
+            const uint16_t skipOldest = (uint16_t)(ringCount - keepCount);
+            // Advance from oldest by skipOldest first, then copy keepCount toward newest.
+            pageIndex = savedHeader->oldestIndex;
+            for (uint16_t skip = 0; skip < skipOldest; skip++) {
+                pageIndex = (uint16_t)((pageIndex + 1) % savedMaxPages);
+            }
+            for (uint16_t n = 0; n < keepCount; n++) {
+                const PageRecord &rec = savedRecords[pageIndex];
+                if (rec.pageSlot != 0xFFFFFFFFu
+                    && rec.pageSlot < fileHeader->packedPageCount
+                    && keepFilled < 256) {
+                    keepPacked[keepFilled] = rec.pageSlot;
+                    keepStart[keepFilled] = rec.startDate;
+                    keepLast[keepFilled] = rec.lastDate;
+                    keepFilled++;
+                }
+                pageIndex = (uint16_t)((pageIndex + 1) % savedMaxPages);
+            }
+        }
+
+        // If slab cannot hold these pages, drop oldest of this series until fit.
+        while (keepFilled > 0) {
+            const HistoryStoreStats now = stats();
+            const uint16_t freePages =
+                now.pagesTotal > now.pagesUsed ? (uint16_t)(now.pagesTotal - now.pagesUsed) : 0;
+            if (freePages >= keepFilled) {
+                break;
+            }
+            // Drop oldest kept page.
+            for (uint16_t i = 1; i < keepFilled; i++) {
+                keepPacked[i - 1] = keepPacked[i];
+                keepStart[i - 1] = keepStart[i];
+                keepLast[i - 1] = keepLast[i];
+            }
+            keepFilled--;
+        }
+        if (keepFilled == 0 && ringCount > 0) {
+            // No room for this series' pages — skip series.
+            continue;
+        }
+
+        SeriesRuntime *slot = nullptr;
+        for (uint16_t index = 0; index < seriesCapacity; index++) {
+            if (!series[index].used) {
+                slot = &series[index];
+                break;
+            }
+        }
+        if (slot == nullptr) {
+            continue;
+        }
+        memset(slot, 0, sizeof(SeriesRuntime));
+        slot->key = key;
+        slot->valueType = (HistoryValueType)seriesHeader->valueType;
+        slot->blockLength = seriesHeader->blockLength;
+        slot->epsilon = seriesHeader->epsilon;
+        slot->hasLast = seriesHeader->hasLast != 0;
+        slot->lastFloat = seriesHeader->lastFloat;
+        slot->lastInt = seriesHeader->lastInt;
+        slot->lastBool = seriesHeader->lastBool != 0;
+        memcpy(slot->lastString, seriesHeader->lastString, kHistoryValueTextMaxLen);
+        slot->entryBytes = (uint8_t *)heap_caps_malloc(entrySize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (slot->entryBytes == nullptr) {
+            continue;
+        }
+        memset(slot->entryBytes, 0, entrySize);
+        PageRecord *records = entryPageRecords(slot);
+        for (uint16_t pageIndex = 0; pageIndex < maxPagesPerEntry; pageIndex++) {
+            records[pageIndex].pageSlot = 0xFFFFFFFFu;
+        }
+
+        EntryHeader *header = entryHeader(slot);
+        header->startDate = 0;
+        header->lastDate = 0;
+        header->oldestIndex = 0;
+        header->newestIndex = 0;
+
+        uint16_t written = 0;
+        for (uint16_t n = 0; n < keepFilled; n++) {
+            const int16_t newSlot = acquirePage();
+            if (newSlot < 0) {
+                break;
+            }
+            uint8_t *dst = pagePtr((uint16_t)newSlot);
+            const uint8_t *src = pageBase + ((size_t)keepPacked[n] * HISTORY_PAGE_BYTES);
+            memcpy(dst, src, HISTORY_PAGE_BYTES);
+            records[written].pageSlot = (uint32_t)newSlot;
+            records[written].startDate = keepStart[n];
+            records[written].lastDate = keepLast[n];
+            if (written == 0) {
+                header->startDate = keepStart[n];
+                header->oldestIndex = 0;
+            }
+            header->lastDate = keepLast[n];
+            header->newestIndex = written;
+            written++;
+        }
+        if (written == 0) {
+            // Still create an empty first page so series is usable.
+            const int16_t firstSlot = acquirePage();
+            if (firstSlot < 0) {
+                heap_caps_free(slot->entryBytes);
+                slot->entryBytes = nullptr;
+                continue;
+            }
+            PageHeader *pageHeader = (PageHeader *)pagePtr((uint16_t)firstSlot);
+            pageHeader->recordsCount = 0;
+            pageHeader->blockLength = slot->blockLength;
+            pageHeader->reserved = 0;
+            records[0].pageSlot = (uint32_t)firstSlot;
+            records[0].startDate = 0;
+            records[0].lastDate = 0;
+        }
+        slot->used = true;
+        seriesCount++;
+    }
+    return true;
+}
+
+bool HistoryStore::persistSnapshot() {
+    if (!available()) {
+        return false;
+    }
+    uint8_t *bytes = nullptr;
+    size_t len = 0;
+    if (!buildSnapshot(&bytes, &len) || bytes == nullptr) {
+        return false;
+    }
+    const bool ok = writeSnapshotFile(bytes, len);
+    free(bytes);
+    return ok;
+}
+
+bool HistoryStore::restoreSnapshot() {
+    uint8_t *bytes = nullptr;
+    size_t len = 0;
+    if (!readSnapshotFile(&bytes, &len) || bytes == nullptr) {
+        return false;
+    }
+    const bool ok = applySnapshot(bytes, len);
+    free(bytes);
+    if (ok) {
+        discardSnapshotFile();
+    }
+    return ok;
+}
+
+#if defined(HISTORY_STORE_UNIT_TEST)
+bool HistoryStore::exportSnapshotToHeap(uint8_t **outBytes, size_t *outLen) const {
+    return buildSnapshot(outBytes, outLen);
+}
+
+bool HistoryStore::importSnapshotFromHeap(const uint8_t *bytes, size_t len) {
+    return applySnapshot(bytes, len);
+}
+#endif

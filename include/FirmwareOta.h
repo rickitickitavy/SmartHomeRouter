@@ -101,7 +101,10 @@ private:
     SpiClockHzFn spiClockOverrideFn = nullptr;
     bool spiClockOverrideActive = false;
     char expectedSlaveVersion[SPI_STATUS_VERSION_MAX + 1]{};
+    char expectedHostVersion[SPI_STATUS_VERSION_MAX + 1]{};
     char preOtaSlaveVersion[SPI_STATUS_VERSION_MAX + 1]{};
+    bool slaveUpdateRequired = false;
+    bool hostUpdateRequired = false;
     uint8_t slaveSpiCycleCount = 0;
     unsigned long slaveVerifyDeadlineMs = 0;
     bool slaveVerifyResetPending = false;
@@ -126,8 +129,11 @@ private:
     bool slaveVersionSampleAvailable() const;
     bool slaveVersionIsPreOta() const;
     bool slaveVersionMatchesExpected() const;
+    bool slaveVersionAlreadyCurrent() const;
+    bool hostVersionAlreadyCurrent() const;
     bool startHostApply();
     void finishSlaveOnlySuccess();
+    void finishNoOpSuccess(const char *reason);
     void pumpHostApply();
     void pumpSlaveBegin();
     void pumpSlaveApply();
