@@ -342,6 +342,22 @@
                 "statusHistoryValues",
                 payload && payload.historyValuesStored != null ? String(payload.historyValuesStored) : "—"
             );
+            setStatusText(
+                "statusFsTotal",
+                payload && payload.fsTotalKb != null ? String(payload.fsTotalKb) + " kB" : "—"
+            );
+            setStatusText(
+                "statusFsFree",
+                payload && payload.fsFreeKb != null ? String(payload.fsFreeKb) + " kB" : "—"
+            );
+            setStatusText(
+                "statusFsConfig",
+                payload && payload.fsConfigKb != null ? String(payload.fsConfigKb) + " kB" : "—"
+            );
+            setStatusText(
+                "statusFsScene",
+                payload && payload.fsSceneKb != null ? String(payload.fsSceneKb) + " kB" : "—"
+            );
             if (payload && payload.wifiRssiDbm != null) {
                 setStatusText("statusWifiSignal", String(payload.wifiRssiDbm) + " dBm");
             } else {
@@ -4729,6 +4745,12 @@
                 + toneClass
                 + (iconOptions.disabled ? " is-disabled" : "");
             wrap.style.setProperty("--console-icon-scale", String(normalizeIconScale(binding && binding.iconScale)));
+            if (binding && binding.iconOnColor) {
+                wrap.style.setProperty("--console-icon-on-color", String(binding.iconOnColor));
+            }
+            if (binding && binding.iconOffColor) {
+                wrap.style.setProperty("--console-icon-off-color", String(binding.iconOffColor));
+            }
             wrap.title = stateText ? String(stateText) : iconId;
             if (iconOptions.ariaLabel) {
                 wrap.setAttribute("aria-label", iconOptions.ariaLabel);
@@ -7523,6 +7545,10 @@
         var consoleDeviceDialogDevices = [];
         var consoleDeviceGaugeRangesDraft = [];
         var consoleDeviceIconDraft = "mdi:checkbox-marked-circle";
+        var CONSOLE_ICON_ON_COLOR_DEFAULT = "#E8C547";
+        var CONSOLE_ICON_OFF_COLOR_DEFAULT = "#7a8494";
+        var consoleDeviceIconOnColorDraft = CONSOLE_ICON_ON_COLOR_DEFAULT;
+        var consoleDeviceIconOffColorDraft = CONSOLE_ICON_OFF_COLOR_DEFAULT;
         var consoleDragWidgetIndex = null;
         var consoleDragBindingWidgetIndex = null;
         var consoleDragBindingIndex = null;
@@ -12231,6 +12257,14 @@
                 var button = buttons[index];
                 button.classList.remove("is-active");
                 button.setAttribute("aria-pressed", "false");
+                if (!viewOn && designer && button.getAttribute("data-scene-tool") === designer.tool) {
+                    button.classList.add("is-active");
+                    button.setAttribute("aria-pressed", "true");
+                }
+            }
+            var editOnly = document.querySelectorAll("#sceneGeometryDialog [data-scene-edit-only]");
+            for (index = 0; index < editOnly.length; index++) {
+                editOnly[index].hidden = viewOn;
             }
             var viewBtn = document.getElementById("sceneViewToggleBtn");
             if (viewBtn) {
@@ -12682,6 +12716,12 @@
             }
             if (pin.icon) {
                 binding.icon = pin.icon;
+            }
+            if (pin.iconOnColor) {
+                binding.iconOnColor = pin.iconOnColor;
+            }
+            if (pin.iconOffColor) {
+                binding.iconOffColor = pin.iconOffColor;
             }
             if (pin.gauge) {
                 binding.gauge = pin.gauge;
@@ -17703,6 +17743,72 @@
             }
         }
 
+        function normalizeCssHexColor(value, fallback) {
+            var text = String(value == null ? "" : value).trim();
+            if (/^#[0-9a-fA-F]{6}$/.test(text)) {
+                return text.toLowerCase();
+            }
+            if (/^#[0-9a-fA-F]{3}$/.test(text)) {
+                return ("#" + text[1] + text[1] + text[2] + text[2] + text[3] + text[3]).toLowerCase();
+            }
+            return fallback;
+        }
+
+        function ensureConsoleDeviceIconColorPickers() {
+            var onHost = document.getElementById("consoleDeviceIconOnColorControl");
+            var offHost = document.getElementById("consoleDeviceIconOffColorControl");
+            if (onHost && onHost.getAttribute("data-ready") !== "1") {
+                var onControl = buildConsoleColorPickerControl(
+                    consoleDeviceIconOnColorDraft,
+                    function (hex) {
+                        consoleDeviceIconOnColorDraft = normalizeCssHexColor(
+                            hex, CONSOLE_ICON_ON_COLOR_DEFAULT
+                        );
+                    }
+                );
+                onHost.innerHTML = "";
+                onHost.appendChild(onControl);
+                onHost.setAttribute("data-ready", "1");
+                onHost.setColor = function (hex) {
+                    consoleDeviceIconOnColorDraft = normalizeCssHexColor(
+                        hex, CONSOLE_ICON_ON_COLOR_DEFAULT
+                    );
+                    onControl.setColor(consoleDeviceIconOnColorDraft);
+                };
+            }
+            if (offHost && offHost.getAttribute("data-ready") !== "1") {
+                var offControl = buildConsoleColorPickerControl(
+                    consoleDeviceIconOffColorDraft,
+                    function (hex) {
+                        consoleDeviceIconOffColorDraft = normalizeCssHexColor(
+                            hex, CONSOLE_ICON_OFF_COLOR_DEFAULT
+                        );
+                    }
+                );
+                offHost.innerHTML = "";
+                offHost.appendChild(offControl);
+                offHost.setAttribute("data-ready", "1");
+                offHost.setColor = function (hex) {
+                    consoleDeviceIconOffColorDraft = normalizeCssHexColor(
+                        hex, CONSOLE_ICON_OFF_COLOR_DEFAULT
+                    );
+                    offControl.setColor(consoleDeviceIconOffColorDraft);
+                };
+            }
+        }
+
+        function syncConsoleDeviceIconColorPickers() {
+            ensureConsoleDeviceIconColorPickers();
+            var onHost = document.getElementById("consoleDeviceIconOnColorControl");
+            var offHost = document.getElementById("consoleDeviceIconOffColorControl");
+            if (onHost && typeof onHost.setColor === "function") {
+                onHost.setColor(consoleDeviceIconOnColorDraft);
+            }
+            if (offHost && typeof offHost.setColor === "function") {
+                offHost.setColor(consoleDeviceIconOffColorDraft);
+            }
+        }
+
         function renderConsoleDeviceIconGrid() {
             var host = document.getElementById("consoleDeviceIconGrid");
             if (!host) {
@@ -17729,6 +17835,7 @@
                     host.appendChild(button);
                 })(BINARY_SENSOR_ICON_CHOICES[index]);
             }
+            syncConsoleDeviceIconColorPickers();
         }
 
         function refreshConsoleDeviceTitleLayoutFields() {
@@ -18297,6 +18404,12 @@
                 });
             }
             consoleDeviceIconDraft = normalizeMdiIconId(binding.icon || "mdi:checkbox-marked-circle");
+            consoleDeviceIconOnColorDraft = normalizeCssHexColor(
+                binding.iconOnColor, CONSOLE_ICON_ON_COLOR_DEFAULT
+            );
+            consoleDeviceIconOffColorDraft = normalizeCssHexColor(
+                binding.iconOffColor, CONSOLE_ICON_OFF_COLOR_DEFAULT
+            );
             // Apply after option lists exist — setting .value before Icon/Gauge options are built drops it.
             consoleDevicePreferredViewStyle = binding.viewStyle === "gauge"
                 ? "gauge"
@@ -18677,6 +18790,12 @@
                 if (viewStyleSelect && viewStyleSelect.value === "icon") {
                     automationBody.viewStyle = "icon";
                     automationBody.icon = normalizeMdiIconId(consoleDeviceIconDraft);
+                    automationBody.iconOnColor = normalizeCssHexColor(
+                        consoleDeviceIconOnColorDraft, CONSOLE_ICON_ON_COLOR_DEFAULT
+                    );
+                    automationBody.iconOffColor = normalizeCssHexColor(
+                        consoleDeviceIconOffColorDraft, CONSOLE_ICON_OFF_COLOR_DEFAULT
+                    );
                 } else {
                     automationBody.viewStyle = "default";
                 }
@@ -18758,6 +18877,12 @@
             }
             if (body.viewStyle === "icon") {
                 body.icon = normalizeMdiIconId(consoleDeviceIconDraft);
+                body.iconOnColor = normalizeCssHexColor(
+                    consoleDeviceIconOnColorDraft, CONSOLE_ICON_ON_COLOR_DEFAULT
+                );
+                body.iconOffColor = normalizeCssHexColor(
+                    consoleDeviceIconOffColorDraft, CONSOLE_ICON_OFF_COLOR_DEFAULT
+                );
             }
             body = applyDialogLayoutFieldsToBody(body);
             return applyClickActionsToBindingBody(body);
@@ -19321,6 +19446,25 @@
                             </div>
                         </div>
                         <div class="status-group">
+                            <h3 class="group-title">File system</h3>
+                            <div class="status-row">
+                                <span class="status-row-label">Total capacity</span>
+                                <p id="statusFsTotal" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Free space</span>
+                                <p id="statusFsFree" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Config size</span>
+                                <p id="statusFsConfig" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Scene size</span>
+                                <p id="statusFsScene" class="status-value">—</p>
+                            </div>
+                        </div>
+                        <div class="status-group">
                             <h3 class="group-title">Devices</h3>
                             <div class="status-row">
                                 <span class="status-row-label">Zigbee devices</span>
@@ -19339,6 +19483,8 @@
                                 <p id="statusMqttOnline" class="status-value">—</p>
                             </div>
                         </div>
+                    </div>
+                    <div class="status-column">
                         <div class="status-group">
                             <h3 class="group-title">MQTT</h3>
                             <div class="status-row">
@@ -19354,8 +19500,6 @@
                                 <p id="statusMqttTopics" class="status-value">—</p>
                             </div>
                         </div>
-                    </div>
-                    <div class="status-column">
                         <div class="status-group">
                             <h3 class="group-title">Network</h3>
                             <div class="status-row">
@@ -20697,24 +20841,28 @@
         <h3>Edit scene</h3>
         <p id="sceneGeometryError" class="save-error" hidden></p>
         <div class="scene-designer-toolbar">
-            <button type="button" class="btn btn-secondary btn-icon" title="Add floor" aria-label="Add floor"
-                    onclick="sceneGeometryAddFloor()">
+            <button type="button" class="btn btn-secondary btn-icon" data-scene-edit-only title="Add floor"
+                    aria-label="Add floor" onclick="sceneGeometryAddFloor()">
                 <span class="mdi mdi-layers-plus" aria-hidden="true"></span>
             </button>
-            <button type="button" class="btn btn-secondary btn-icon" data-scene-tool="wall" title="Add wall"
-                    aria-label="Add wall" aria-pressed="false" onclick="setSceneGeometryTool('wall')">
+            <button type="button" class="btn btn-secondary btn-icon" data-scene-edit-only data-scene-tool="wall"
+                    title="Add wall" aria-label="Add wall" aria-pressed="false"
+                    onclick="setSceneGeometryTool('wall')">
                 <span class="mdi mdi-wall" aria-hidden="true"></span>
             </button>
-            <button type="button" class="btn btn-secondary btn-icon" data-scene-tool="window" title="Add window"
-                    aria-label="Add window" aria-pressed="false" onclick="setSceneGeometryTool('window')">
+            <button type="button" class="btn btn-secondary btn-icon" data-scene-edit-only data-scene-tool="window"
+                    title="Add window" aria-label="Add window" aria-pressed="false"
+                    onclick="setSceneGeometryTool('window')">
                 <span class="mdi mdi-window-closed-variant" aria-hidden="true"></span>
             </button>
-            <button type="button" class="btn btn-secondary btn-icon" data-scene-tool="door" title="Add door"
-                    aria-label="Add door" aria-pressed="false" onclick="setSceneGeometryTool('door')">
+            <button type="button" class="btn btn-secondary btn-icon" data-scene-edit-only data-scene-tool="door"
+                    title="Add door" aria-label="Add door" aria-pressed="false"
+                    onclick="setSceneGeometryTool('door')">
                 <span class="mdi mdi-door" aria-hidden="true"></span>
             </button>
-            <button type="button" class="btn btn-secondary btn-icon" title="Remove selected element"
-                    aria-label="Remove selected element" onclick="sceneGeometryRemoveSelected()">
+            <button type="button" class="btn btn-secondary btn-icon" data-scene-edit-only
+                    title="Remove selected element" aria-label="Remove selected element"
+                    onclick="sceneGeometryRemoveSelected()">
                 <span class="mdi mdi-trash-can-outline" aria-hidden="true"></span>
             </button>
             <button type="button" id="sceneViewToggleBtn"
@@ -20889,6 +21037,14 @@
             <div id="consoleDeviceIconGroup" class="console-icon-config" hidden>
                 <p class="field-hint">Icon (Material Design Icons — Home Assistant / Pictogrammers)</p>
                 <div id="consoleDeviceIconGrid" class="console-icon-grid"></div>
+                <div class="console-binding-general-row">
+                    <span>ON color</span>
+                    <div id="consoleDeviceIconOnColorControl" class="console-color-picker-control-host" aria-label="ON color"></div>
+                </div>
+                <div class="console-binding-general-row">
+                    <span>OFF color</span>
+                    <div id="consoleDeviceIconOffColorControl" class="console-color-picker-control-host" aria-label="OFF color"></div>
+                </div>
             </div>
             <div id="consoleDeviceGaugeGroup" class="console-gauge-config" hidden>
                 <p class="field-hint">Gauge</p>

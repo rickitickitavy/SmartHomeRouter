@@ -938,6 +938,47 @@ static void countLwipTcpConnections(int *inboundOut, int *outboundOut) {
     }
 }
 
+static size_t littleFsFileSizeBytes(const char *path) {
+    if (path == nullptr || path[0] == '\0' || !LittleFS.exists(path)) {
+        return 0;
+    }
+    File file = LittleFS.open(path, "r");
+    if (!file) {
+        return 0;
+    }
+    const size_t size = file.size();
+    file.close();
+    return size;
+}
+
+static size_t littleFsDirSizeBytes(const char *dirPath) {
+    if (dirPath == nullptr || dirPath[0] == '\0') {
+        return 0;
+    }
+    File dir = LittleFS.open(dirPath);
+    if (!dir || !dir.isDirectory()) {
+        return 0;
+    }
+    size_t total = 0;
+    File entry = dir.openNextFile();
+    while (entry) {
+        if (!entry.isDirectory()) {
+            total += entry.size();
+        }
+        entry = dir.openNextFile();
+    }
+    return total;
+}
+
+static size_t littleFsConfigSizeBytes() {
+    return littleFsFileSizeBytes(DEVICES_STORE_PATH)
+        + littleFsFileSizeBytes(USERS_STORE_PATH)
+        + littleFsFileSizeBytes(CONSOLES_STORE_PATH)
+        + littleFsFileSizeBytes(AUTOMATIONS_STORE_PATH)
+        + littleFsFileSizeBytes(CAMERAS_STORE_PATH)
+        + littleFsFileSizeBytes(SCENES_STORE_PATH);
+}
+
 static String hostGatewayStatusJson() {
     int zigbeeDevices = 0;
     int zigbeeOnline = 0;
@@ -1139,6 +1180,21 @@ static String hostGatewayStatusJson() {
         json += String((unsigned long)historyStats.slabUsedKiB);
         json += ",\"historyValuesStored\":";
         json += String((unsigned long)historyStats.valuesStored);
+    }
+    {
+        const size_t fsTotal = LittleFS.totalBytes();
+        const size_t fsUsed = LittleFS.usedBytes();
+        const size_t fsFree = fsTotal > fsUsed ? (fsTotal - fsUsed) : 0;
+        const size_t fsConfig = littleFsConfigSizeBytes();
+        const size_t fsScene = littleFsDirSizeBytes(SCENE_BAKES_DIR);
+        json += ",\"fsTotalKb\":";
+        json += String((unsigned long)((fsTotal + 512) / 1024));
+        json += ",\"fsFreeKb\":";
+        json += String((unsigned long)((fsFree + 512) / 1024));
+        json += ",\"fsConfigKb\":";
+        json += String((unsigned long)((fsConfig + 512) / 1024));
+        json += ",\"fsSceneKb\":";
+        json += String((unsigned long)((fsScene + 512) / 1024));
     }
     json += "}";
     return json;

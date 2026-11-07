@@ -93,6 +93,8 @@ void ConsoleStore::freeIconConfig(ConsoleIconConfig *&iconCfg) {
         return;
     }
     free(iconCfg->icon);
+    free(iconCfg->onColor);
+    free(iconCfg->offColor);
     free(iconCfg);
     iconCfg = nullptr;
 }
@@ -344,6 +346,16 @@ void ConsoleStore::appendBindingLayoutJson(PsramJsonBuffer &json, const ConsoleB
         if (binding->alignH != CONSOLE_ICON_ALIGN_CENTER) {
             json += ",\"iconAlign\":\"";
             json += iconAlignJsonId(binding->alignH);
+            json += "\"";
+        }
+        if (binding->iconCfg->onColor != nullptr && binding->iconCfg->onColor[0] != '\0') {
+            json += ",\"iconOnColor\":\"";
+            appendJsonEscaped(json, binding->iconCfg->onColor, CONSOLE_GAUGE_COLOR_MAX);
+            json += "\"";
+        }
+        if (binding->iconCfg->offColor != nullptr && binding->iconCfg->offColor[0] != '\0') {
+            json += ",\"iconOffColor\":\"";
+            appendJsonEscaped(json, binding->iconCfg->offColor, CONSOLE_GAUGE_COLOR_MAX);
             json += "\"";
         }
     }
@@ -804,6 +816,10 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         extractJsonString(object.c_str(), "param", paramText);
         extractJsonString(object.c_str(), "viewStyle", viewStyleText);
         extractJsonString(object.c_str(), "icon", iconText);
+        String iconOnColorText;
+        String iconOffColorText;
+        extractJsonString(object.c_str(), "iconOnColor", iconOnColorText);
+        extractJsonString(object.c_str(), "iconOffColor", iconOffColorText);
         extractJsonString(object.c_str(), "titlePosition", titlePositionText);
         extractJsonString(object.c_str(), "iconAlign", iconAlignText);
         extractJsonString(object.c_str(), "alignH", alignHText);
@@ -1025,6 +1041,30 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
                     freeBindingList(*outBindings);
                     return false;
                 }
+            }
+            if (iconOnColorText.length() > 0) {
+                binding->iconCfg->onColor = duplicateBoundedString(
+                    iconOnColorText.c_str(), CONSOLE_GAUGE_COLOR_MAX - 1
+                );
+            }
+            if (iconOffColorText.length() > 0) {
+                binding->iconCfg->offColor = duplicateBoundedString(
+                    iconOffColorText.c_str(), CONSOLE_GAUGE_COLOR_MAX - 1
+                );
+            }
+            if ((iconOnColorText.length() > 0 && binding->iconCfg->onColor == nullptr)
+                || (iconOffColorText.length() > 0 && binding->iconCfg->offColor == nullptr)) {
+                freeIconConfig(binding->iconCfg);
+                free(binding->ieeeText);
+                free(binding->automationName);
+                free(binding->title);
+                free(binding->unit);
+                free(binding->param);
+                freeLogicalConfig(binding->logical);
+                freeGaugeConfig(binding->gauge);
+                free(binding);
+                freeBindingList(*outBindings);
+                return false;
             }
         }
         binding->clickActionFalseJson = nullptr;

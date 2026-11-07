@@ -3192,15 +3192,15 @@ html, body {
 }
 
 .console-binary-icon.is-on {
-    color: #E8C547;
+    color: var(--console-icon-on-color, #E8C547);
 }
 
 html[data-theme="light"] .console-binary-icon.is-on {
-    color: #C9A227;
+    color: var(--console-icon-on-color, #C9A227);
 }
 
 .console-binary-icon.is-off {
-    color: color-mix(in srgb, var(--muted) 70%, #000 30%);
+    color: var(--console-icon-off-color, color-mix(in srgb, var(--muted) 70%, #000 30%));
     opacity: 1;
 }
 
@@ -5337,7 +5337,11 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 
 .scene-cell-pin .console-binary-icon .mdi,
 .scene-bind-pin .console-binary-icon .mdi {
-    font-size: clamp(0.75rem, 55cqmin, 4rem);
+    /* Fill the pin box — no rem cap that stops growth when the outline is large. */
+    font-size: min(72cqw, 72cqh);
+    max-width: 100%;
+    max-height: 100%;
+    line-height: 1;
 }
 
 .scene-cell-pin,

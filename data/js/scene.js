@@ -738,6 +738,20 @@
         return false;
     }
 
+    // Square post filling the gap left when connected walls are trimmed by half thickness.
+    function cornerPostFaces(x, z, baseY, wallHeight, thickness, colorHex) {
+        var half = Math.max(0.004, thickness * 0.5);
+        return wallBoxFaces(
+            { x1: x - half, z1: z, x2: x + half, z2: z },
+            baseY,
+            wallHeight,
+            thickness,
+            colorHex,
+            1,
+            { trimStart: 0, trimEnd: 0, skipStartCap: false, skipEndCap: false }
+        );
+    }
+
     function pushWallFace(faces, points, colorHex, options) {
         options = options || {};
         faces.push({
@@ -1171,11 +1185,11 @@
         return faces;
     }
 
-    function closedLoopFromWalls(walls) {
+    function closedLoopFromWalls(walls, joinEpsilon) {
         if (!walls || walls.length < 3) {
             return null;
         }
-        var epsilon = 1e-4;
+        var epsilon = joinEpsilon == null ? 1e-3 : joinEpsilon;
         var used = walls.map(function () { return false; });
         var points = [{ x: walls[0].x1, z: walls[0].z1 }, { x: walls[0].x2, z: walls[0].z2 }];
         used[0] = true;
@@ -1280,19 +1294,37 @@
             });
         });
 
-        var loop = closedLoopFromWalls(walls);
+        var joinEps = Math.max(1e-3, thickness * 0.35);
+        var loop = closedLoopFromWalls(walls, joinEps);
         if (loop) {
             faces = faces.concat(closedLoopWallFaces(
                 loop, openings, baseY, wallHeight, thickness, wallColor
             ));
         } else {
+            var cornerKeys = {};
             walls.forEach(function (seg, index) {
                 var join = {
-                    connectedStart: wallConnectedAt(walls, index, 1),
-                    connectedEnd: wallConnectedAt(walls, index, 2)
+                    connectedStart: wallConnectedAt(walls, index, 1, joinEps),
+                    connectedEnd: wallConnectedAt(walls, index, 2, joinEps)
                 };
                 faces = faces.concat(wallFacesWithOpenings(
                     seg, openings, baseY, wallHeight, thickness, join
+                ));
+                if (join.connectedStart) {
+                    cornerKeys[seg.x1.toFixed(5) + "," + seg.z1.toFixed(5)] = {
+                        x: seg.x1, z: seg.z1
+                    };
+                }
+                if (join.connectedEnd) {
+                    cornerKeys[seg.x2.toFixed(5) + "," + seg.z2.toFixed(5)] = {
+                        x: seg.x2, z: seg.z2
+                    };
+                }
+            });
+            Object.keys(cornerKeys).forEach(function (key) {
+                var corner = cornerKeys[key];
+                faces = faces.concat(cornerPostFaces(
+                    corner.x, corner.z, baseY, wallHeight, thickness, wallColor
                 ));
             });
         }
@@ -1465,23 +1497,14 @@
             event.preventDefault();
             var factor = Math.exp(-event.deltaY * 0.0012);
             if (self.viewMode) {
+                // Wheel always zooms the orbit around scene center (same as room scaling).
+                self._flyMoved = false;
+                self.viewZoom = Math.max(0.35, Math.min(3.5, self.viewZoom * factor));
+                self.model.viewZoom = self.viewZoom;
+                self.eyeX = null;
+                self.eyeY = null;
+                self.eyeZ = null;
                 self.ensureEyeFromOrbit();
-                if (self._flyMoved) {
-                    // Dolly along look direction after fly has taken over.
-                    var forward = lookForwardFromAngles(self.yaw, self.pitch);
-                    var step = (factor > 1 ? 1 : -1) * 0.08 * Math.max(0.35, self.viewZoom || 1);
-                    self.eyeX += forward.x * step;
-                    self.eyeY += forward.y * step;
-                    self.eyeZ += forward.z * step;
-                    self.persistEyeToModel();
-                } else {
-                    self.viewZoom = Math.max(0.35, Math.min(3.5, self.viewZoom * factor));
-                    self.model.viewZoom = self.viewZoom;
-                    self.eyeX = null;
-                    self.eyeY = null;
-                    self.eyeZ = null;
-                    self.ensureEyeFromOrbit();
-                }
                 if (typeof self.onChange === "function") {
                     self.onChange();
                 }
@@ -1603,12 +1626,12 @@
             var rightZ = -fx;
             var speed = 0.55 * Math.max(0.35, self.viewZoom || 1);
             var step = speed * dt;
-            // W = up, D = down; A/S = ground strafe; mouse wheel = zoom/dolly.
+            // W = up, S = down; A/D = ground strafe; mouse wheel = zoom.
             if (self._keysDown.w) {
                 self.eyeY += step;
                 self._flyMoved = true;
             }
-            if (self._keysDown.d) {
+            if (self._keysDown.s) {
                 self.eyeY -= step;
                 self._flyMoved = true;
             }
@@ -1617,7 +1640,7 @@
                 self.eyeZ -= rightZ * step;
                 self._flyMoved = true;
             }
-            if (self._keysDown.s) {
+            if (self._keysDown.d) {
                 self.eyeX += rightX * step;
                 self.eyeZ += rightZ * step;
                 self._flyMoved = true;
@@ -1794,14 +1817,24 @@
         three.camera = three.perspCamera;
         this.perspective = true;
         this.model.perspective = true;
-        this.ensureEyeFromOrbit();
-        var forward = lookForwardFromAngles(this.yaw, this.pitch);
-        three.camera.position.set(this.eyeX, this.eyeY, this.eyeZ);
-        three.camera.lookAt(
-            this.eyeX + forward.x,
-            this.eyeY + forward.y,
-            this.eyeZ + forward.z
-        );
+        var orbit = orbitEyeFromAngles(this.model, this.yaw, this.pitch, this.viewZoom);
+        if (!this._flyMoved) {
+            this.eyeX = orbit.x;
+            this.eyeY = orbit.y;
+            this.eyeZ = orbit.z;
+            this.persistEyeToModel();
+            three.camera.position.set(orbit.x, orbit.y, orbit.z);
+            three.camera.lookAt(orbit.targetX, orbit.targetY, orbit.targetZ);
+        } else {
+            this.ensureEyeFromOrbit();
+            var forward = lookForwardFromAngles(this.yaw, this.pitch);
+            three.camera.position.set(this.eyeX, this.eyeY, this.eyeZ);
+            three.camera.lookAt(
+                this.eyeX + forward.x,
+                this.eyeY + forward.y,
+                this.eyeZ + forward.z
+            );
+        }
         three.camera.updateMatrixWorld();
     };
 
@@ -1961,6 +1994,11 @@
             this.draw();
             return;
         }
+        // Entering View always frames the scene center (mouse drag orbits that center).
+        this._flyMoved = false;
+        this.eyeX = null;
+        this.eyeY = null;
+        this.eyeZ = null;
         this.ensureEyeFromOrbit();
         var self = this;
         loadThreeJs().then(function () {
@@ -2046,6 +2084,10 @@
             next = 1.5;
         }
         this.model.wallHeight = next;
+        // View mode keeps a cached Three.js mesh — rebuild so height updates immediately.
+        if (this.viewMode && this._three) {
+            this.rebuildThreeRoot();
+        }
         this.notify();
         this.draw();
     };
@@ -2653,16 +2695,12 @@
             this.pitch = Math.max(0.28, Math.min(1.25, this.pitch + dy * 0.01));
             this.model.yaw = this.yaw;
             this.model.pitch = this.pitch;
-            if (this._flyMoved) {
-                // After WASD, mouse only looks; eye stays put.
-                this.persistEyeToModel();
-            } else {
-                // Orbit framing until the operator starts flying.
-                this.eyeX = null;
-                this.eyeY = null;
-                this.eyeZ = null;
-                this.ensureEyeFromOrbit();
-            }
+            // Always orbit the scene center so drag feels like the room rotating.
+            this._flyMoved = false;
+            this.eyeX = null;
+            this.eyeY = null;
+            this.eyeZ = null;
+            this.ensureEyeFromOrbit();
             if (typeof this.onChange === "function") {
                 this.onChange();
             }
@@ -2842,7 +2880,7 @@
             ctx.fillStyle = "#9aa4b5";
             ctx.font = "12px sans-serif";
             ctx.fillText(
-                "View scene · W up · D down · A/S strafe · drag look · wheel zoom",
+                "View scene · drag orbit · W up · S down · A/D strafe · wheel zoom",
                 10,
                 18
             );

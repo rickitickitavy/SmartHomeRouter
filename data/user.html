@@ -1422,6 +1422,22 @@
                 "statusHistoryValues",
                 payload && payload.historyValuesStored != null ? String(payload.historyValuesStored) : "—"
             );
+            setStatusText(
+                "statusFsTotal",
+                payload && payload.fsTotalKb != null ? String(payload.fsTotalKb) + " kB" : "—"
+            );
+            setStatusText(
+                "statusFsFree",
+                payload && payload.fsFreeKb != null ? String(payload.fsFreeKb) + " kB" : "—"
+            );
+            setStatusText(
+                "statusFsConfig",
+                payload && payload.fsConfigKb != null ? String(payload.fsConfigKb) + " kB" : "—"
+            );
+            setStatusText(
+                "statusFsScene",
+                payload && payload.fsSceneKb != null ? String(payload.fsSceneKb) + " kB" : "—"
+            );
             if (payload && payload.wifiRssiDbm != null) {
                 setStatusText("statusWifiSignal", String(payload.wifiRssiDbm) + " dBm");
             } else {
@@ -1513,6 +1529,12 @@
                 ["Pages", "statusHistoryPages"],
                 ["PSRAM usage", "statusHistoryPsram"],
                 ["Values stored", "statusHistoryValues"]
+            ]);
+            appendStatusGroup(stack, "File system", [
+                ["Total capacity", "statusFsTotal"],
+                ["Free space", "statusFsFree"],
+                ["Config size", "statusFsConfig"],
+                ["Scene size", "statusFsScene"]
             ]);
             appendStatusGroup(stack, "Devices", [
                 ["Zigbee devices", "statusZigbeeDevices"],
@@ -2377,6 +2399,12 @@
                 + toneClass
                 + (iconOptions.disabled ? " is-disabled" : "");
             wrap.style.setProperty("--console-icon-scale", String(normalizeIconScale(binding && binding.iconScale)));
+            if (binding && binding.iconOnColor) {
+                wrap.style.setProperty("--console-icon-on-color", String(binding.iconOnColor));
+            }
+            if (binding && binding.iconOffColor) {
+                wrap.style.setProperty("--console-icon-off-color", String(binding.iconOffColor));
+            }
             wrap.title = stateText ? String(stateText) : iconId;
             if (iconOptions.ariaLabel) {
                 wrap.setAttribute("aria-label", iconOptions.ariaLabel);

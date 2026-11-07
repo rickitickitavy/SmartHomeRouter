@@ -22,6 +22,8 @@ struct ConsoleGaugeConfig {
 
 struct ConsoleIconConfig {
     char *icon;
+    char *onColor;
+    char *offColor;
     float iconScale;
     uint8_t iconAlign;
 };
