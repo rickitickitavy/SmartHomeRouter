@@ -16,6 +16,7 @@
 #include <ESPAsyncWebServer.h>
 #include <AsyncWebSocket.h>
 #include <Update.h>
+#include <LittleFS.h>
 #include <IPAddress.h>
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
@@ -50,13 +51,15 @@ WebConsole::WebConsole(
     UserStore *userStore,
     ConsoleStore *consoleStore,
     AutomationStore *automationStore,
-    CameraStore *cameraStore
+    CameraStore *cameraStore,
+    SceneStore *sceneStore
 )
     : settingsManager(settingsManager),
       userStore(userStore),
       consoleStore(consoleStore),
       automationStore(automationStore),
       cameraStore(cameraStore),
+      sceneStore(sceneStore),
       server(80),
       devicesSocket("/ws/devices"),
       consolesSocket("/ws/consoles") {}
@@ -65,6 +68,19 @@ void WebConsole::begin() {
     server.on("/", HTTP_GET, [this](AsyncWebServerRequest *request) { handleRoot(request); });
     server.on("/index.html", HTTP_GET, [this](AsyncWebServerRequest *request) { handleRoot(request); });
     server.on("/user.html", HTTP_GET, [this](AsyncWebServerRequest *request) { handleUserPage(request); });
+    server.on("/js/scene.js", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(
+            200,
+            kEmbeddedSceneJsGzMime,
+            kEmbeddedSceneJsGz,
+            kEmbeddedSceneJsGzLen
+        );
+        if (kEmbeddedWebAssetsGzip) {
+            response->addHeader("Content-Encoding", "gzip");
+        }
+        response->addHeader("Cache-Control", "no-store");
+        request->send(response);
+    });
     server.on("/css/all.css", HTTP_GET, [this](AsyncWebServerRequest *request) {
         AsyncWebServerResponse *response = request->beginResponse(
             200,
@@ -442,6 +458,61 @@ void WebConsole::begin() {
         AsyncURIMatcher::exact("/api/cameras"),
         HTTP_DELETE,
         [this](AsyncWebServerRequest *request) { handleCameraDelete(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
+
+    server.on("/api/scenes/item", HTTP_GET, [this](AsyncWebServerRequest *request) { handleSceneGet(request); });
+    server.on("/api/scenes/view", HTTP_GET, [this](AsyncWebServerRequest *request) { handleSceneViewGet(request); });
+    server.on("/api/scenes/bake", HTTP_GET, [this](AsyncWebServerRequest *request) { handleSceneBakeGet(request); });
+    server.on(
+        "/api/scenes/bake",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleSceneBakePost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxRestore);
+        }
+    );
+    server.on("/api/scenes/store", HTTP_GET, [this](AsyncWebServerRequest *request) { handleScenesStoreGet(request); });
+    server.on(
+        "/api/scenes/restore",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleScenesRestorePost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxRestore);
+        }
+    );
+    server.on(
+        "/api/scenes/update",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleScenePut(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxRestore);
+        }
+    );
+    server.on(
+        AsyncURIMatcher::exact("/api/scenes"),
+        HTTP_GET,
+        [this](AsyncWebServerRequest *request) { handleScenesGet(request); }
+    );
+    server.on(
+        AsyncURIMatcher::exact("/api/scenes"),
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleScenesPost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxRestore);
+        }
+    );
+    server.on(
+        AsyncURIMatcher::exact("/api/scenes"),
+        HTTP_DELETE,
+        [this](AsyncWebServerRequest *request) { handleSceneDelete(request); },
         nullptr,
         [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
             appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
@@ -944,12 +1015,16 @@ bool WebConsole::userCanEditConsoles(const UserRecord *user) const {
     return user != nullptr && (user->isAdmin || user->editConsoles);
 }
 
+bool WebConsole::userCanEditScenes(const UserRecord *user) const {
+    return user != nullptr && (user->isAdmin || user->editScenes);
+}
+
 bool WebConsole::userIsOperator(const UserRecord *user) const {
     if (user == nullptr) {
         return false;
     }
     return user->isAdmin || user->editDevices || user->addDevices || user->removeDevices || user->editUsers
-        || user->editConsoles || user->monitor || user->controlDevices;
+        || user->editConsoles || user->editScenes || user->monitor || user->controlDevices;
 }
 
 bool WebConsole::requireEditConsoles(AsyncWebServerRequest *request, const UserRecord **userOut, bool touchActivity) {
@@ -958,6 +1033,21 @@ bool WebConsole::requireEditConsoles(AsyncWebServerRequest *request, const UserR
         return false;
     }
     if (!userCanEditConsoles(user)) {
+        request->send(403, "text/plain", "Forbidden");
+        return false;
+    }
+    if (userOut != nullptr) {
+        *userOut = user;
+    }
+    return true;
+}
+
+bool WebConsole::requireEditScenes(AsyncWebServerRequest *request, const UserRecord **userOut, bool touchActivity) {
+    const UserRecord *user = nullptr;
+    if (!requireUser(request, &user, touchActivity)) {
+        return false;
+    }
+    if (!userCanEditScenes(user)) {
         request->send(403, "text/plain", "Forbidden");
         return false;
     }
@@ -988,6 +1078,7 @@ void WebConsole::fillUserFromJson(const char *json, UserRecord *user) {
     extractJsonBool(json, "removeDevices", user->removeDevices);
     extractJsonBool(json, "editUsers", user->editUsers);
     extractJsonBool(json, "editConsoles", user->editConsoles);
+    extractJsonBool(json, "editScenes", user->editScenes);
     extractJsonBool(json, "monitor", user->monitor);
     extractJsonBool(json, "controlDevices", user->controlDevices);
     extractJsonBool(json, "isBlocked", user->isBlocked);
@@ -1886,6 +1977,292 @@ void WebConsole::handleCameraDelete(AsyncWebServerRequest *request) {
         return;
     }
     sendCameraWriteResult(request, result);
+}
+
+void WebConsole::sendSceneWriteResult(AsyncWebServerRequest *request, SceneWriteResult result) {
+    if (result == SceneWriteOk) {
+        request->send(200, "text/plain", "Saved");
+        return;
+    }
+    if (result == SceneWriteNotFound) {
+        request->send(404, "text/plain", "Scene not found");
+        return;
+    }
+    if (result == SceneWriteFull) {
+        request->send(507, "text/plain", "Scene store full");
+        return;
+    }
+    if (result == SceneWriteDuplicateId) {
+        request->send(409, "text/plain", "Duplicate scene id");
+        return;
+    }
+    if (result == SceneWriteOutOfMemory) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
+    }
+    if (result == SceneWriteBadName || result == SceneWriteBadId || result == SceneWriteValidation
+        || result == SceneWriteParseError) {
+        request->send(400, "text/plain", SceneStore::writeResultText(result));
+        return;
+    }
+    if (result == SceneWriteBakeFailed) {
+        request->send(500, "text/plain", "Bake write failed");
+        return;
+    }
+    request->send(400, "text/plain", "Bad scene");
+}
+
+void WebConsole::handleScenesGet(AsyncWebServerRequest *request) {
+    const UserRecord *user = nullptr;
+    if (!requireUser(request, &user)) {
+        return;
+    }
+    // List for Scenes editors and Consoles composite scene pickers.
+    if (user == nullptr || (!userCanEditScenes(user) && !userCanEditConsoles(user))) {
+        request->send(403, "text/plain", "Forbidden");
+        return;
+    }
+    if (sceneStore == nullptr) {
+        request->send(500, "text/plain", "Scenes unavailable");
+        return;
+    }
+    String json = sceneStore->listJson();
+    if (json.length() == 0) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
+    }
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleScenesStoreGet(AsyncWebServerRequest *request) {
+    if (!requireEditScenes(request, nullptr)) {
+        return;
+    }
+    if (sceneStore == nullptr) {
+        request->send(500, "text/plain", "Scenes unavailable");
+        return;
+    }
+    String json = sceneStore->exportJson();
+    if (json.length() == 0) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
+    }
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleScenesRestorePost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireEditScenes(request, nullptr)) {
+        return;
+    }
+    if (sceneStore == nullptr) {
+        request->send(500, "text/plain", "Scenes unavailable");
+        return;
+    }
+    String trimmed = body;
+    trimmed.trim();
+    if (trimmed.length() == 0 || trimmed.charAt(0) != '[') {
+        request->send(400, "text/plain", "Need a scenes JSON array");
+        return;
+    }
+    const SceneWriteResult result = sceneStore->replaceAllFromJson(trimmed);
+    if (result != SceneWriteOk) {
+        sendSceneWriteResult(request, result);
+        return;
+    }
+    request->send(200, "text/plain", "Restored");
+}
+
+void WebConsole::handleScenesPost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireEditScenes(request, nullptr)) {
+        return;
+    }
+    if (sceneStore == nullptr) {
+        request->send(500, "text/plain", "Scenes unavailable");
+        return;
+    }
+    SceneRecord *created = nullptr;
+    const SceneWriteResult result = sceneStore->createFromJson(body.c_str(), &created);
+    if (result != SceneWriteOk || created == nullptr) {
+        sendSceneWriteResult(request, result);
+        return;
+    }
+    String json = sceneStore->sceneFullJson(created);
+    if (json.length() == 0) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
+    }
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleSceneGet(AsyncWebServerRequest *request) {
+    const UserRecord *user = nullptr;
+    if (!requireUser(request, &user)) {
+        return;
+    }
+    // Full scene for editors; console viewers get bake + pins via bake endpoint / Place payload.
+    if (user == nullptr || (!userCanEditScenes(user) && !userCanEditConsoles(user))) {
+        request->send(403, "text/plain", "Forbidden");
+        return;
+    }
+    if (sceneStore == nullptr) {
+        request->send(500, "text/plain", "Scenes unavailable");
+        return;
+    }
+    String sceneId;
+    if (request->hasParam("id")) {
+        sceneId = request->getParam("id")->value();
+    }
+    const SceneRecord *scene = sceneStore->findById(sceneId.c_str());
+    if (scene == nullptr) {
+        request->send(404, "text/plain", "Scene not found");
+        return;
+    }
+    String json = sceneStore->sceneFullJson(scene);
+    if (json.length() == 0) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
+    }
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleScenePut(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireEditScenes(request, nullptr)) {
+        return;
+    }
+    if (sceneStore == nullptr) {
+        request->send(500, "text/plain", "Scenes unavailable");
+        return;
+    }
+    String sceneId;
+    if (request->hasParam("id")) {
+        sceneId = request->getParam("id")->value();
+    }
+    const SceneWriteResult result = sceneStore->replaceFromJson(sceneId.c_str(), body.c_str(), true);
+    sendSceneWriteResult(request, result);
+}
+
+void WebConsole::handleSceneDelete(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireEditScenes(request, nullptr)) {
+        return;
+    }
+    if (sceneStore == nullptr) {
+        request->send(500, "text/plain", "Scenes unavailable");
+        return;
+    }
+    String sceneId;
+    if (request->hasParam("id")) {
+        sceneId = request->getParam("id")->value();
+    } else {
+        extractJsonString(body.c_str(), "id", sceneId);
+    }
+    const SceneWriteResult result = sceneStore->deleteById(sceneId.c_str());
+    if (result == SceneWriteOk) {
+        request->send(200, "text/plain", "Deleted");
+        return;
+    }
+    sendSceneWriteResult(request, result);
+}
+
+void WebConsole::handleSceneViewGet(AsyncWebServerRequest *request) {
+    const UserRecord *user = nullptr;
+    if (!requireUser(request, &user)) {
+        return;
+    }
+    if (sceneStore == nullptr || user == nullptr) {
+        request->send(500, "text/plain", "Scenes unavailable");
+        return;
+    }
+    String sceneId;
+    if (request->hasParam("id")) {
+        sceneId = request->getParam("id")->value();
+    }
+    const SceneRecord *scene = sceneStore->findById(sceneId.c_str());
+    if (scene == nullptr) {
+        request->send(404, "text/plain", "Scene not found");
+        return;
+    }
+    String json = "{\"id\":\"";
+    appendJsonEscaped(json, scene->id, SCENE_ID_BUF);
+    json += "\",\"name\":\"";
+    appendJsonEscaped(json, scene->name, SCENE_NAME_MAX);
+    json += "\",\"bakePath\":\"";
+    appendJsonEscaped(json, scene->bakePath, SCENE_BAKE_PATH_MAX);
+    json += "\",\"pins\":";
+    json += scene->pinsJson != nullptr ? scene->pinsJson : "[]";
+    json += "}";
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void WebConsole::handleSceneBakeGet(AsyncWebServerRequest *request) {
+    const UserRecord *user = nullptr;
+    if (!requireUser(request, &user)) {
+        return;
+    }
+    if (sceneStore == nullptr || user == nullptr) {
+        request->send(500, "text/plain", "Scenes unavailable");
+        return;
+    }
+    String sceneId;
+    if (request->hasParam("id")) {
+        sceneId = request->getParam("id")->value();
+    }
+    const SceneRecord *scene = sceneStore->findById(sceneId.c_str());
+    if (scene == nullptr || scene->bakePath[0] == '\0' || !LittleFS.exists(scene->bakePath)) {
+        request->send(404, "text/plain", "Bake not found");
+        return;
+    }
+    // Any signed-in user with console access may load bake for Place/user scene cells.
+    request->send(LittleFS, scene->bakePath, "image/jpeg");
+}
+
+void WebConsole::handleSceneBakePost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireEditScenes(request, nullptr)) {
+        return;
+    }
+    if (sceneStore == nullptr) {
+        request->send(500, "text/plain", "Scenes unavailable");
+        return;
+    }
+    String sceneId;
+    if (request->hasParam("id")) {
+        sceneId = request->getParam("id")->value();
+    }
+    const SceneWriteResult result = sceneStore->writeBakeJpeg(
+        sceneId.c_str(),
+        reinterpret_cast<const uint8_t *>(body.c_str()),
+        body.length()
+    );
+    sendSceneWriteResult(request, result);
 }
 
 void WebConsole::handleCameraMediaGet(AsyncWebServerRequest *request) {

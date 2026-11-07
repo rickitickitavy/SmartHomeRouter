@@ -23,6 +23,7 @@ struct UserRecord {
     bool removeDevices;
     bool editUsers;
     bool editConsoles;
+    bool editScenes;
     bool monitor;
     bool controlDevices;
     bool isBlocked;

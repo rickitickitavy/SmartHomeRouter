@@ -39,6 +39,12 @@ def generate_embedded_web_assets():
             "length_symbol": "kEmbeddedAllCssGzLen",
             "mime": "text/css",
         },
+        {
+            "source": project_dir / "data" / "js" / "scene.js",
+            "symbol": "kEmbeddedSceneJsGz",
+            "length_symbol": "kEmbeddedSceneJsGzLen",
+            "mime": "application/javascript",
+        },
     ]
 
     output_dir = project_dir / "include" / "generated"

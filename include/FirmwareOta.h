@@ -29,6 +29,7 @@ public:
     bool busy() const;
     bool isUpdatingSlave() const;
     bool isVerifyingSlave() const;
+    bool suppressNonOtaSpi() const;
     bool isApplyingImage() const;
     bool slaveBeginAcked() const;
     bool isLastSlaveFrameEnd() const;
@@ -105,6 +106,9 @@ private:
     unsigned long slaveVerifyDeadlineMs = 0;
     bool slaveVerifyResetPending = false;
     bool slaveVerifyAwaitingReadyForResend = false;
+    bool slaveVerifyResendSettling = false;
+    unsigned long slaveVerifyResendSettleMs = 0;
+    static constexpr unsigned long kSlaveVerifyResendSettleMs = 3000UL;
 
     void fail(const char *message);
     void clearStagingFiles();
@@ -114,7 +118,7 @@ private:
     bool packSlaveChunkFromStream(uint8_t *payloadOut, uint16_t *packedLengthOut, uint32_t *dataBytesOut);
     bool enqueueNextSlaveChunk();
     bool sendLastSlaveFrame(bool isResend);
-    void onSlaveFrameLost();
+    void onSlaveFrameLost(bool fromNack);
     bool prepareJoinedPackage();
     void startSlaveUploadCycle();
     void beginSlaveVersionVerify();

@@ -6,6 +6,7 @@
     <title>Mini-HA router</title>
     <link rel="stylesheet" type="text/css" href="css/all.css"/>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css"/>
+    <script src="/js/scene.js"></script>
     <script>
         function showMainSection(name) {
             var buttons = document.querySelectorAll(".sidebar-btn");
@@ -66,6 +67,9 @@
             }
             if (name == "cameras") {
                 loadCameras();
+            }
+            if (name == "scenes") {
+                loadScenes();
             }
         }
 
@@ -556,7 +560,7 @@
                 return true;
             }
             return !!(user.editDevices || user.addDevices || user.removeDevices || user.editUsers
-                || user.editConsoles || user.monitor || user.controlDevices);
+                || user.editConsoles || user.editScenes || user.monitor || user.controlDevices);
         }
 
         function canControlDevices() {
@@ -648,6 +652,8 @@
             setHidden(document.querySelector('.system-tab-btn[data-tab="hardware"]'), !admin);
             setHidden(document.querySelector('.sidebar-btn[data-section="security"]'), !canEditUsers);
             var canEditConsoles = admin || hasRole("editConsoles");
+            var canEditScenes = admin || hasRole("editScenes");
+            setHidden(document.querySelector('.sidebar-btn[data-section="scenes"]'), !canEditScenes);
             setHidden(document.querySelector('.sidebar-btn[data-section="consoles"]'), !canEditConsoles);
             setHidden(document.querySelector('.system-tab-btn[data-tab="maintenance"]'), !admin);
             setHidden(document.getElementById("maintenanceAdminContent"), !admin);
@@ -954,6 +960,9 @@
             if (document.getElementById("userEditConsoles").checked) {
                 return true;
             }
+            if (document.getElementById("userEditScenes").checked) {
+                return true;
+            }
             if (document.getElementById("userControlDevices").checked) {
                 return true;
             }
@@ -987,6 +996,7 @@
             document.getElementById("userRemoveDevices").checked = !!(user && user.removeDevices);
             document.getElementById("userEditUsers").checked = !!(user && user.editUsers);
             document.getElementById("userEditConsoles").checked = !!(user && user.editConsoles);
+            document.getElementById("userEditScenes").checked = !!(user && user.editScenes);
             document.getElementById("userControlDevices").checked = !!(user && user.controlDevices);
             document.getElementById("userMonitor").checked = !!(user && user.monitor);
             document.getElementById("userIsBlocked").checked = !!(user && user.isBlocked);
@@ -1148,6 +1158,7 @@
                 removeDevices: document.getElementById("userRemoveDevices").checked,
                 editUsers: document.getElementById("userEditUsers").checked,
                 editConsoles: document.getElementById("userEditConsoles").checked,
+                editScenes: document.getElementById("userEditScenes").checked,
                 controlDevices: document.getElementById("userControlDevices").checked,
                 monitor: document.getElementById("userMonitor").checked,
                 isBlocked: document.getElementById("userIsBlocked").checked,
@@ -1251,6 +1262,48 @@
             var picker = document.getElementById("uiTheme");
             applyThemeToDocument(picker ? picker.value : "light");
         }
+
+        function accountFullscreenElement() {
+            return document.fullscreenElement
+                || document.webkitFullscreenElement
+                || document.msFullscreenElement
+                || null;
+        }
+
+        function syncAccountFullscreenButton() {
+            var button = document.getElementById("accountFullscreenBtn");
+            if (!button) {
+                return;
+            }
+            var active = !!accountFullscreenElement();
+            button.setAttribute("aria-pressed", active ? "true" : "false");
+            button.title = active ? "Exit full screen" : "Full screen";
+            button.setAttribute("aria-label", button.title);
+            button.classList.toggle("is-active", active);
+        }
+
+        function toggleAccountFullscreen() {
+            var active = accountFullscreenElement();
+            if (active) {
+                var exitFn = document.exitFullscreen
+                    || document.webkitExitFullscreen
+                    || document.msExitFullscreen;
+                if (exitFn) {
+                    Promise.resolve(exitFn.call(document)).catch(function () {});
+                }
+                return;
+            }
+            var root = document.documentElement;
+            var requestFn = root.requestFullscreen
+                || root.webkitRequestFullscreen
+                || root.msRequestFullscreen;
+            if (requestFn) {
+                Promise.resolve(requestFn.call(root)).catch(function () {});
+            }
+        }
+
+        document.addEventListener("fullscreenchange", syncAccountFullscreenButton);
+        document.addEventListener("webkitfullscreenchange", syncAccountFullscreenButton);
 
         function saveTheme() {
             var picker = document.getElementById("uiTheme");
@@ -1473,9 +1526,8 @@
             rangeEndUnix: 0,
             payload: null,
             layout: null,
-            smooth: true,
-            smoothWindow: 12,
-            smoothType: "ema"
+            smooth: false,
+            smoothWindow: 5
         };
         var HISTORY_RANGE_PRESETS = [
             { hours: 1, label: "1h" },
@@ -1852,10 +1904,7 @@
             historyChartState.hours = 24;
             historyChartState.rangeEndUnix = Math.floor(Date.now() / 1000);
             if (historyChartState.smoothWindow < 1) {
-                historyChartState.smoothWindow = 12;
-            }
-            if (historyChartState.smoothType !== "avg" && historyChartState.smoothType !== "ema") {
-                historyChartState.smoothType = "ema";
+                historyChartState.smoothWindow = 5;
             }
             historySyncSmoothControls();
             if (title) {
@@ -1901,7 +1950,7 @@
             var input = document.getElementById("historyChartSmoothWindow");
             var value = input ? Number(input.value) : historyChartState.smoothWindow;
             if (!isFinite(value) || value < 1) {
-                value = 12;
+                value = 5;
             }
             value = Math.floor(value);
             if (value < 1) {
@@ -1917,18 +1966,6 @@
             return value;
         }
 
-        function historySmoothType() {
-            var select = document.getElementById("historyChartSmoothType");
-            var value = select ? String(select.value || "") : String(historyChartState.smoothType || "");
-            if (value !== "avg" && value !== "ema") {
-                value = "ema";
-            }
-            historyChartState.smoothType = value;
-            if (select && select.value !== value) {
-                select.value = value;
-            }
-            return value;
-        }
 
         function historyChartIsDiscretePayload(payload) {
             var valueType = payload && payload.valueType ? String(payload.valueType) : "float";
@@ -1946,7 +1983,6 @@
             var wrap = document.getElementById("historyChartSmoothControls");
             var flag = document.getElementById("historyChartSmooth");
             var input = document.getElementById("historyChartSmoothWindow");
-            var typeSelect = document.getElementById("historyChartSmoothType");
             var allowSmooth = historyChartAllowsSmooth();
             if (wrap) {
                 wrap.hidden = !allowSmooth;
@@ -1958,12 +1994,8 @@
                 flag.checked = !!historyChartState.smooth;
             }
             if (input) {
-                input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 12);
+                input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 5);
                 input.disabled = !historyChartState.smooth;
-            }
-            if (typeSelect) {
-                typeSelect.value = historyChartState.smoothType === "ema" ? "ema" : "avg";
-                typeSelect.disabled = !historyChartState.smooth;
             }
         }
 
@@ -1974,7 +2006,6 @@
             var flag = document.getElementById("historyChartSmooth");
             historyChartState.smooth = !!(flag && flag.checked);
             historySmoothWindowSize();
-            historySmoothType();
             historySyncSmoothControls();
             historyRedrawFromPayload();
         }
@@ -2019,36 +2050,7 @@
             return smoothed;
         }
 
-        function historySmoothSeriesEma(series, windowSize) {
-            var windowCount = Math.max(1, Math.floor(Number(windowSize) || 5));
-            if (!series || !series.length) {
-                return series || [];
-            }
-            if (windowCount <= 1) {
-                return series.slice();
-            }
-            var alpha = 2 / (windowCount + 1);
-            var smoothed = [];
-            var ema = series[0].value;
-            smoothed.push({
-                unix: series[0].unix,
-                value: ema
-            });
-            var index;
-            for (index = 1; index < series.length; index++) {
-                ema = alpha * series[index].value + (1 - alpha) * ema;
-                smoothed.push({
-                    unix: series[index].unix,
-                    value: ema
-                });
-            }
-            return smoothed;
-        }
-
-        function historySmoothSeries(series, windowSize, smoothType) {
-            if (smoothType === "ema") {
-                return historySmoothSeriesEma(series, windowSize);
-            }
+        function historySmoothSeries(series, windowSize) {
             return historySmoothSeriesAvg(series, windowSize);
         }
 
@@ -2297,7 +2299,7 @@
                 return isFinite(point.value);
             });
             if (historyChartState.smooth && historyChartAllowsSmooth()) {
-                series = historySmoothSeries(series, historySmoothWindowSize(), historySmoothType());
+                series = historySmoothSeries(series, historySmoothWindowSize());
             }
             if (!series.length) {
                 historyChartState.layout = null;
@@ -4303,9 +4305,13 @@
         }
 
         function findRegisteredDevice(ieee) {
+            var want = normalizeIeeeText(ieee);
+            if (!want) {
+                return null;
+            }
             var index;
             for (index = 0; index < registeredDeviceRows.length; index++) {
-                if (registeredDeviceRows[index].ieee == ieee) {
+                if (normalizeIeeeText(registeredDeviceRows[index].ieee) === want) {
                     return registeredDeviceRows[index];
                 }
             }
@@ -7503,6 +7509,8 @@
         var consoleEditorEditMode = false;
         var consoleDeviceDialogWidgetIndex = -1;
         var consoleDeviceDialogBindingIndex = -1;
+        var consoleDeviceDialogScenePin = false;
+        var scenePinDialogIsNew = false;
         var consoleDeviceClickActionEnabled = false;
         var consoleDeviceClickActionFalseDraft = null;
         var consoleDeviceClickActionTrueDraft = null;
@@ -8672,10 +8680,20 @@
             }
             var device = findRegisteredDevice(binding.ieee);
             if (!device) {
-                var unavailable = document.createElement("span");
-                unavailable.className = "console-device-unavailable";
-                unavailable.textContent = "unavailable";
-                controls.appendChild(unavailable);
+                // Always show configured icon/gauge — never replace with "unavailable" text.
+                if (binding.viewStyle === "gauge" && typeof buildConsoleGaugeElement === "function") {
+                    row.classList.add("console-device-row--gauge");
+                    controls.appendChild(buildConsoleGaugeElement(binding, NaN, "—"));
+                } else {
+                    controls.appendChild(buildConsoleIconElement(
+                        binding,
+                        "OFF",
+                        {
+                            interactive: false,
+                            ariaLabel: (binding && binding.title) ? String(binding.title) : "Device"
+                        }
+                    ));
+                }
                 row.appendChild(controls);
                 return row;
             }
@@ -12079,6 +12097,910 @@
         var cameraDiscoverRows = [];
         var cameraDiscoverRunning = false;
         var cameraListCache = [];
+        var sceneDialogIsEdit = false;
+        var sceneDialogOriginalId = "";
+        var sceneDesigner = null;
+        var sceneEditorPins = [];
+        var sceneDraftModel = null;
+        var scenePendingBakeBlob = null;
+        var scenePendingBakeUrl = "";
+        var sceneServerHasBake = false;
+        var sceneBindTool = "";
+        var sceneSelectedPinIndex = -1;
+        var sceneBindDirty = false;
+        var sceneGeometryDirty = false;
+        var scenePendingPin = null;
+        var consoleEditorScenes = [];
+
+        function setScenesError(message) {
+            var line = document.getElementById("scenesSaveError");
+            if (!line) {
+                return;
+            }
+            if (message) {
+                line.hidden = false;
+                line.textContent = message;
+            } else {
+                line.hidden = true;
+                line.textContent = "";
+            }
+        }
+
+        function setScenesSuccess(message) {
+            var line = document.getElementById("scenesSaveSuccess");
+            if (!line) {
+                return;
+            }
+            if (message) {
+                line.hidden = false;
+                line.textContent = message;
+            } else {
+                line.hidden = true;
+                line.textContent = "";
+            }
+        }
+
+        function loadScenes() {
+            setScenesError("");
+            fetch("/api/scenes", { cache: "no-store" }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    return JSON.parse(text || "[]");
+                });
+            }).then(function (rows) {
+                var body = document.getElementById("scenesTableBody");
+                if (!body) {
+                    return;
+                }
+                body.innerHTML = "";
+                (Array.isArray(rows) ? rows : []).forEach(function (row) {
+                    var tr = document.createElement("tr");
+                    tr.style.cursor = "pointer";
+                    tr.onclick = function () {
+                        openSceneDialog(row.id || "");
+                    };
+                    var nameTd = document.createElement("td");
+                    nameTd.textContent = row.name || row.id || "";
+                    var bakeTd = document.createElement("td");
+                    bakeTd.textContent = row.hasBake ? "Yes" : "No";
+                    tr.appendChild(nameTd);
+                    tr.appendChild(bakeTd);
+                    body.appendChild(tr);
+                });
+            }).catch(function (error) {
+                setScenesError(error && error.message ? error.message : "Scenes load failed");
+            });
+        }
+
+        function revokeScenePendingBakeUrl() {
+            if (scenePendingBakeUrl) {
+                URL.revokeObjectURL(scenePendingBakeUrl);
+                scenePendingBakeUrl = "";
+            }
+        }
+
+        function clearSceneDraftState() {
+            revokeScenePendingBakeUrl();
+            scenePendingBakeBlob = null;
+            sceneDraftModel = window.SceneKit ? SceneKit.defaultModel() : null;
+            sceneEditorPins = [];
+            sceneServerHasBake = false;
+            sceneBindTool = "";
+            sceneSelectedPinIndex = -1;
+            sceneBindDirty = false;
+            sceneGeometryDirty = false;
+            scenePendingPin = null;
+            var sceneEditOverlay = document.getElementById("sceneEditDialog");
+            if (sceneEditOverlay) {
+                sceneEditOverlay.classList.remove("is-covered");
+            }
+            disposeSceneDesigner();
+        }
+
+        function disposeSceneDesigner() {
+            if (sceneDesigner && typeof sceneDesigner.dispose === "function") {
+                sceneDesigner.dispose();
+            }
+            sceneDesigner = null;
+        }
+
+        function ensureSceneDesigner() {
+            var canvas = document.getElementById("sceneGeometryCanvas");
+            if (!canvas || !window.SceneKit) {
+                return null;
+            }
+            if (!sceneDesigner) {
+                // Constructor/bindEvents also dispose any orphan still on this canvas.
+                sceneDesigner = new SceneKit.SceneDesigner(canvas);
+                sceneDesigner.onChange = function () {
+                    sceneGeometryDirty = true;
+                };
+            }
+            sceneDesigner.resize();
+            return sceneDesigner;
+        }
+
+        function syncSceneGeometryToolButtons() {
+            var designer = sceneDesigner;
+            var viewOn = designer ? !!designer.viewMode : false;
+            var perspectiveOn = designer ? designer.perspective !== false : true;
+            var buttons = document.querySelectorAll("#sceneGeometryDialog [data-scene-tool]");
+            var index;
+            for (index = 0; index < buttons.length; index++) {
+                var button = buttons[index];
+                button.classList.remove("is-active");
+                button.setAttribute("aria-pressed", "false");
+            }
+            var viewBtn = document.getElementById("sceneViewToggleBtn");
+            if (viewBtn) {
+                viewBtn.classList.toggle("is-active", viewOn);
+                viewBtn.setAttribute("aria-pressed", viewOn ? "true" : "false");
+            }
+            var perspectiveBtn = document.getElementById("scenePerspectiveBtn");
+            if (perspectiveBtn) {
+                perspectiveBtn.classList.toggle("is-active", perspectiveOn);
+                perspectiveBtn.setAttribute("aria-pressed", perspectiveOn ? "true" : "false");
+                perspectiveBtn.title = perspectiveOn ? "Perspective (on)" : "Perspective (off · orthographic)";
+            }
+        }
+
+        function syncSceneBindToolButtons() {
+            var addBtn = document.getElementById("sceneBindAddPinBtn");
+            if (addBtn) {
+                var active = sceneBindTool === "add-pin";
+                addBtn.classList.toggle("is-active", active);
+                addBtn.setAttribute("aria-pressed", active ? "true" : "false");
+            }
+        }
+
+        function scenePinBindingForPreview(pin) {
+            var binding = Object.assign({}, pin);
+            binding.title = "";
+            binding.showTitle = false;
+            if (pin.kind === "automation" || pin.automation) {
+                binding.automation = pin.automation || pin.automationId || "";
+            }
+            if (!binding.viewStyle || binding.viewStyle === "default") {
+                binding.viewStyle = "icon";
+            }
+            return binding;
+        }
+
+        var sceneBindPinDrag = null;
+
+        function sceneBindFrameNormFromEvent(event, frame) {
+            var rect = frame.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) {
+                return { x: 0, y: 0 };
+            }
+            return {
+                x: SceneKit.clamp01((event.clientX - rect.left) / rect.width),
+                y: SceneKit.clamp01((event.clientY - rect.top) / rect.height)
+            };
+        }
+
+        function disarmSceneBindPinControls(host) {
+            // Scene editor pins are visual only — never send device/automation commands.
+            host.classList.add("is-preview-only");
+            host.style.pointerEvents = "none";
+            var buttons = host.querySelectorAll("button");
+            var index;
+            for (index = 0; index < buttons.length; index++) {
+                buttons[index].disabled = true;
+                buttons[index].onclick = null;
+            }
+        }
+
+        function updateSceneBindPreview() {
+            var empty = document.getElementById("sceneBindEmpty");
+            var frame = document.getElementById("sceneBindFrame");
+            var img = document.getElementById("sceneBindImage");
+            var overlays = document.getElementById("sceneBindOverlays");
+            if (!empty || !frame || !img || !overlays) {
+                return;
+            }
+            var previewUrl = scenePendingBakeUrl;
+            if (!previewUrl && sceneDialogIsEdit && sceneDialogOriginalId && sceneServerHasBake) {
+                previewUrl = "/api/scenes/bake?id=" + encodeURIComponent(sceneDialogOriginalId);
+            }
+            if (!previewUrl) {
+                empty.hidden = false;
+                frame.hidden = true;
+                img.removeAttribute("src");
+                overlays.innerHTML = "";
+                return;
+            }
+            empty.hidden = true;
+            frame.hidden = false;
+            if (img.getAttribute("src") !== previewUrl) {
+                img.src = previewUrl;
+            }
+            overlays.innerHTML = "";
+            sceneEditorPins.forEach(function (pin, index) {
+                var pinEl = document.createElement("button");
+                pinEl.type = "button";
+                pinEl.className = "scene-bind-pin scene-bind-pin--live"
+                    + (index === sceneSelectedPinIndex ? " is-selected" : "");
+                pinEl.style.left = (SceneKit.clamp01(pin.x) * 100) + "%";
+                pinEl.style.top = (SceneKit.clamp01(pin.y) * 100) + "%";
+                pinEl.title = (pin.kind || "device") + " · " + (pin.viewStyle || "icon");
+                var binding = scenePinBindingForPreview(pin);
+                if (typeof placeBuildDeviceRow === "function") {
+                    var row = placeBuildDeviceRow(binding);
+                    disarmSceneBindPinControls(row);
+                    pinEl.appendChild(row);
+                } else if (typeof buildBindingRow === "function") {
+                    var previewRow = buildBindingRow(binding);
+                    disarmSceneBindPinControls(previewRow);
+                    pinEl.appendChild(previewRow);
+                } else {
+                    pinEl.textContent = pin.viewStyle === "gauge" ? "◐" : "●";
+                }
+                pinEl.onpointerdown = function (event) {
+                    if (event.button != null && event.button !== 0) {
+                        return;
+                    }
+                    event.preventDefault();
+                    event.stopPropagation();
+                    sceneSelectedPinIndex = index;
+                    sceneBindTool = "";
+                    syncSceneBindToolButtons();
+                    sceneBindPinDrag = {
+                        index: index,
+                        pointerId: event.pointerId,
+                        startX: event.clientX,
+                        startY: event.clientY,
+                        moved: false,
+                        originX: SceneKit.clamp01(pin.x),
+                        originY: SceneKit.clamp01(pin.y)
+                    };
+                    try {
+                        pinEl.setPointerCapture(event.pointerId);
+                    } catch (ignore) {
+                    }
+                    pinEl.classList.add("is-dragging");
+                };
+                pinEl.onpointermove = function (event) {
+                    if (!sceneBindPinDrag || sceneBindPinDrag.index !== index) {
+                        return;
+                    }
+                    if (sceneBindPinDrag.pointerId != null
+                        && event.pointerId !== sceneBindPinDrag.pointerId) {
+                        return;
+                    }
+                    var dx = event.clientX - sceneBindPinDrag.startX;
+                    var dy = event.clientY - sceneBindPinDrag.startY;
+                    if (!sceneBindPinDrag.moved && (dx * dx + dy * dy) < 25) {
+                        return;
+                    }
+                    sceneBindPinDrag.moved = true;
+                    var norm = sceneBindFrameNormFromEvent(event, frame);
+                    sceneEditorPins[index].x = norm.x;
+                    sceneEditorPins[index].y = norm.y;
+                    pinEl.style.left = (norm.x * 100) + "%";
+                    pinEl.style.top = (norm.y * 100) + "%";
+                };
+                function endSceneBindPinDrag(event, openDialog) {
+                    if (!sceneBindPinDrag || sceneBindPinDrag.index !== index) {
+                        return;
+                    }
+                    if (sceneBindPinDrag.pointerId != null
+                        && event.pointerId !== sceneBindPinDrag.pointerId) {
+                        return;
+                    }
+                    var wasDrag = sceneBindPinDrag.moved;
+                    sceneBindPinDrag = null;
+                    pinEl.classList.remove("is-dragging");
+                    try {
+                        pinEl.releasePointerCapture(event.pointerId);
+                    } catch (ignore) {
+                    }
+                    if (wasDrag) {
+                        sceneBindDirty = true;
+                        return;
+                    }
+                    if (openDialog) {
+                        openScenePinDialog(sceneEditorPins[index], false);
+                    }
+                }
+                pinEl.onpointerup = function (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    endSceneBindPinDrag(event, true);
+                };
+                pinEl.onpointercancel = function (event) {
+                    endSceneBindPinDrag(event, false);
+                };
+                pinEl.onclick = function (event) {
+                    // Handled on pointerup — block nested control clicks.
+                    event.preventDefault();
+                    event.stopPropagation();
+                };
+                overlays.appendChild(pinEl);
+            });
+        }
+
+        function openSceneDialog(sceneId) {
+            setScenesError("");
+            setScenesSuccess("");
+            clearSceneDraftState();
+            sceneDialogIsEdit = !!sceneId;
+            sceneDialogOriginalId = sceneId || "";
+            document.getElementById("sceneDialogTitle").textContent = sceneDialogIsEdit ? "Edit scene" : "Add scene";
+            document.getElementById("sceneDialogError").hidden = true;
+            document.getElementById("sceneName").value = "";
+            document.getElementById("sceneDeleteBtn").hidden = !sceneDialogIsEdit;
+            document.getElementById("sceneEditDialog").hidden = false;
+            sceneDraftModel = SceneKit.defaultModel();
+            updateSceneBindPreview();
+            syncSceneBindToolButtons();
+            if (!sceneDialogIsEdit) {
+                return;
+            }
+            fetch("/api/scenes/item?id=" + encodeURIComponent(sceneId), { cache: "no-store" })
+                .then(function (response) {
+                    return response.text().then(function (text) {
+                        if (!response.ok) {
+                            throw new Error(text || ("HTTP " + response.status));
+                        }
+                        return JSON.parse(text);
+                    });
+                })
+                .then(function (scene) {
+                    document.getElementById("sceneName").value = scene.name || "";
+                    sceneDraftModel = scene.sceneModel || SceneKit.defaultModel();
+                    sceneEditorPins = Array.isArray(scene.pins) ? scene.pins : [];
+                    sceneServerHasBake = !!scene.hasBake;
+                    updateSceneBindPreview();
+                })
+                .catch(function (error) {
+                    document.getElementById("sceneDialogError").hidden = false;
+                    document.getElementById("sceneDialogError").textContent =
+                        error && error.message ? error.message : "Load failed";
+                });
+        }
+
+        function closeSceneDialog() {
+            document.getElementById("sceneEditDialog").hidden = true;
+            document.getElementById("sceneGeometryDialog").hidden = true;
+            if (consoleDeviceDialogScenePin) {
+                consoleDeviceDialogScenePin = false;
+                scenePendingPin = null;
+                scenePinDialogIsNew = false;
+                closeConsoleDeviceDialog();
+            }
+            clearSceneDraftState();
+        }
+
+        function requestCloseSceneDialog() {
+            if (sceneBindDirty || scenePendingBakeBlob || sceneGeometryDirty) {
+                openUnsavedChangesDialog(closeSceneDialog);
+                return;
+            }
+            closeSceneDialog();
+        }
+
+        function onSceneBindOverlayClick(event) {
+            var frame = document.getElementById("sceneBindFrame");
+            if (!frame || frame.hidden) {
+                return;
+            }
+            var rect = frame.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) {
+                return;
+            }
+            var x = SceneKit.clamp01((event.clientX - rect.left) / rect.width);
+            var y = SceneKit.clamp01((event.clientY - rect.top) / rect.height);
+            if (sceneBindTool === "add-pin") {
+                scenePendingPin = {
+                    id: "pin-" + Date.now().toString(16),
+                    kind: "device",
+                    viewStyle: "icon",
+                    x: x,
+                    y: y,
+                    channel: 1,
+                    ieee: "",
+                    automationId: ""
+                };
+                openScenePinDialog(scenePendingPin, true);
+                return;
+            }
+            sceneSelectedPinIndex = -1;
+            updateSceneBindPreview();
+        }
+
+        function setSceneBindAddPinTool() {
+            sceneBindTool = sceneBindTool === "add-pin" ? "" : "add-pin";
+            sceneSelectedPinIndex = -1;
+            syncSceneBindToolButtons();
+            updateSceneBindPreview();
+        }
+
+        function removeSelectedScenePin() {
+            if (sceneSelectedPinIndex < 0 || sceneSelectedPinIndex >= sceneEditorPins.length) {
+                return;
+            }
+            sceneEditorPins.splice(sceneSelectedPinIndex, 1);
+            sceneSelectedPinIndex = -1;
+            sceneBindDirty = true;
+            updateSceneBindPreview();
+        }
+
+        function scenePinToBinding(pin) {
+            var binding = {
+                ieee: pin.ieee || "",
+                channel: pin.channel || 1,
+                title: "",
+                showTitle: false,
+                unit: pin.unit || "",
+                decimals: pin.decimals != null ? pin.decimals : -1,
+                param: pin.param || "",
+                viewStyle: pin.viewStyle === "gauge"
+                    ? "gauge"
+                    : (pin.viewStyle === "default" ? "default" : "icon")
+            };
+            if (pin.kind === "automation" || pin.automation) {
+                binding.automation = pin.automation || pin.automationId || "";
+                binding.automationControl = pin.automationControl || "enableDisable";
+                delete binding.ieee;
+            }
+            if (pin.icon) {
+                binding.icon = pin.icon;
+            }
+            if (pin.iconScale != null) {
+                binding.iconScale = pin.iconScale;
+            }
+            if (pin.gauge) {
+                binding.gauge = pin.gauge;
+            }
+            if (pin.cluster != null) {
+                binding.cluster = pin.cluster;
+            }
+            if (pin.attrId != null) {
+                binding.attrId = pin.attrId;
+            }
+            if (pin.asLogical) {
+                binding.asLogical = true;
+                binding.logicalThreshold = pin.logicalThreshold;
+            }
+            if (pin.clickActionFalse) {
+                binding.clickActionFalse = pin.clickActionFalse;
+            }
+            if (pin.clickActionTrue) {
+                binding.clickActionTrue = pin.clickActionTrue;
+            }
+            return binding;
+        }
+
+        function applyBindingBodyToScenePin(pin, body) {
+            var key;
+            for (key in body) {
+                if (Object.prototype.hasOwnProperty.call(body, key)) {
+                    pin[key] = body[key];
+                }
+            }
+            pin.title = "";
+            pin.showTitle = false;
+            delete pin.titlePosition;
+            if (body.automation) {
+                pin.kind = "automation";
+                pin.automationId = body.automation;
+                pin.ieee = "";
+            } else {
+                pin.kind = "device";
+                pin.automationId = "";
+            }
+            // Scene pins never use Default text presentation.
+            if (!pin.viewStyle || pin.viewStyle === "default") {
+                pin.viewStyle = "icon";
+            }
+            return pin;
+        }
+
+        function openScenePinDialog(pin, isNew) {
+            scenePendingPin = pin;
+            scenePinDialogIsNew = !!isNew;
+            consoleDeviceDialogScenePin = true;
+            openConsoleDeviceDialog(-1, -1);
+        }
+
+        function closeScenePinDialog() {
+            scenePendingPin = null;
+            scenePinDialogIsNew = false;
+            consoleDeviceDialogScenePin = false;
+            sceneBindTool = "";
+            syncSceneBindToolButtons();
+            if (document.getElementById("consoleDeviceDialog")
+                && !document.getElementById("consoleDeviceDialog").hidden) {
+                document.getElementById("consoleDeviceDialog").hidden = true;
+            }
+            updateSceneBindPreview();
+        }
+
+        function saveScenePinDialog() {
+            saveConsoleDeviceDialog();
+        }
+
+        function openSceneGeometryEditor() {
+            document.getElementById("sceneGeometryError").hidden = true;
+            var sceneEditOverlay = document.getElementById("sceneEditDialog");
+            if (sceneEditOverlay) {
+                // Underlying scene dialog stays open for draft state, but must not
+                // receive clicks under the geometry editor (z-order / bleed-through).
+                sceneEditOverlay.classList.add("is-covered");
+            }
+            document.getElementById("sceneGeometryDialog").hidden = false;
+            var designer = ensureSceneDesigner();
+            if (designer) {
+                designer.setModel(sceneDraftModel || SceneKit.defaultModel());
+                designer.setViewMode(false);
+                designer.setTool("wall");
+            }
+            sceneGeometryDirty = false;
+            syncSceneGeometryToolButtons();
+            syncSceneFloorColorPicker();
+            syncSceneWallThicknessInput();
+            syncSceneWallHeightInput();
+            window.requestAnimationFrame(function () {
+                ensureSceneDesigner();
+                syncSceneGeometryToolButtons();
+                syncSceneFloorColorPicker();
+                syncSceneWallThicknessInput();
+                syncSceneWallHeightInput();
+            });
+        }
+
+        function forceCloseSceneGeometryEditor() {
+            document.getElementById("sceneGeometryDialog").hidden = true;
+            var sceneEditOverlay = document.getElementById("sceneEditDialog");
+            if (sceneEditOverlay) {
+                sceneEditOverlay.classList.remove("is-covered");
+            }
+            disposeSceneDesigner();
+            sceneGeometryDirty = false;
+        }
+
+        function requestCloseSceneGeometryEditor() {
+            if (sceneGeometryDirty) {
+                openUnsavedChangesDialog(forceCloseSceneGeometryEditor);
+                return;
+            }
+            forceCloseSceneGeometryEditor();
+        }
+
+        function closeSceneGeometryEditor(discard) {
+            if (!discard && sceneGeometryDirty) {
+                requestCloseSceneGeometryEditor();
+                return;
+            }
+            forceCloseSceneGeometryEditor();
+        }
+
+        function setSceneGeometryTool(tool) {
+            var designer = ensureSceneDesigner();
+            if (!designer) {
+                return;
+            }
+            if (designer.viewMode) {
+                designer.setViewMode(false);
+            }
+            designer.applyTool(tool);
+            syncSceneGeometryToolButtons();
+        }
+
+        function ensureSceneFloorColorPicker() {
+            var host = document.getElementById("sceneFloorColorControl");
+            if (!host) {
+                return null;
+            }
+            if (host.getAttribute("data-ready") === "1" && typeof host.setColor === "function") {
+                return host;
+            }
+            host.innerHTML = "";
+            var control = buildConsoleColorPickerControl("#6a8fad", function (hex) {
+                var designer = ensureSceneDesigner();
+                if (!designer) {
+                    return;
+                }
+                designer.setCurrentFloorColor(hex);
+                sceneGeometryDirty = true;
+            });
+            control.setAttribute("aria-label", "Floor color");
+            host.appendChild(control);
+            host.getColor = function () {
+                return control.getColor();
+            };
+            host.setColor = function (hex) {
+                control.setColor(hex);
+            };
+            host.setAttribute("data-ready", "1");
+            return host;
+        }
+
+        function syncSceneFloorColorPicker() {
+            var host = ensureSceneFloorColorPicker();
+            var designer = sceneDesigner || ensureSceneDesigner();
+            if (!host || !designer || typeof host.setColor !== "function") {
+                return;
+            }
+            host.setColor(designer.getCurrentFloorColor());
+        }
+
+        function syncSceneWallThicknessInput() {
+            var input = document.getElementById("sceneWallThickness");
+            var designer = sceneDesigner || ensureSceneDesigner();
+            if (!input || !designer) {
+                return;
+            }
+            input.value = String(designer.getWallThickness());
+        }
+
+        function syncSceneWallHeightInput() {
+            var input = document.getElementById("sceneWallHeight");
+            var designer = sceneDesigner || ensureSceneDesigner();
+            if (!input || !designer) {
+                return;
+            }
+            input.value = String(designer.getWallHeight());
+        }
+
+        function onSceneWallThicknessInput(event) {
+            var designer = ensureSceneDesigner();
+            if (!designer || !event || !event.target) {
+                return;
+            }
+            designer.setWallThickness(event.target.value);
+            sceneGeometryDirty = true;
+        }
+
+        function onSceneWallHeightInput(event) {
+            var designer = ensureSceneDesigner();
+            if (!designer || !event || !event.target) {
+                return;
+            }
+            designer.setWallHeight(event.target.value);
+            sceneGeometryDirty = true;
+        }
+
+        function sceneGeometryAddFloor() {
+            var designer = ensureSceneDesigner();
+            if (designer) {
+                designer.addFloor();
+                syncSceneGeometryToolButtons();
+                syncSceneFloorColorPicker();
+            }
+        }
+
+        function sceneGeometryRemoveSelected() {
+            var designer = ensureSceneDesigner();
+            if (designer) {
+                designer.removeSelected();
+            }
+        }
+
+        function sceneGeometryToggleView() {
+            var designer = ensureSceneDesigner();
+            if (!designer) {
+                return;
+            }
+            designer.toggleViewMode();
+            syncSceneGeometryToolButtons();
+        }
+
+        function sceneGeometryTogglePerspective() {
+            var designer = ensureSceneDesigner();
+            if (!designer) {
+                return;
+            }
+            designer.togglePerspective();
+            syncSceneGeometryToolButtons();
+        }
+
+        function saveSceneGeometryTemp() {
+            var errorLine = document.getElementById("sceneGeometryError");
+            errorLine.hidden = true;
+            var designer = ensureSceneDesigner();
+            if (!designer) {
+                errorLine.hidden = false;
+                errorLine.textContent = "Designer unavailable";
+                return;
+            }
+            sceneDraftModel = designer.getModel();
+            designer.bakeJpegBlob(0.82).then(function (blob) {
+                if (!blob) {
+                    throw new Error("Bake failed");
+                }
+                revokeScenePendingBakeUrl();
+                scenePendingBakeBlob = blob;
+                scenePendingBakeUrl = URL.createObjectURL(blob);
+                sceneGeometryDirty = false;
+                document.getElementById("sceneGeometryDialog").hidden = true;
+                var sceneEditOverlay = document.getElementById("sceneEditDialog");
+                if (sceneEditOverlay) {
+                    sceneEditOverlay.classList.remove("is-covered");
+                }
+                disposeSceneDesigner();
+                sceneBindDirty = true;
+                updateSceneBindPreview();
+            }).catch(function (error) {
+                errorLine.hidden = false;
+                errorLine.textContent = error && error.message ? error.message : "Bake failed";
+            });
+        }
+
+        function saveSceneDialog() {
+            var errorLine = document.getElementById("sceneDialogError");
+            errorLine.hidden = true;
+            var name = (document.getElementById("sceneName").value || "").trim();
+            if (!name) {
+                errorLine.hidden = false;
+                errorLine.textContent = "Name is required";
+                return;
+            }
+            var body = {
+                name: name,
+                sceneModel: sceneDraftModel || SceneKit.defaultModel(),
+                pins: sceneEditorPins
+            };
+            if (sceneDialogIsEdit && sceneDialogOriginalId) {
+                body.id = sceneDialogOriginalId;
+            }
+            var savePromise = sceneDialogIsEdit
+                ? fetch("/api/scenes/update?id=" + encodeURIComponent(sceneDialogOriginalId), {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(body)
+                })
+                : fetch("/api/scenes", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(body)
+                });
+            savePromise.then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    if (!sceneDialogIsEdit) {
+                        try {
+                            var created = JSON.parse(text);
+                            sceneDialogOriginalId = created.id || "";
+                            sceneDialogIsEdit = !!sceneDialogOriginalId;
+                        } catch (ignore) {
+                            sceneDialogOriginalId = "";
+                        }
+                    }
+                    if (!scenePendingBakeBlob || !sceneDialogOriginalId) {
+                        return null;
+                    }
+                    return fetch("/api/scenes/bake?id=" + encodeURIComponent(sceneDialogOriginalId), {
+                        method: "POST",
+                        headers: { "Content-Type": "image/jpeg" },
+                        body: scenePendingBakeBlob
+                    }).then(function (bakeResponse) {
+                        return bakeResponse.text().then(function (bakeText) {
+                            if (!bakeResponse.ok) {
+                                throw new Error(bakeText || ("HTTP " + bakeResponse.status));
+                            }
+                        });
+                    });
+                });
+            }).then(function () {
+                if (sceneDialogOriginalId && window.SceneKit
+                    && typeof SceneKit.invalidateSceneCellHost === "function") {
+                    SceneKit.invalidateSceneCellHost(sceneDialogOriginalId);
+                }
+                closeSceneDialog();
+                setScenesSuccess("Scene saved");
+                loadScenes();
+            }).catch(function (error) {
+                errorLine.hidden = false;
+                errorLine.textContent = error && error.message ? error.message : "Save failed";
+            });
+        }
+
+        function deleteSceneDialog() {
+            if (!sceneDialogOriginalId) {
+                return;
+            }
+            openAppConfirmDialog({
+                title: "Delete scene",
+                message: "Delete this scene permanently?",
+                confirmLabel: "Delete",
+                onConfirm: confirmDeleteScene
+            });
+        }
+
+        function confirmDeleteScene() {
+            if (!sceneDialogOriginalId) {
+                return;
+            }
+            fetch("/api/scenes?id=" + encodeURIComponent(sceneDialogOriginalId), {
+                method: "DELETE",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: sceneDialogOriginalId })
+            }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                });
+            }).then(function () {
+                closeSceneDialog();
+                setScenesSuccess("Scene deleted");
+                loadScenes();
+            }).catch(function (error) {
+                document.getElementById("sceneDialogError").hidden = false;
+                document.getElementById("sceneDialogError").textContent =
+                    error && error.message ? error.message : "Delete failed";
+            });
+        }
+
+        function exportAllScenes() {
+            setScenesError("");
+            setScenesSuccess("");
+            fetch("/api/scenes/store", { cache: "no-store" }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    return text;
+                });
+            }).then(function (text) {
+                var blob = new Blob([text], { type: "application/json" });
+                var url = URL.createObjectURL(blob);
+                var link = document.createElement("a");
+                link.href = url;
+                link.download = "scenes.json";
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                URL.revokeObjectURL(url);
+                setScenesSuccess("Scenes exported");
+            }).catch(function (error) {
+                setScenesError(error && error.message ? error.message : "Export failed");
+            });
+        }
+
+        function chooseScenesRestoreFile() {
+            setScenesError("");
+            setScenesSuccess("");
+            var input = document.getElementById("scenesRestoreFile");
+            if (input) {
+                input.value = "";
+                input.click();
+            }
+        }
+
+        function onScenesRestoreFileSelected(event) {
+            var file = event && event.target && event.target.files && event.target.files[0];
+            if (!file) {
+                return;
+            }
+            var reader = new FileReader();
+            reader.onload = function () {
+                var text = String(reader.result || "");
+                fetch("/api/scenes/restore", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: text
+                }).then(function (response) {
+                    return response.text().then(function (bodyText) {
+                        if (!response.ok) {
+                            throw new Error(bodyText || ("HTTP " + response.status));
+                        }
+                    });
+                }).then(function () {
+                    setScenesSuccess("Scenes imported");
+                    loadScenes();
+                }).catch(function (error) {
+                    setScenesError(error && error.message ? error.message : "Import failed");
+                });
+            };
+            reader.readAsText(file);
+        }
 
         function setCamerasSuccess(message) {
             var line = document.getElementById("camerasSaveSuccess");
@@ -13081,7 +14003,17 @@
             }).catch(function () {
                 consoleEditorCameras = [];
             });
-            return Promise.all([devicesLoad, camerasLoad]);
+            var scenesLoad = fetch("/api/scenes", { cache: "no-store" }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error("scenes unavailable");
+                }
+                return response.json();
+            }).then(function (rows) {
+                consoleEditorScenes = Array.isArray(rows) ? rows : [];
+            }).catch(function () {
+                consoleEditorScenes = [];
+            });
+            return Promise.all([devicesLoad, camerasLoad, scenesLoad]);
         }
 
         function openConsoleEditDialog(consoleId) {
@@ -14267,6 +15199,27 @@
 
         var consoleEditorCameras = [];
 
+        function mountLiveSceneCell(host, sceneId) {
+            if (!window.SceneKit) {
+                host.textContent = "Scene";
+                return;
+            }
+            SceneKit.mountSceneCell(host, sceneId, {
+                renderPin: function (pinEl, pin) {
+                    pinEl.classList.add("scene-cell-pin-live");
+                    pinEl.innerHTML = "";
+                    var binding = scenePinBindingForPreview(pin);
+                    if (typeof placeBuildDeviceRow === "function") {
+                        pinEl.appendChild(placeBuildDeviceRow(binding));
+                    } else if (typeof buildBindingRow === "function") {
+                        pinEl.appendChild(buildBindingRow(binding));
+                    } else {
+                        pinEl.textContent = "•";
+                    }
+                }
+            });
+        }
+
         function buildCompositeCameraSelectLine(labelText, className, widgetIndex, rowIndex, cellIndex, options, value, rerender) {
             var line = document.createElement("label");
             line.className = "console-composite-field-line";
@@ -14696,14 +15649,14 @@
                         contentSelect.setAttribute("data-widget-index", String(widgetIndex));
                         contentSelect.setAttribute("data-row-index", String(rowIndex));
                         contentSelect.setAttribute("data-cell-index", String(cellIndex));
-                        [["empty", "Empty"], ["text", "Text"], ["device", "Device"], ["camera", "Camera"]].forEach(function (pair) {
+                        [["empty", "Empty"], ["text", "Text"], ["device", "Device"], ["camera", "Camera"], ["scene", "Scene"]].forEach(function (pair) {
                             var option = document.createElement("option");
                             option.value = pair[0];
                             option.textContent = pair[1];
                             contentSelect.appendChild(option);
                         });
                         contentSelect.value = cell.content === "text" || cell.content === "device"
-                            || cell.content === "camera"
+                            || cell.content === "camera" || cell.content === "scene"
                             ? cell.content
                             : "empty";
                         contentSelect.onchange = (function (wIndex, rIndex, cIndex, selectEl) {
@@ -14750,6 +15703,7 @@
                                 if (nextContent === "camera") {
                                     target.binding = null;
                                     target.text = "";
+                                    target.sceneId = "";
                                     if (!target.cameraId) {
                                         target.cameraId = consoleEditorCameras.length
                                             ? String(consoleEditorCameras[0].id || "")
@@ -14759,6 +15713,18 @@
                                         target.cameraMode = "jpegRefresh";
                                     }
                                     target.cameraChannel = Number(target.cameraChannel) === 2 ? 2 : 1;
+                                    renderConsoleEditor();
+                                    return;
+                                }
+                                if (nextContent === "scene") {
+                                    target.binding = null;
+                                    target.text = "";
+                                    target.cameraId = "";
+                                    if (!target.sceneId) {
+                                        target.sceneId = consoleEditorScenes.length
+                                            ? String(consoleEditorScenes[0].id || "")
+                                            : "";
+                                    }
                                     renderConsoleEditor();
                                     return;
                                 }
@@ -14859,6 +15825,28 @@
                             }
                             cameraPreview.textContent = cameraPreviewName || "\uD83D\uDDBC";
                             cellBody.appendChild(cameraPreview);
+                        } else if (cell.content === "scene") {
+                            var sceneOptions = [["", "Select scene"]];
+                            var sceneKnown = false;
+                            var sceneListIndex;
+                            for (sceneListIndex = 0; sceneListIndex < consoleEditorScenes.length; sceneListIndex++) {
+                                var sceneRow = consoleEditorScenes[sceneListIndex];
+                                sceneOptions.push([String(sceneRow.id || ""), sceneRow.name || sceneRow.id || ""]);
+                                if (String(sceneRow.id || "") === (cell.sceneId || "")) {
+                                    sceneKnown = true;
+                                }
+                            }
+                            if (cell.sceneId && !sceneKnown) {
+                                sceneOptions.push([String(cell.sceneId), String(cell.sceneId)]);
+                            }
+                            cellBody.appendChild(buildCompositeCameraSelectLine(
+                                "Scene", "console-composite-scene-id", widgetIndex, rowIndex, cellIndex,
+                                sceneOptions, cell.sceneId || "", true
+                            ));
+                            var scenePreview = document.createElement("div");
+                            scenePreview.className = "scene-cell scene-cell--preview";
+                            scenePreview.textContent = cell.sceneId || "Scene";
+                            cellBody.appendChild(scenePreview);
                         }
                     } else if (cell.content === "text") {
                         var textSpan = document.createElement("div");
@@ -14880,6 +15868,26 @@
                             ].join("|");
                         }
                         cellBody.appendChild(buildConsoleCameraView(cell, cameraLiveCacheKey));
+                    } else if (cell.content === "scene") {
+                        var sceneHost;
+                        if (live && window.SceneKit && typeof SceneKit.takeSceneCellHost === "function") {
+                            sceneHost = SceneKit.takeSceneCellHost(
+                                (options.consoleKey || "place") + "|"
+                                    + String(widgetIndex != null ? widgetIndex : "") + "|"
+                                    + String(rowIndex) + "|" + String(cellIndex),
+                                cell.sceneId || ""
+                            );
+                            mountLiveSceneCell(sceneHost, cell.sceneId || "");
+                        } else {
+                            sceneHost = document.createElement("div");
+                            sceneHost.className = "scene-cell-host";
+                            if (live) {
+                                mountLiveSceneCell(sceneHost, cell.sceneId || "");
+                            } else {
+                                sceneHost.textContent = cell.sceneId || "Scene";
+                            }
+                        }
+                        cellBody.appendChild(sceneHost);
                     } else if (cell.content === "device" && cell.binding) {
                         if (live && typeof placeBuildDeviceRow === "function") {
                             cellBody.appendChild(placeBuildDeviceRow(cell.binding));
@@ -15731,7 +16739,8 @@
             var cameraFieldDefs = [
                 { selector: ".console-composite-camera-id", field: "cameraId" },
                 { selector: ".console-composite-camera-mode", field: "cameraMode" },
-                { selector: ".console-composite-camera-channel", field: "cameraChannel" }
+                { selector: ".console-composite-camera-channel", field: "cameraChannel" },
+                { selector: ".console-composite-scene-id", field: "sceneId" }
             ];
             var cameraDefIndex;
             for (cameraDefIndex = 0; cameraDefIndex < cameraFieldDefs.length; cameraDefIndex++) {
@@ -15753,6 +16762,8 @@
                         camCell.cameraChannel = camSelect.value === "2" ? 2 : 1;
                     } else if (cameraFieldDefs[cameraDefIndex].field === "cameraMode") {
                         camCell.cameraMode = camSelect.value === "live" ? "live" : "jpegRefresh";
+                    } else if (cameraFieldDefs[cameraDefIndex].field === "sceneId") {
+                        camCell.sceneId = camSelect.value || "";
                     } else {
                         camCell.cameraId = camSelect.value || "";
                     }
@@ -16533,15 +17544,29 @@
 
         function refreshConsoleDeviceTitleLayoutFields() {
             var showTitleCheck = document.getElementById("consoleDeviceShowTitle");
+            var titleField = document.getElementById("consoleDeviceTitleField");
             var titlePositionField = document.getElementById("consoleDeviceTitlePositionField");
             var alignHField = document.getElementById("consoleDeviceAlignHField");
             var alignVField = document.getElementById("consoleDeviceAlignVField");
-            var showTitle = !showTitleCheck || showTitleCheck.checked;
+            // Scene pin = Binding dialog with Title + Title position removed.
+            if (consoleDeviceDialogScenePin) {
+                if (showTitleCheck) {
+                    showTitleCheck.checked = false;
+                }
+                setHidden(titleField, true);
+                setHidden(titlePositionField, true);
+            } else {
+                setHidden(titleField, false);
+            }
+            var showTitle = !consoleDeviceDialogScenePin
+                && (!showTitleCheck || showTitleCheck.checked);
             var isCompositeCell = !!consoleCompositeEditTarget;
             var dialogWidget = consoleEditorDraft && consoleEditorDraft.widgets
                 && consoleEditorDraft.widgets[consoleDeviceDialogWidgetIndex];
             var isGridWidget = !!(dialogWidget && dialogWidget.viewport === "grid");
-            setHidden(titlePositionField, !showTitle);
+            if (!consoleDeviceDialogScenePin) {
+                setHidden(titlePositionField, !showTitle);
+            }
             // Composite cells own Align H/V in cell chrome — hide binding dialog duplicates.
             if (isCompositeCell) {
                 setHidden(alignHField, true);
@@ -17055,13 +18080,24 @@
         }
 
         function openConsoleDeviceDialog(widgetIndex, bindingIndex) {
-            readConsoleEditorFields();
+            if (!consoleDeviceDialogScenePin) {
+                readConsoleEditorFields();
+            }
             var openSeq = ++consoleDeviceDialogOpenSeq;
             consoleDeviceDialogWidgetIndex = widgetIndex;
             consoleDeviceDialogBindingIndex = bindingIndex;
-            var binding = bindingIndex >= 0
-                ? consoleEditorDraft.widgets[widgetIndex].devices[bindingIndex]
-                : { ieee: "", channel: 1, title: "", unit: "", decimals: -1, param: "", viewStyle: "default" };
+            var binding;
+            if (consoleDeviceDialogScenePin && scenePendingPin) {
+                binding = scenePinToBinding(scenePendingPin);
+            } else if (bindingIndex >= 0
+                && consoleEditorDraft
+                && consoleEditorDraft.widgets
+                && consoleEditorDraft.widgets[widgetIndex]
+                && consoleEditorDraft.widgets[widgetIndex].devices) {
+                binding = consoleEditorDraft.widgets[widgetIndex].devices[bindingIndex];
+            } else {
+                binding = { ieee: "", channel: 1, title: "", unit: "", decimals: -1, param: "", viewStyle: "default" };
+            }
             document.getElementById("consoleDeviceDialogError").hidden = true;
             var targetSelect = document.getElementById("consoleBindingTarget");
             targetSelect.value = binding.automation ? "automation" : "device";
@@ -17261,12 +18297,27 @@
                     consoleDeviceClickActionTrueDraft = null;
                 }
                 renderConsoleDeviceClickActionEditor();
+                var dialogTitle = document.querySelector("#consoleDeviceDialog .upload-title");
+                if (dialogTitle) {
+                    dialogTitle.textContent = consoleDeviceDialogScenePin ? "Pin" : "Binding";
+                }
+                var removeBtn = document.getElementById("consoleDeviceRemoveBtn");
+                if (removeBtn) {
+                    // Scene pins: Remove only for an already-saved pin.
+                    removeBtn.hidden = consoleDeviceDialogScenePin && scenePinDialogIsNew;
+                }
+                refreshConsoleDeviceTitleLayoutFields();
                 document.getElementById("consoleDeviceDialog").hidden = false;
                 consoleDeviceDialogBaseline = JSON.stringify(readConsoleDeviceDialogBody());
             }).catch(function () {
                 if (openSeq !== consoleDeviceDialogOpenSeq) {
                     return;
                 }
+                var dialogTitleFail = document.querySelector("#consoleDeviceDialog .upload-title");
+                if (dialogTitleFail) {
+                    dialogTitleFail.textContent = consoleDeviceDialogScenePin ? "Pin" : "Binding";
+                }
+                refreshConsoleDeviceTitleLayoutFields();
                 document.getElementById("consoleDeviceDialog").hidden = false;
                 document.getElementById("consoleDeviceDialogError").hidden = false;
                 document.getElementById("consoleDeviceDialogError").textContent = "Could not load devices or automations";
@@ -17553,6 +18604,22 @@
             consoleDeviceDialogWidgetIndex = -1;
             consoleDeviceDialogBindingIndex = -1;
             document.getElementById("consoleDeviceDialog").hidden = true;
+            var dialogTitle = document.querySelector("#consoleDeviceDialog .upload-title");
+            if (dialogTitle) {
+                dialogTitle.textContent = "Binding";
+            }
+            var removeBtn = document.getElementById("consoleDeviceRemoveBtn");
+            if (removeBtn) {
+                removeBtn.hidden = false;
+            }
+            if (consoleDeviceDialogScenePin) {
+                consoleDeviceDialogScenePin = false;
+                scenePendingPin = null;
+                scenePinDialogIsNew = false;
+                sceneBindTool = "";
+                syncSceneBindToolButtons();
+                updateSceneBindPreview();
+            }
         }
 
         function readConsoleSpacerDialogBody() {
@@ -17702,6 +18769,29 @@
                 errorLine.textContent = "Choose a device";
                 return;
             }
+            if (consoleDeviceDialogScenePin) {
+                if (!scenePendingPin) {
+                    return;
+                }
+                applyBindingBodyToScenePin(scenePendingPin, body);
+                if (scenePinDialogIsNew) {
+                    sceneEditorPins.push(scenePendingPin);
+                    sceneSelectedPinIndex = sceneEditorPins.length - 1;
+                }
+                sceneBindDirty = true;
+                // clear before close so closeConsoleDeviceDialog does not wipe preview state twice
+                var savedPinMode = true;
+                consoleDeviceDialogScenePin = false;
+                scenePendingPin = null;
+                scenePinDialogIsNew = false;
+                closeConsoleDeviceDialog();
+                if (savedPinMode) {
+                    sceneBindTool = "";
+                    syncSceneBindToolButtons();
+                    updateSceneBindPreview();
+                }
+                return;
+            }
             if (!body.title) {
                 body.title = body.automation || body.ieee;
             }
@@ -17736,6 +18826,22 @@
         }
 
         function removeConsoleDeviceBinding() {
+            if (consoleDeviceDialogScenePin) {
+                if (!scenePinDialogIsNew && sceneSelectedPinIndex >= 0
+                    && sceneSelectedPinIndex < sceneEditorPins.length) {
+                    sceneEditorPins.splice(sceneSelectedPinIndex, 1);
+                    sceneSelectedPinIndex = -1;
+                    sceneBindDirty = true;
+                }
+                consoleDeviceDialogScenePin = false;
+                scenePendingPin = null;
+                scenePinDialogIsNew = false;
+                closeConsoleDeviceDialog();
+                sceneBindTool = "";
+                syncSceneBindToolButtons();
+                updateSceneBindPreview();
+                return;
+            }
             if (consoleDeviceDialogBindingIndex < 0) {
                 closeConsoleDeviceDialog();
                 return;
@@ -17815,6 +18921,14 @@
             }
             if (dialogId === "automationDeleteConfirmDialog") {
                 closeAutomationDeleteConfirm();
+                return true;
+            }
+            if (dialogId === "sceneGeometryDialog") {
+                requestCloseSceneGeometryEditor();
+                return true;
+            }
+            if (dialogId === "sceneEditDialog") {
+                requestCloseSceneDialog();
                 return true;
             }
             if (dialogId === "consoleDeleteConfirmDialog") {
@@ -17962,6 +19076,7 @@
         <button type="button" class="sidebar-btn" data-section="devices" onclick="showMainSection('devices')">Devices</button>
         <button type="button" class="sidebar-btn" data-section="automation" onclick="showMainSection('automation')">Automation</button>
         <button type="button" class="sidebar-btn" data-section="cameras" onclick="showMainSection('cameras')">Cameras</button>
+        <button type="button" class="sidebar-btn" data-section="scenes" onclick="showMainSection('scenes')">Scenes</button>
         <button type="button" class="sidebar-btn" data-section="consoles" onclick="showMainSection('consoles')">Consoles</button>
         <button type="button" class="sidebar-btn" data-section="security" onclick="showMainSection('security')">Security</button>
         <button type="button" class="sidebar-btn" data-section="system" onclick="showMainSection('system')">System</button>
@@ -18454,6 +19569,29 @@
             </div>
         </section>
 
+        <section id="section-scenes" class="section-panel" aria-label="Scenes">
+            <h2 class="section-title">Scenes</h2>
+            <p id="scenesSaveError" class="save-error" hidden></p>
+            <p id="scenesSaveSuccess" class="save-success" hidden></p>
+            <input id="scenesRestoreFile" type="file" accept=".json,application/json" hidden onchange="onScenesRestoreFileSelected(event)">
+            <div class="settings-scroll">
+                <table class="data-table selectable">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Bake</th>
+                        </tr>
+                    </thead>
+                    <tbody id="scenesTableBody"></tbody>
+                </table>
+            </div>
+            <div class="dialog-actions">
+                <button type="button" class="btn btn-primary" onclick="openSceneDialog('')">Add</button>
+                <button type="button" class="btn btn-secondary" onclick="exportAllScenes()">Export</button>
+                <button type="button" class="btn btn-secondary" onclick="chooseScenesRestoreFile()">Import</button>
+            </div>
+        </section>
+
         <section id="section-consoles" class="section-panel" aria-label="Consoles">
             <h2 class="section-title">Consoles</h2>
             <p id="consolesSaveError" class="save-error" hidden></p>
@@ -18498,6 +19636,9 @@
                             <option value="dark">Dark</option>
                         </select>
                         <button type="button" class="btn btn-primary" onclick="saveTheme()">Save</button>
+                        <button type="button" id="accountFullscreenBtn" class="btn btn-secondary btn-icon"
+                                title="Full screen" aria-label="Full screen" aria-pressed="false"
+                                onclick="toggleAccountFullscreen()">⛶</button>
                     </div>
                 </div>
                 <div class="field" style="margin-top:1rem;">
@@ -19074,6 +20215,10 @@
                     <span>Console editor</span>
                 </div>
                 <div class="field-check">
+                    <input id="userEditScenes" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
+                    <span>Scene editor</span>
+                </div>
+                <div class="field-check">
                     <input id="userControlDevices" type="checkbox" onchange="updateUserAssignedConsolesVisibility()">
                     <span>Other device control</span>
                 </div>
@@ -19328,6 +20473,104 @@
         </div>
     </div>
 </div>
+<div id="sceneEditDialog" class="dialog-overlay console-edit-overlay" hidden
+     onclick="if (event.target === this) requestCloseSceneDialog()">
+    <div class="dialog-panel console-edit-panel scene-edit-dialog" role="dialog" aria-labelledby="sceneDialogTitle">
+        <h3 id="sceneDialogTitle">Scene</h3>
+        <p id="sceneDialogError" class="save-error" hidden></p>
+        <div class="field">
+            <label for="sceneName">Name</label>
+            <input id="sceneName" type="text" maxlength="63" oninput="sceneBindDirty = true">
+        </div>
+        <div class="scene-bind-toolbar">
+            <button type="button" class="btn btn-secondary" onclick="openSceneGeometryEditor()">Edit scene</button>
+            <button type="button" id="sceneBindAddPinBtn" class="btn btn-secondary btn-icon" title="Add pin"
+                    aria-label="Add pin" aria-pressed="false" onclick="setSceneBindAddPinTool()">
+                <span class="mdi mdi-map-marker-plus" aria-hidden="true"></span>
+            </button>
+            <button type="button" class="btn btn-secondary btn-icon" title="Remove selected pin"
+                    aria-label="Remove selected pin" onclick="removeSelectedScenePin()">
+                <span class="mdi mdi-trash-can-outline" aria-hidden="true"></span>
+            </button>
+        </div>
+        <div class="scene-bind-stage">
+            <div id="sceneBindEmpty" class="scene-bind-empty">No image — use Edit scene to create one</div>
+            <div id="sceneBindFrame" class="scene-bind-frame" hidden onclick="onSceneBindOverlayClick(event)">
+                <img id="sceneBindImage" class="scene-bind-image" alt="Scene">
+                <div id="sceneBindOverlays" class="scene-bind-overlays"></div>
+            </div>
+        </div>
+        <div class="dialog-actions">
+            <button type="button" class="btn btn-primary" onclick="saveSceneDialog()">Save</button>
+            <button type="button" id="sceneDeleteBtn" class="btn btn-secondary" hidden onclick="deleteSceneDialog()">Delete</button>
+            <button type="button" class="btn btn-secondary" onclick="requestCloseSceneDialog()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<div id="sceneGeometryDialog" class="dialog-overlay console-edit-overlay dialog-overlay-nested" hidden
+     onclick="if (event.target === this) requestCloseSceneGeometryEditor()">
+    <div class="dialog-panel console-edit-panel scene-edit-dialog" role="dialog" aria-label="Edit scene geometry">
+        <h3>Edit scene</h3>
+        <p id="sceneGeometryError" class="save-error" hidden></p>
+        <div class="scene-designer-toolbar">
+            <button type="button" class="btn btn-secondary btn-icon" title="Add floor" aria-label="Add floor"
+                    onclick="sceneGeometryAddFloor()">
+                <span class="mdi mdi-layers-plus" aria-hidden="true"></span>
+            </button>
+            <button type="button" class="btn btn-secondary btn-icon" data-scene-tool="wall" title="Add wall"
+                    aria-label="Add wall" aria-pressed="false" onclick="setSceneGeometryTool('wall')">
+                <span class="mdi mdi-wall" aria-hidden="true"></span>
+            </button>
+            <button type="button" class="btn btn-secondary btn-icon" data-scene-tool="window" title="Add window"
+                    aria-label="Add window" aria-pressed="false" onclick="setSceneGeometryTool('window')">
+                <span class="mdi mdi-window-closed-variant" aria-hidden="true"></span>
+            </button>
+            <button type="button" class="btn btn-secondary btn-icon" data-scene-tool="door" title="Add door"
+                    aria-label="Add door" aria-pressed="false" onclick="setSceneGeometryTool('door')">
+                <span class="mdi mdi-door" aria-hidden="true"></span>
+            </button>
+            <button type="button" class="btn btn-secondary btn-icon" title="Remove selected element"
+                    aria-label="Remove selected element" onclick="sceneGeometryRemoveSelected()">
+                <span class="mdi mdi-trash-can-outline" aria-hidden="true"></span>
+            </button>
+            <button type="button" id="sceneViewToggleBtn"
+                    class="btn btn-secondary btn-icon scene-view-toggle-btn" title="View scene"
+                    aria-label="View scene" aria-pressed="false" onclick="sceneGeometryToggleView()">
+                <span class="mdi mdi-cube-outline" aria-hidden="true"></span>
+            </button>
+            <button type="button" id="scenePerspectiveBtn"
+                    class="btn btn-secondary btn-icon" title="Perspective"
+                    aria-label="Perspective" aria-pressed="true"
+                    onclick="sceneGeometryTogglePerspective()">
+                <span class="mdi mdi-perspective-less" aria-hidden="true"></span>
+            </button>
+            <div class="scene-floor-color" title="Floor color">
+                <span class="mdi mdi-palette" aria-hidden="true"></span>
+                <div id="sceneFloorColorControl" class="console-color-picker-control-host"
+                     aria-label="Floor color"></div>
+            </div>
+            <div class="scene-wall-thickness" title="Wall thickness">
+                <span class="mdi mdi-arrow-expand-horizontal" aria-hidden="true"></span>
+                <input id="sceneWallThickness" type="number" min="0.005" max="0.25" step="0.005" value="0.01"
+                       aria-label="Wall thickness" oninput="onSceneWallThicknessInput(event)">
+            </div>
+            <div class="scene-wall-height" title="Wall height">
+                <span class="mdi mdi-arrow-expand-vertical" aria-hidden="true"></span>
+                <input id="sceneWallHeight" type="number" min="0.05" max="1.5" step="0.01" value="0.15"
+                       aria-label="Wall height" oninput="onSceneWallHeightInput(event)">
+            </div>
+        </div>
+        <div class="scene-designer-canvas-wrap">
+            <canvas id="sceneGeometryCanvas"></canvas>
+        </div>
+        <div class="dialog-actions">
+            <button type="button" class="btn btn-primary" onclick="saveSceneGeometryTemp()">Save</button>
+            <button type="button" class="btn btn-secondary" onclick="requestCloseSceneGeometryEditor()">Cancel</button>
+        </div>
+    </div>
+</div>
+
 <div id="consoleEditDialog" class="dialog-overlay console-edit-overlay" hidden>
     <div class="dialog-panel console-edit-panel" role="dialog" aria-label="Edit console">
         <h3 class="upload-title">Edit console</h3>
@@ -19406,7 +20649,7 @@
                     <label for="consoleDeviceAttr">Attr id (hex)</label>
                     <input id="consoleDeviceAttr" type="text" autocomplete="off" placeholder="attrId (hex)">
                 </div>
-                <div class="console-binding-general-row">
+                <div id="consoleDeviceTitleField" class="console-binding-general-row">
                     <label for="consoleDeviceTitle">Title</label>
                     <div class="console-binding-title-line">
                         <input id="consoleDeviceShowTitle" type="checkbox" checked
@@ -19522,7 +20765,8 @@
         </div>
         <div class="dialog-actions">
             <button type="button" class="btn btn-primary" onclick="saveConsoleDeviceDialog()">Save</button>
-            <button type="button" class="btn btn-secondary" onclick="removeConsoleDeviceBinding()">Remove</button>
+            <button type="button" id="consoleDeviceRemoveBtn" class="btn btn-secondary"
+                    onclick="removeConsoleDeviceBinding()">Remove</button>
             <button type="button" class="btn btn-secondary" onclick="requestCloseConsoleDeviceDialog()">Cancel</button>
         </div>
     </div>
@@ -19585,17 +20829,12 @@
                     </div>
                     <div id="historyChartSmoothControls" class="history-chart-smooth">
                         <div class="field-check">
-                            <input id="historyChartSmooth" type="checkbox" checked onchange="onHistoryChartSmoothChange()">
+                            <input id="historyChartSmooth" type="checkbox" onchange="onHistoryChartSmoothChange()">
                             <span>Smooth</span>
                         </div>
                         <label for="historyChartSmoothWindow">samples</label>
-                        <input id="historyChartSmoothWindow" type="number" min="1" max="128" step="1" value="12"
+                        <input id="historyChartSmoothWindow" type="number" min="1" max="128" step="1" value="5"
                                onchange="onHistoryChartSmoothChange()" oninput="onHistoryChartSmoothWindowInput()">
-                        <select id="historyChartSmoothType" aria-label="Smooth type"
-                                onchange="onHistoryChartSmoothChange()">
-                            <option value="avg">Avg</option>
-                            <option value="ema" selected>Ema</option>
-                        </select>
                     </div>
                 </div>
                 <div class="history-chart-range">

@@ -243,6 +243,18 @@ void InterChipHost::holdForFirmwareOta() {
     }
 }
 
+bool InterChipHost::isOutboundIdle() const {
+    if (hasPending) {
+        return false;
+    }
+    for (int i = 0; i < kOutQueue; i++) {
+        if (outbound[i].used) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool InterChipHost::tryCoalesceDeviceControl(
     uint8_t cmd,
     const uint8_t *payload,
@@ -278,10 +290,15 @@ bool InterChipHost::enqueueInternal(
     if (length > SPI_MAX_PAYLOAD) {
         return false;
     }
-    if (FIRMWARE_OTA.isUpdatingSlave() && cmd != SpiCmdFirmwareOta) {
+    if (FIRMWARE_OTA.suppressNonOtaSpi() && cmd != SpiCmdFirmwareOta) {
         return false;
     }
     if (FIRMWARE_OTA.isUpdatingSlave() && cmd == SpiCmdFirmwareOta) {
+        // Never queue a new OTA seq while one is awaiting reply — that raced ahead
+        // (ACKs arrived as seq=N while host already expected N+1; RF gauge stuck at 0%).
+        if (hasPending && pendingCmd == SpiCmdFirmwareOta) {
+            return false;
+        }
         // At most one OTA frame in the outbound queue — avoid flood on retry/pump races.
         for (int i = 0; i < kOutQueue; i++) {
             if (!outbound[i].used || outbound[i].frame.cmd != SpiCmdFirmwareOta) {
@@ -643,7 +660,7 @@ void InterChipHost::pump() {
             if (!outbound[i].used) {
                 continue;
             }
-            if (FIRMWARE_OTA.isUpdatingSlave() && outbound[i].frame.cmd != SpiCmdFirmwareOta) {
+            if (FIRMWARE_OTA.suppressNonOtaSpi() && outbound[i].frame.cmd != SpiCmdFirmwareOta) {
                 outbound[i].used = false;
                 continue;
             }
@@ -671,9 +688,13 @@ void InterChipHost::pump() {
             pendingCmd = nextOut->frame.cmd;
             unsigned long replyTimeoutMs = kReplyTimeoutMs;
             if (nextOut->frame.cmd == SpiCmdFirmwareOta) {
+                // Use the frame on the wire for END detection — FirmwareOta's
+                // last-buffer END view can race and wrongly apply the 250ms chunk timeout.
+                const bool otaEndFrame = nextOut->frame.length > 0
+                    && (nextOut->frame.payload[0] & SPI_OTA_END) != 0;
                 if (!FIRMWARE_OTA.slaveBeginAcked()) {
                     replyTimeoutMs = kOtaBeginReplyTimeoutMs;
-                } else if (FIRMWARE_OTA.isLastSlaveFrameEnd()) {
+                } else if (otaEndFrame) {
                     replyTimeoutMs = kOtaEndReplyTimeoutMs;
                 } else {
                     replyTimeoutMs = kOtaChunkReplyTimeoutMs;

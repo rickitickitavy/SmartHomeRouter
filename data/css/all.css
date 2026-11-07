@@ -1684,6 +1684,11 @@ html, body {
     min-width: 8rem;
 }
 
+.theme-control-row .btn-icon.is-active {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
 .btn-icon {
     flex: 0 0 auto;
     width: 44px;
@@ -4986,4 +4991,262 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 .camera-dialog-section {
     margin: 0.25rem 0 0;
     font-weight: 600;
+}
+
+#sceneEditDialog.console-edit-overlay,
+#sceneGeometryDialog.console-edit-overlay {
+    display: flex;
+    align-items: stretch;
+    justify-content: flex-start;
+    padding: 0.5rem;
+    box-sizing: border-box;
+}
+
+#sceneEditDialog.console-edit-overlay[hidden],
+#sceneGeometryDialog.console-edit-overlay[hidden] {
+    display: none !important;
+}
+
+/* Geometry editor sits above Edit scene — block the lower dialog from taking clicks. */
+#sceneEditDialog.console-edit-overlay.is-covered {
+    pointer-events: none;
+}
+
+#sceneGeometryDialog.console-edit-overlay {
+    z-index: 26;
+}
+
+#sceneEditDialog .scene-edit-dialog,
+#sceneGeometryDialog .scene-edit-dialog {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    min-width: 0;
+    min-height: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem;
+}
+
+.scene-edit-dialog > .field,
+.scene-edit-dialog > .scene-designer-toolbar,
+.scene-edit-dialog > .scene-bind-toolbar,
+.scene-edit-dialog > .dialog-actions,
+.scene-edit-dialog > h3,
+.scene-edit-dialog > .save-error {
+    flex: 0 0 auto;
+}
+
+.scene-designer-toolbar,
+.scene-bind-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    margin: 0;
+}
+
+.scene-designer-toolbar .btn-icon.is-active,
+.scene-bind-toolbar .btn-icon.is-active {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.scene-designer-toolbar .scene-view-toggle-btn {
+    margin-left: 0.75rem;
+}
+
+.scene-floor-color,
+.scene-wall-thickness,
+.scene-wall-height {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-height: 44px;
+    padding: 0 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+}
+
+.scene-floor-color .console-color-picker-control-host {
+    min-height: 36px;
+}
+
+.scene-wall-thickness input[type="number"],
+.scene-wall-height input[type="number"] {
+    width: 4.5rem;
+    min-height: 36px;
+    padding: 0 0.4rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+}
+
+.scene-designer-canvas-wrap,
+.scene-bind-stage {
+    width: 100%;
+    flex: 1 1 auto;
+    min-height: 280px;
+    height: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #12151c;
+    position: relative;
+}
+
+.scene-designer-canvas-wrap canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.scene-bind-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    padding: 1rem;
+    text-align: center;
+}
+
+.scene-bind-frame {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+}
+
+.scene-bind-image {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    pointer-events: none;
+}
+
+.scene-bind-overlays {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.scene-bind-pin {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    pointer-events: auto;
+    min-width: 1.75rem;
+    min-height: 1.75rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    padding: 0.15rem 0.35rem;
+    cursor: pointer;
+}
+
+.scene-bind-pin.scene-bind-pin--live {
+    min-width: 0;
+    min-height: 0;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    padding: 0;
+    color: inherit;
+    cursor: grab;
+    touch-action: none;
+}
+
+.scene-bind-pin.scene-bind-pin--live.is-dragging {
+    cursor: grabbing;
+    z-index: 5;
+}
+
+.scene-bind-pin.scene-bind-pin--live.is-selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+}
+
+.scene-bind-pin.scene-bind-pin--live .console-device-row {
+    margin: 0;
+    background: transparent;
+    pointer-events: none;
+}
+
+.scene-bind-pin.scene-bind-pin--live .console-device-row.is-preview-only,
+.scene-bind-pin.scene-bind-pin--live .console-device-row.is-preview-only * {
+    pointer-events: none;
+}
+
+.scene-bind-pin.is-selected {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.scene-cell-host,
+.scene-cell {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 120px;
+}
+
+.scene-cell-frame {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    aspect-ratio: 16 / 9;
+    max-height: 100%;
+    overflow: hidden;
+    background: #10131a;
+}
+
+.scene-cell-bake {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.scene-cell-overlays {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.scene-cell-pin {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    pointer-events: auto;
+    z-index: 2;
+}
+
+.scene-cell-pin-live {
+    min-width: 0;
+    min-height: 0;
+}
+
+.scene-cell-pin-live .console-device-row {
+    margin: 0;
+    background: transparent;
+}
+
+.scene-cell--empty,
+.scene-cell--preview {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
 }

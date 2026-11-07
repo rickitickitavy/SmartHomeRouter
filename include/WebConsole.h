@@ -10,6 +10,7 @@
 #include "ConsoleStore.h"
 #include "AutomationStore.h"
 #include "CameraStore.h"
+#include "SceneStore.h"
 #include "PsramJsonBuffer.h"
 #if defined(BOARD_ROLE_HOST)
 #include "HistoryStore.h"
@@ -38,7 +39,8 @@ public:
         UserStore *userStore,
         ConsoleStore *consoleStore,
         AutomationStore *automationStore,
-        CameraStore *cameraStore = nullptr
+        CameraStore *cameraStore = nullptr,
+        SceneStore *sceneStore = nullptr
     );
 
     void begin();
@@ -79,6 +81,7 @@ private:
     ConsoleStore *consoleStore;
     AutomationStore *automationStore;
     CameraStore *cameraStore;
+    SceneStore *sceneStore;
     FoundDeviceList *foundDevices = nullptr;
     SearchStartFn startSearch = nullptr;
     SearchStopFn stopSearch = nullptr;
@@ -143,6 +146,7 @@ private:
     bool requireAdmin(AsyncWebServerRequest *request, const UserRecord **userOut, bool touchActivity = true);
     bool requireEditUsers(AsyncWebServerRequest *request, const UserRecord **userOut, bool touchActivity = true);
     bool requireEditConsoles(AsyncWebServerRequest *request, const UserRecord **userOut, bool touchActivity = true);
+    bool requireEditScenes(AsyncWebServerRequest *request, const UserRecord **userOut, bool touchActivity = true);
     bool userCanAddDevices(const UserRecord *user) const;
     bool userCanEditDevices(const UserRecord *user) const;
     bool userCanRemoveDevices(const UserRecord *user) const;
@@ -150,6 +154,7 @@ private:
     bool userMaySendDeviceCommand(const UserRecord *user) const;
     bool userIsOperator(const UserRecord *user) const;
     bool userCanEditConsoles(const UserRecord *user) const;
+    bool userCanEditScenes(const UserRecord *user) const;
     void sendAuthCookie(AsyncWebServerResponse *response, const char *tokenHex, uint32_t maxAgeSec);
     void handleAuthLoginPost(AsyncWebServerRequest *request);
     void handleAuthLogoutPost(AsyncWebServerRequest *request);
@@ -184,6 +189,17 @@ private:
     void handleCameraPut(AsyncWebServerRequest *request);
     void handleCameraDelete(AsyncWebServerRequest *request);
     void handleCameraMediaGet(AsyncWebServerRequest *request);
+    void handleScenesGet(AsyncWebServerRequest *request);
+    void handleScenesPost(AsyncWebServerRequest *request);
+    void handleScenesStoreGet(AsyncWebServerRequest *request);
+    void handleScenesRestorePost(AsyncWebServerRequest *request);
+    void handleSceneGet(AsyncWebServerRequest *request);
+    void handleScenePut(AsyncWebServerRequest *request);
+    void handleSceneDelete(AsyncWebServerRequest *request);
+    void handleSceneBakeGet(AsyncWebServerRequest *request);
+    void handleSceneBakePost(AsyncWebServerRequest *request);
+    void handleSceneViewGet(AsyncWebServerRequest *request);
+    void sendSceneWriteResult(AsyncWebServerRequest *request, SceneWriteResult result);
     void handleCamerasDiscoverGet(AsyncWebServerRequest *request);
     void handleCamerasDiscoverStartPost(AsyncWebServerRequest *request);
     void handleCamerasDiscoverStopPost(AsyncWebServerRequest *request);
