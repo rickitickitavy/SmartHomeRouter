@@ -1804,10 +1804,18 @@
             });
         }
 
+        function normalizeIeeeText(text) {
+            return String(text || "").replace(/[^0-9A-Fa-f]/g, "").toUpperCase();
+        }
+
         function findRegisteredDevice(ieee) {
+            var want = normalizeIeeeText(ieee);
+            if (!want) {
+                return null;
+            }
             var index;
             for (index = 0; index < registeredDeviceRows.length; index++) {
-                if ((registeredDeviceRows[index].ieee || "") === (ieee || "")) {
+                if (normalizeIeeeText(registeredDeviceRows[index].ieee) === want) {
                     return registeredDeviceRows[index];
                 }
             }
@@ -4245,10 +4253,20 @@
             }
             var device = findRegisteredDevice(binding.ieee);
             if (!device) {
-                var unavailable = document.createElement("span");
-                unavailable.className = "console-device-unavailable";
-                unavailable.textContent = "unavailable";
-                controls.appendChild(unavailable);
+                // Always show configured icon/gauge — never replace with "unavailable" text.
+                if (binding.viewStyle === "gauge" && typeof buildConsoleGaugeElement === "function") {
+                    row.classList.add("console-device-row--gauge");
+                    controls.appendChild(buildConsoleGaugeElement(binding, NaN, "—"));
+                } else {
+                    controls.appendChild(buildConsoleIconElement(
+                        binding,
+                        "OFF",
+                        {
+                            interactive: false,
+                            ariaLabel: (binding && binding.title) ? String(binding.title) : "Device"
+                        }
+                    ));
+                }
                 row.appendChild(controls);
                 return row;
             }

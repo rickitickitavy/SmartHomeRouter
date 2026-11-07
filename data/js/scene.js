@@ -18,20 +18,6 @@
         ];
     }
 
-    function wallsAlongPolygon(polygon) {
-        var walls = [];
-        if (!polygon || polygon.length < 2) {
-            return walls;
-        }
-        var index;
-        for (index = 0; index < polygon.length; index++) {
-            var a = polygon[index];
-            var b = polygon[(index + 1) % polygon.length];
-            walls.push({ x1: a.x, z1: a.z, x2: b.x, z2: b.z });
-        }
-        return walls;
-    }
-
     function polygonFromWalls(walls) {
         if (!walls || walls.length < 3) {
             return null;
@@ -45,13 +31,13 @@
     }
 
     function defaultFloorRect(sceneSize) {
-        var polygon = defaultPolygon(sceneSize);
         return {
             y: 0,
             height: 0.3,
             color: DEFAULT_FLOOR_COLOR,
-            polygon: polygon,
-            walls: wallsAlongPolygon(polygon),
+            // Floor plate and walls are independent entities — never auto-bind walls to the polygon.
+            polygon: defaultPolygon(sceneSize),
+            walls: [],
             windows: [],
             doors: []
         };
@@ -1617,13 +1603,13 @@
             && this.model.floors[this.selection.floorIndex]) {
             this.floorIndex = this.selection.floorIndex;
         }
-        if (this.selection.list === "polygon") {
+        if (this.selection.list === "floor" || this.selection.list === "polygon") {
             var floorPolygon = this.currentFloor();
             if (!floorPolygon || !floorPolygon.polygon) {
                 return false;
             }
             // Floor plate is independent of walls — clearing it keeps walls/windows/doors.
-            if (floorPolygon.polygon.length <= 3) {
+            if (this.selection.list === "floor" || floorPolygon.polygon.length <= 3) {
                 floorPolygon.polygon = [];
                 this.selection = null;
                 this.notify();
@@ -1703,10 +1689,48 @@
         var threshold = this.handleHitSize();
         var best = null;
         var bestDist = threshold;
-        var self = this;
         var activeFloor = this.currentFloor();
         var activeIndex = this.floorIndex;
-        // Prefer active-floor wall/window/door endpoints over floor corners.
+        var tieEps = threshold * 0.15;
+
+        function consider(candidate, dist, preferFloor) {
+            if (dist > bestDist + tieEps) {
+                return;
+            }
+            if (dist < bestDist - tieEps) {
+                bestDist = dist;
+                best = candidate;
+                return;
+            }
+            // Near-tie: floor corners win over walls (independent entities; do not steal floor picks).
+            if (preferFloor && best && best.list !== "polygon") {
+                bestDist = dist;
+                best = candidate;
+                return;
+            }
+            if (!preferFloor && best && best.list === "polygon") {
+                return;
+            }
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = candidate;
+            }
+        }
+
+        // Floor polygon corners for EVERY floor so inactive plates stay editable.
+        (this.model.floors || []).forEach(function (floor, floorIndex) {
+            (floor.polygon || []).forEach(function (corner, index) {
+                var dx = corner.x - point.x;
+                var dz = corner.z - point.z;
+                consider({
+                    list: "polygon",
+                    index: index,
+                    end: 0,
+                    floorIndex: floorIndex
+                }, Math.sqrt(dx * dx + dz * dz), true);
+            });
+        });
+        // Active-floor wall/window/door endpoints — separate from floor corners.
         ["walls", "windows", "doors"].forEach(function (listName) {
             var list = activeFloor[listName] || [];
             list.forEach(function (seg, index) {
@@ -1716,37 +1740,13 @@
                 ].forEach(function (handle) {
                     var dx = handle.x - point.x;
                     var dz = handle.z - point.z;
-                    var dist = Math.sqrt(dx * dx + dz * dz);
-                    if (dist < bestDist) {
-                        bestDist = dist;
-                        best = {
-                            list: listName,
-                            index: index,
-                            end: handle.end,
-                            floorIndex: activeIndex
-                        };
-                    }
-                });
-            });
-        });
-        if (best) {
-            return best;
-        }
-        // Floor polygon corners for EVERY floor so inactive plates stay editable.
-        (this.model.floors || []).forEach(function (floor, floorIndex) {
-            (floor.polygon || []).forEach(function (corner, index) {
-                var dx = corner.x - point.x;
-                var dz = corner.z - point.z;
-                var dist = Math.sqrt(dx * dx + dz * dz);
-                if (dist < bestDist) {
-                    bestDist = dist;
-                    best = {
-                        list: "polygon",
+                    consider({
+                        list: listName,
                         index: index,
-                        end: 0,
-                        floorIndex: floorIndex
-                    };
-                }
+                        end: handle.end,
+                        floorIndex: activeIndex
+                    }, Math.sqrt(dx * dx + dz * dz), false);
+                });
             });
         });
         return best;
@@ -1788,31 +1788,47 @@
         var threshold = (this.model.sceneSize || 1) * 0.025;
         var best = null;
         var bestDist = threshold;
+        var tieEps = threshold * 0.15;
+
+        function consider(candidate, dist, preferFloor) {
+            if (dist > bestDist + tieEps) {
+                return;
+            }
+            if (dist < bestDist - tieEps) {
+                bestDist = dist;
+                best = candidate;
+                return;
+            }
+            if (preferFloor && best && best.list !== "polygon" && best.list !== "floor") {
+                bestDist = dist;
+                best = candidate;
+                return;
+            }
+            if (!preferFloor && best && (best.list === "polygon" || best.list === "floor")) {
+                return;
+            }
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = candidate;
+            }
+        }
+
+        var polygon = floor.polygon || [];
+        var index;
+        for (index = 0; index < polygon.length; index++) {
+            var a = polygon[index];
+            var b = polygon[(index + 1) % polygon.length];
+            consider({ list: "polygon", index: index }, distPointToSeg(point.x, point.z, {
+                x1: a.x, z1: a.z, x2: b.x, z2: b.z
+            }), true);
+        }
         ["walls", "windows", "doors"].forEach(function (listName) {
             var list = floor[listName] || [];
             list.forEach(function (seg, index) {
-                var dist = distPointToSeg(point.x, point.z, seg);
-                if (dist < bestDist) {
-                    bestDist = dist;
-                    best = { list: listName, index: index };
-                }
+                consider({ list: listName, index: index },
+                    distPointToSeg(point.x, point.z, seg), false);
             });
         });
-        if (!best) {
-            var polygon = floor.polygon || [];
-            var index;
-            for (index = 0; index < polygon.length; index++) {
-                var a = polygon[index];
-                var b = polygon[(index + 1) % polygon.length];
-                var dist = distPointToSeg(point.x, point.z, {
-                    x1: a.x, z1: a.z, x2: b.x, z2: b.z
-                });
-                if (dist < bestDist) {
-                    bestDist = dist;
-                    best = { list: "polygon", index: index };
-                }
-            }
-        }
         if (best) {
             best.floorIndex = this.floorIndex;
         }
@@ -1939,12 +1955,13 @@
             this.draw();
             return;
         }
-        // Click an inactive floor plate to activate it (so its corners can be deleted).
+        // Floor plate click selects the floor only — never a coincident wall.
         var floorHit = this.findFloorIndexAt(point);
-        if (floorHit >= 0 && floorHit !== this.floorIndex) {
+        if (floorHit >= 0) {
             this.floorIndex = floorHit;
-            this.selection = null;
+            this.selection = { list: "floor", floorIndex: floorHit };
             this.draw();
+            return;
         }
         // Empty canvas never creates geometry — only toolbar tools add objects.
         this.selectNear(point);
@@ -2153,11 +2170,16 @@
                 y: height * 0.5 + (point.z / size) * height * editZoom
             };
         }
-        function drawFloorPlate(floor, active) {
+        function drawFloorPlate(floor, floorIndex, active) {
             var polygon = floor.polygon || [];
             if (polygon.length < 3) {
                 return;
             }
+            var floorSelected = self.selection
+                && self.selection.list === "floor"
+                && (self.selection.floorIndex == null
+                    ? floorIndex === self.floorIndex
+                    : self.selection.floorIndex === floorIndex);
             ctx.beginPath();
             polygon.forEach(function (corner, index) {
                 var p = toPx(corner);
@@ -2168,17 +2190,21 @@
                 }
             });
             ctx.closePath();
-            ctx.fillStyle = hexToRgba(floor.color || DEFAULT_FLOOR_COLOR, active ? 0.38 : 0.2);
+            ctx.fillStyle = hexToRgba(
+                floor.color || DEFAULT_FLOOR_COLOR,
+                floorSelected ? 0.52 : (active ? 0.38 : 0.2)
+            );
             ctx.fill();
-            ctx.strokeStyle = active ? "#9fb6c9" : "#5a6a7c";
-            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = floorSelected ? "#ce93d8" : (active ? "#9fb6c9" : "#5a6a7c");
+            ctx.lineWidth = floorSelected ? 2.5 : 1.5;
             ctx.stroke();
         }
         this.model.floors.forEach(function (floor, index) {
-            drawFloorPlate(floor, index === self.floorIndex);
+            drawFloorPlate(floor, index, index === self.floorIndex);
         });
         function drawSegs(list, listName, color, widthPx, activeFloor) {
             (list || []).forEach(function (seg, index) {
+                // Walls/openings highlight only when THAT entity is selected — never with floor.
                 var selected = activeFloor
                     && self.selection
                     && self.selection.list === listName
