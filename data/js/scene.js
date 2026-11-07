@@ -1,10 +1,49 @@
-/* Scene geometry designer + console cell viewer (custom Canvas, no three.js). */
+/* Scene geometry designer + console cell viewer (2D plan; three.js loaded on demand for View/bake). */
 (function (global) {
     "use strict";
 
     var DEFAULT_FLOOR_COLOR = "#6a8fad";
     var DEFAULT_WALL_THICKNESS = 0.01;
     var DEFAULT_WALL_HEIGHT = 0.15;
+    var THREE_SCRIPT_SRC = "/js/three.min.js";
+    var threeJsLoadPromise = null;
+
+    function loadThreeJs() {
+        if (global.THREE) {
+            return Promise.resolve(global.THREE);
+        }
+        if (threeJsLoadPromise) {
+            return threeJsLoadPromise;
+        }
+        threeJsLoadPromise = new Promise(function (resolve, reject) {
+            var existing = document.querySelector('script[data-scene-three="1"]');
+            if (existing && global.THREE) {
+                resolve(global.THREE);
+                return;
+            }
+            var script = document.createElement("script");
+            script.src = THREE_SCRIPT_SRC;
+            script.async = true;
+            script.setAttribute("data-scene-three", "1");
+            script.onload = function () {
+                if (global.THREE) {
+                    resolve(global.THREE);
+                } else {
+                    threeJsLoadPromise = null;
+                    reject(new Error("three.js loaded without THREE global"));
+                }
+            };
+            script.onerror = function () {
+                threeJsLoadPromise = null;
+                if (script.parentNode) {
+                    script.parentNode.removeChild(script);
+                }
+                reject(new Error("Failed to load three.js"));
+            };
+            (document.head || document.documentElement).appendChild(script);
+        });
+        return threeJsLoadPromise;
+    }
 
     function defaultPolygon(sceneSize) {
         var size = sceneSize > 0 ? sceneSize : 1;
@@ -35,11 +74,8 @@
             y: 0,
             height: 0.3,
             color: DEFAULT_FLOOR_COLOR,
-            // Floor plate and walls are independent entities — never auto-bind walls to the polygon.
-            polygon: defaultPolygon(sceneSize),
-            walls: [],
-            windows: [],
-            doors: []
+            // Floor plate only — walls/windows/doors live on the scene model.
+            polygon: defaultPolygon(sceneSize)
         };
     }
 
@@ -52,20 +88,65 @@
         }
         // Keep every floor on the same ground plane.
         floor.y = 0;
-        if (!Array.isArray(floor.walls)) {
-            floor.walls = [];
+        if (!Array.isArray(floor.polygon)) {
+            floor.polygon = [];
         }
-        if (!Array.isArray(floor.windows)) {
-            floor.windows = [];
-        }
-        if (!Array.isArray(floor.doors)) {
-            floor.doors = [];
-        }
-        if (!Array.isArray(floor.polygon) || floor.polygon.length < 3) {
-            floor.polygon = polygonFromWalls(floor.walls) || defaultPolygon(sceneSize);
-        }
-        syncFloorOpenings(floor);
+        // Never rebuild a floor plate from walls — they are independent objects.
         return floor;
+    }
+
+    function hoistLegacyFloorGeometry(model) {
+        if (!model || typeof model !== "object") {
+            return;
+        }
+        if (!Array.isArray(model.walls)) {
+            model.walls = [];
+        }
+        if (!Array.isArray(model.windows)) {
+            model.windows = [];
+        }
+        if (!Array.isArray(model.doors)) {
+            model.doors = [];
+        }
+        (model.floors || []).forEach(function (floor) {
+            if (!floor || typeof floor !== "object") {
+                return;
+            }
+            var wallBase = model.walls.length;
+            if (Array.isArray(floor.walls) && floor.walls.length) {
+                floor.walls.forEach(function (seg) {
+                    model.walls.push(seg);
+                });
+            }
+            ["windows", "doors"].forEach(function (listName) {
+                if (!Array.isArray(floor[listName]) || !floor[listName].length) {
+                    return;
+                }
+                floor[listName].forEach(function (opening) {
+                    if (opening && typeof opening.wallIndex === "number") {
+                        opening.wallIndex += wallBase;
+                    }
+                    model[listName].push(opening);
+                });
+            });
+            // Drop nested copies so floors never own wall geometry again.
+            delete floor.walls;
+            delete floor.windows;
+            delete floor.doors;
+        });
+    }
+
+    function normalizeSceneModel(model) {
+        var sceneSize = (model && model.sceneSize) || 1;
+        if (!model.floors || !model.floors.length) {
+            model.floors = [defaultFloorRect(sceneSize)];
+        }
+        hoistLegacyFloorGeometry(model);
+        model.floors = model.floors.map(function (floor) {
+            return normalizeFloor(floor, sceneSize);
+        });
+        syncModelOpenings(model);
+        return model;
     }
 
     function pointsNearEqual(ax, az, bx, bz, epsilon) {
@@ -107,12 +188,12 @@
             + alpha + ")";
     }
 
-    function moveSharedWallCorner(floor, fromX, fromZ, toX, toZ) {
-        if (!floor || !Array.isArray(floor.walls)) {
+    function moveSharedWallCorner(walls, fromX, fromZ, toX, toZ) {
+        if (!Array.isArray(walls)) {
             return;
         }
         var epsilon = 1e-5;
-        floor.walls.forEach(function (seg) {
+        walls.forEach(function (seg) {
             if (pointsNearEqual(seg.x1, seg.z1, fromX, fromZ, epsilon)) {
                 seg.x1 = toX;
                 seg.z1 = toZ;
@@ -122,7 +203,6 @@
                 seg.z2 = toZ;
             }
         });
-        syncFloorOpenings(floor);
     }
 
     function bindOpeningToNearestWall(opening, walls) {
@@ -182,13 +262,14 @@
         opening.z2 = b.z;
     }
 
-    function syncFloorOpenings(floor) {
-        if (!floor) {
+    function syncModelOpenings(model) {
+        if (!model) {
             return;
         }
+        var walls = model.walls || [];
         ["windows", "doors"].forEach(function (listName) {
-            (floor[listName] || []).forEach(function (opening) {
-                syncOpeningGeometry(opening, floor.walls || []);
+            (model[listName] || []).forEach(function (opening) {
+                syncOpeningGeometry(opening, walls);
             });
         });
     }
@@ -241,7 +322,7 @@
         return best;
     }
 
-    function resolveShiftDragPoint(floor, handle, origin, raw, shiftHeld, sceneSize) {
+    function resolveShiftDragPoint(model, floor, handle, origin, raw, shiftHeld, sceneSize) {
         if (!shiftHeld || !raw) {
             return raw;
         }
@@ -255,7 +336,7 @@
             if (floorSnap) {
                 return floorSnap;
             }
-            var seg = floor && floor.walls && floor.walls[handle.index];
+            var seg = model && model.walls && model.walls[handle.index];
             if (seg) {
                 var fixed = handle.end === 1
                     ? { x: seg.x2, z: seg.z2 }
@@ -290,7 +371,51 @@
             yaw: 0.85,
             pitch: 0.62,
             perspective: true,
+            // Free-fly eye used by View scene / bake (orbit seed until WASD moves it).
+            eyeX: null,
+            eyeY: null,
+            eyeZ: null,
+            // Walls / openings are scene-level — independent of floor plates.
+            walls: [],
+            windows: [],
+            doors: [],
             floors: [defaultFloorRect(1.0)]
+        };
+    }
+
+    function orbitEyeFromAngles(model, yaw, pitch, viewZoom) {
+        var bounds = sceneBounds(model);
+        var cx = (bounds.minX + bounds.maxX) * 0.5;
+        var cy = (bounds.minY + bounds.maxY) * 0.5;
+        var cz = (bounds.minZ + bounds.maxZ) * 0.5;
+        var radius = Math.max(
+            bounds.maxX - bounds.minX,
+            bounds.maxY - bounds.minY,
+            bounds.maxZ - bounds.minZ,
+            (model.sceneSize || 1) * 0.4
+        ) * 0.5;
+        var baseDist = Math.max(1.2, radius * 2.35);
+        var distance = baseDist / Math.max(0.35, viewZoom || 1);
+        var cp = Math.cos(pitch);
+        var sp = Math.sin(pitch);
+        var sy = Math.sin(yaw);
+        var cyaw = Math.cos(yaw);
+        return {
+            x: cx + distance * sy * cp,
+            y: cy + distance * sp,
+            z: cz + distance * cyaw * cp,
+            targetX: cx,
+            targetY: cy,
+            targetZ: cz
+        };
+    }
+
+    function lookForwardFromAngles(yaw, pitch) {
+        var cp = Math.cos(pitch);
+        return {
+            x: -Math.sin(yaw) * cp,
+            y: -Math.sin(pitch),
+            z: -Math.cos(yaw) * cp
         };
     }
 
@@ -354,33 +479,6 @@
         return { x: ax + abx * t, z: az + abz * t, t: t };
     }
 
-    function projectOrbit(point, yaw, pitch, distance, width, height, pixelsPerUnit, perspective) {
-        var cy = Math.cos(yaw);
-        var sy = Math.sin(yaw);
-        var cp = Math.cos(pitch);
-        var sp = Math.sin(pitch);
-        var x = point.x;
-        var y = point.y;
-        var z = point.z;
-        // Orbit yaw around Y, then pitch so positive pitch looks down from above.
-        var rx = x * cy + z * sy;
-        var rz = -x * sy + z * cy;
-        var ry = y * cp + rz * sp;
-        var rz2 = -y * sp + rz * cp;
-        var depth = distance + rz2;
-        if (depth < 0.05) {
-            depth = 0.05;
-        }
-        var base = pixelsPerUnit > 0 ? pixelsPerUnit : Math.min(width, height) * 0.42;
-        // Perspective divides by depth; orthographic keeps a constant scale.
-        var scale = perspective === false ? (base / Math.max(distance, 0.05)) : (base / depth);
-        return {
-            x: width * 0.5 + rx * scale,
-            y: height * 0.58 - ry * scale,
-            depth: depth
-        };
-    }
-
     function sceneBounds(model) {
         var minX = 0;
         var maxX = 0;
@@ -411,13 +509,13 @@
                 includePoint(corner.x, baseY, corner.z);
                 includePoint(corner.x, baseY + wallHeight, corner.z);
             });
-            ["walls", "windows", "doors"].forEach(function (listName) {
-                (floor[listName] || []).forEach(function (seg) {
-                    includePoint(seg.x1, baseY, seg.z1);
-                    includePoint(seg.x2, baseY, seg.z2);
-                    includePoint(seg.x1, baseY + wallHeight, seg.z1);
-                    includePoint(seg.x2, baseY + wallHeight, seg.z2);
-                });
+        });
+        ["walls", "windows", "doors"].forEach(function (listName) {
+            (model[listName] || []).forEach(function (seg) {
+                includePoint(seg.x1, 0, seg.z1);
+                includePoint(seg.x2, 0, seg.z2);
+                includePoint(seg.x1, wallHeight, seg.z1);
+                includePoint(seg.x2, wallHeight, seg.z2);
             });
         });
         if (!hasPoint) {
@@ -425,6 +523,31 @@
             return { minX: -half, maxX: half, minY: 0, maxY: wallHeight, minZ: -half, maxZ: half };
         }
         return { minX: minX, maxX: maxX, minY: minY, maxY: maxY, minZ: minZ, maxZ: maxZ };
+    }
+
+    function projectOrbit(point, yaw, pitch, distance, width, height, pixelsPerUnit, perspective) {
+        var cy = Math.cos(yaw);
+        var sy = Math.sin(yaw);
+        var cp = Math.cos(pitch);
+        var sp = Math.sin(pitch);
+        var x = point.x;
+        var y = point.y;
+        var z = point.z;
+        var rx = x * cy + z * sy;
+        var rz = -x * sy + z * cy;
+        var ry = y * cp + rz * sp;
+        var rz2 = -y * sp + rz * cp;
+        var depth = distance + rz2;
+        if (depth < 0.05) {
+            depth = 0.05;
+        }
+        var base = pixelsPerUnit > 0 ? pixelsPerUnit : Math.min(width, height) * 0.42;
+        var scale = perspective === false ? (base / Math.max(distance, 0.05)) : (base / depth);
+        return {
+            x: width * 0.5 + rx * scale,
+            y: height * 0.58 - ry * scale,
+            depth: depth
+        };
     }
 
     function viewProjectionParams(model, width, height, yaw, pitch) {
@@ -473,6 +596,80 @@
         };
     }
 
+    function averageDepth(projected) {
+        var sum = 0;
+        var index;
+        for (index = 0; index < projected.length; index++) {
+            sum += projected[index].depth;
+        }
+        return sum / Math.max(1, projected.length);
+    }
+
+    function paintFaces(ctx, faces, yaw, pitch, distance, width, height, pixelsPerUnit, center, perspective) {
+        var light = normalize3({ x: 0.35, y: 0.9, z: 0.25 });
+        var shift = center || { x: 0, y: 0, z: 0 };
+        var usePerspective = perspective !== false;
+        var prepared = faces.map(function (face) {
+            var projected = face.points.map(function (point) {
+                return projectOrbit({
+                    x: point.x - shift.x,
+                    y: point.y - shift.y,
+                    z: point.z - shift.z
+                }, yaw, pitch, distance, width, height, pixelsPerUnit, usePerspective);
+            });
+            var facingScreen = 0;
+            if (projected.length >= 3) {
+                facingScreen = (projected[1].x - projected[0].x) * (projected[2].y - projected[0].y)
+                    - (projected[1].y - projected[0].y) * (projected[2].x - projected[0].x);
+            }
+            if (!face.forceDraw && facingScreen > 0) {
+                return null;
+            }
+            var normal = faceNormal(face.points);
+            var facing = Math.max(0.2, Math.abs(
+                normal.x * light.x + normal.y * light.y + normal.z * light.z
+            ));
+            var shade = 0.45 + 0.55 * facing;
+            return {
+                projected: projected,
+                depth: averageDepth(projected),
+                layer: face.layer == null ? 1 : face.layer,
+                fill: shadeRgba(face.color, shade, face.alpha == null ? 1 : face.alpha),
+                stroke: shadeRgba(face.color, shade * 0.7, 0.65),
+                noStroke: !!face.noStroke
+            };
+        }).filter(function (face) {
+            return !!face;
+        });
+        prepared.sort(function (left, right) {
+            if (left.layer !== right.layer) {
+                return left.layer - right.layer;
+            }
+            return right.depth - left.depth;
+        });
+        prepared.forEach(function (face) {
+            if (!face.projected.length) {
+                return;
+            }
+            ctx.beginPath();
+            face.projected.forEach(function (point, index) {
+                if (index === 0) {
+                    ctx.moveTo(point.x, point.y);
+                } else {
+                    ctx.lineTo(point.x, point.y);
+                }
+            });
+            ctx.closePath();
+            ctx.fillStyle = face.fill;
+            ctx.fill();
+            if (!face.noStroke) {
+                ctx.strokeStyle = face.stroke;
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            }
+        });
+    }
+
     function cross(ax, ay, az, bx, by, bz) {
         return {
             x: ay * bz - az * by,
@@ -501,15 +698,6 @@
             points[2].y - points[0].y,
             points[2].z - points[0].z
         ));
-    }
-
-    function averageDepth(projected) {
-        var sum = 0;
-        var index;
-        for (index = 0; index < projected.length; index++) {
-            sum += projected[index].depth;
-        }
-        return sum / projected.length;
     }
 
     function wallLength(seg) {
@@ -548,6 +736,20 @@
             }
         }
         return false;
+    }
+
+    // Square post filling the gap left when connected walls are trimmed by half thickness.
+    function cornerPostFaces(x, z, baseY, wallHeight, thickness, colorHex) {
+        var half = Math.max(0.004, thickness * 0.5);
+        return wallBoxFaces(
+            { x1: x - half, z1: z, x2: x + half, z2: z },
+            baseY,
+            wallHeight,
+            thickness,
+            colorHex,
+            1,
+            { trimStart: 0, trimEnd: 0, skipStartCap: false, skipEndCap: false }
+        );
     }
 
     function pushWallFace(faces, points, colorHex, options) {
@@ -701,6 +903,13 @@
         pushWallFace(faces, [oA0, oB0, oB1, oA1], colorHex, faceOpts);
         pushWallFace(faces, [iB0, iA0, iA1, iB1], colorHex, faceOpts);
         pushWallFace(faces, [oA1, oB1, iB1, iA1], colorHex, faceOpts);
+        // Thickness reveals where walls are slid apart (door openings).
+        if (options && options.capStart) {
+            pushWallFace(faces, [iA0, oA0, oA1, iA1], colorHex, faceOpts);
+        }
+        if (options && options.capEnd) {
+            pushWallFace(faces, [oB0, iB0, iB1, oB1], colorHex, faceOpts);
+        }
         return faces;
     }
 
@@ -769,16 +978,25 @@
                 cuts.forEach(function (cut) {
                     var t0 = Math.max(cursor, cut.t0);
                     var t1 = Math.max(t0, cut.t1);
-                    // Wall pieces that abut a window: noStroke so cut edges don't draw seams.
-                    var abutOpts = cut.fillPanel ? { noStroke: true } : null;
+                    // Windows + doors: noStroke on abutting pieces so cut edges stay clean.
+                    // Doors = walls slid apart (thickness caps, no colored jambs).
+                    var abutOpts = { noStroke: true };
                     if (t0 > cursor + 1e-4) {
-                        solidRibbon(cursor, t0, y0, y1, wallColor, abutOpts);
+                        solidRibbon(cursor, t0, y0, y1, wallColor, Object.assign({
+                            capEnd: !cut.fillPanel
+                        }, abutOpts));
                     }
                     if (cut.y0 > y0 + 1e-4) {
-                        solidRibbon(t0, t1, y0, cut.y0, wallColor, abutOpts);
+                        solidRibbon(t0, t1, y0, cut.y0, wallColor, Object.assign({
+                            capStart: !cut.fillPanel,
+                            capEnd: !cut.fillPanel
+                        }, abutOpts));
                     }
                     if (cut.y1 < y1 - 1e-4) {
-                        solidRibbon(t0, t1, cut.y1, y1, wallColor, abutOpts);
+                        solidRibbon(t0, t1, cut.y1, y1, wallColor, Object.assign({
+                            capStart: !cut.fillPanel,
+                            capEnd: !cut.fillPanel
+                        }, abutOpts));
                     }
                     if (cut.fillPanel) {
                         // Window panel overlaps cut slightly; no stroke (layer above wall).
@@ -791,14 +1009,6 @@
                             cut.color,
                             { noStroke: true, layer: 2 }
                         );
-                    } else {
-                        var openingLen = (t1 - t0) * wallLength(center);
-                        var jamb = Math.min(0.004, openingLen * 0.08);
-                        if (jamb * 2.2 < openingLen) {
-                            var dt = jamb / Math.max(wallLength(center), 1e-6);
-                            solidRibbon(t0, t0 + dt, cut.y0, cut.y1, cut.color, { layer: 2 });
-                            solidRibbon(t1 - dt, t1, cut.y0, cut.y1, cut.color, { layer: 2 });
-                        }
                     }
                     cursor = Math.max(cursor, t1);
                 });
@@ -810,7 +1020,9 @@
                         y0,
                         y1,
                         wallColor,
-                        lastCut && lastCut.fillPanel ? { noStroke: true } : null
+                        Object.assign({
+                            capStart: !!(lastCut && !lastCut.fillPanel)
+                        }, { noStroke: true })
                     );
                 }
             }
@@ -923,15 +1135,25 @@
         cuts.forEach(function (cut) {
             var t0 = Math.max(cursor, cut.t0);
             var t1 = Math.max(t0, cut.t1);
-            var abutOpts = cut.fillPanel ? { noStroke: true } : null;
+            // Doors: walls slid apart — show thickness caps at the opening, no jamb strips.
+            var doorSlide = !cut.fillPanel;
+            var abutOpts = { noStroke: true };
             if (t0 > cursor + 1e-4) {
-                solidSpan(cursor, t0, baseY, wallHeight, wallColor, abutOpts);
+                solidSpan(cursor, t0, baseY, wallHeight, wallColor, Object.assign({
+                    skipEndCap: !doorSlide
+                }, abutOpts));
             }
             if (cut.y0 > baseY + 1e-4) {
-                solidSpan(t0, t1, baseY, cut.y0 - baseY, wallColor, abutOpts);
+                solidSpan(t0, t1, baseY, cut.y0 - baseY, wallColor, Object.assign({
+                    skipStartCap: !doorSlide,
+                    skipEndCap: !doorSlide
+                }, abutOpts));
             }
             if (cut.y1 < baseY + wallHeight - 1e-4) {
-                solidSpan(t0, t1, cut.y1, (baseY + wallHeight) - cut.y1, wallColor, abutOpts);
+                solidSpan(t0, t1, cut.y1, (baseY + wallHeight) - cut.y1, wallColor, Object.assign({
+                    skipStartCap: !doorSlide,
+                    skipEndCap: !doorSlide
+                }, abutOpts));
             }
             if (cut.fillPanel) {
                 var padT = 0.006;
@@ -943,42 +1165,31 @@
                     cut.color,
                     { noStroke: true, skipStartCap: true, skipEndCap: true, layer: 2 }
                 );
-            } else {
-                var openingLen = (t1 - t0) * wallLength(wall);
-                var jamb = Math.min(0.004, openingLen * 0.08);
-                if (jamb * 2.2 < openingLen) {
-                    var dt = jamb / wallLength(wall);
-                    faces = faces.concat(wallSlab(
-                        wall, t0, t0 + dt, cut.y0, cut.y1 - cut.y0, thickness, cut.color, 1,
-                        { skipStartCap: true, skipEndCap: true, layer: 2 }
-                    ));
-                    faces = faces.concat(wallSlab(
-                        wall, t1 - dt, t1, cut.y0, cut.y1 - cut.y0, thickness, cut.color, 1,
-                        { skipStartCap: true, skipEndCap: true, layer: 2 }
-                    ));
-                }
             }
             cursor = Math.max(cursor, t1);
         });
         if (cursor < 1 - 1e-4) {
             var lastCut = cuts[cuts.length - 1];
+            var lastDoor = !!(lastCut && !lastCut.fillPanel);
             solidSpan(
                 cursor,
                 1,
                 baseY,
                 wallHeight,
                 wallColor,
-                lastCut && lastCut.fillPanel ? { noStroke: true } : null
+                Object.assign({
+                    skipStartCap: !lastDoor
+                }, { noStroke: true })
             );
         }
         return faces;
     }
 
-    function closedLoopFromWalls(walls) {
+    function closedLoopFromWalls(walls, joinEpsilon) {
         if (!walls || walls.length < 3) {
             return null;
         }
-        var epsilon = 1e-4;
+        var epsilon = joinEpsilon == null ? 1e-3 : joinEpsilon;
         var used = walls.map(function () { return false; });
         var points = [{ x: walls[0].x1, z: walls[0].z1 }, { x: walls[0].x2, z: walls[0].z2 }];
         used[0] = true;
@@ -1049,132 +1260,132 @@
         var wallHeight = model.wallHeight || DEFAULT_WALL_HEIGHT;
         var thickness = model.wallThickness || DEFAULT_WALL_THICKNESS;
         var wallColor = "#cfd6e0";
+        var baseY = 0;
+        syncModelOpenings(model);
+
+        // Floor plates only — never derived from walls.
         (model.floors || []).forEach(function (floor) {
-            // All floors share ground level (no stacked multi-storey offset).
-            var baseY = 0;
-            syncFloorOpenings(floor);
-            var walls = floor.walls || [];
-            var loop = closedLoopFromWalls(walls);
             var floorFace = makeFloorFace(floor.polygon, baseY, floor.color);
-            if (loop) {
-                floorFace = makeFloorFace(loop, baseY, floor.color) || floorFace;
-            }
             if (floorFace) {
                 faces.push(floorFace);
             }
-
-            // Doors = void + jambs; windows = cyan panels cut into the wall (no overlapping z-fight).
-            var openings = [];
-            (floor.doors || []).forEach(function (seg) {
-                openings.push({
-                    seg: seg,
-                    color: "#ffb74d",
-                    y0: baseY,
-                    y1: baseY + wallHeight * 0.92,
-                    fillPanel: false
-                });
-            });
-            (floor.windows || []).forEach(function (seg) {
-                var lift = wallHeight * 0.28;
-                var panelHeight = wallHeight * 0.5;
-                openings.push({
-                    seg: seg,
-                    color: "#4fc3f7",
-                    y0: baseY + lift,
-                    y1: baseY + lift + panelHeight,
-                    fillPanel: true
-                });
-            });
-
-            if (loop) {
-                faces = faces.concat(closedLoopWallFaces(
-                    loop, openings, baseY, wallHeight, thickness, wallColor
-                ));
-            } else {
-                walls.forEach(function (seg, index) {
-                    var join = {
-                        connectedStart: wallConnectedAt(walls, index, 1),
-                        connectedEnd: wallConnectedAt(walls, index, 2)
-                    };
-                    faces = faces.concat(wallFacesWithOpenings(
-                        seg, openings, baseY, wallHeight, thickness, join
-                    ));
-                });
-            }
         });
+
+        var walls = model.walls || [];
+        var openings = [];
+        (model.doors || []).forEach(function (seg) {
+            openings.push({
+                seg: seg,
+                color: wallColor,
+                y0: baseY,
+                y1: baseY + wallHeight * 0.92,
+                fillPanel: false
+            });
+        });
+        (model.windows || []).forEach(function (seg) {
+            var lift = wallHeight * 0.28;
+            var panelHeight = wallHeight * 0.5;
+            openings.push({
+                seg: seg,
+                color: "#4fc3f7",
+                y0: baseY + lift,
+                y1: baseY + lift + panelHeight,
+                fillPanel: true
+            });
+        });
+
+        var joinEps = Math.max(1e-3, thickness * 0.35);
+        var loop = closedLoopFromWalls(walls, joinEps);
+        if (loop) {
+            faces = faces.concat(closedLoopWallFaces(
+                loop, openings, baseY, wallHeight, thickness, wallColor
+            ));
+        } else {
+            var cornerKeys = {};
+            walls.forEach(function (seg, index) {
+                var join = {
+                    connectedStart: wallConnectedAt(walls, index, 1, joinEps),
+                    connectedEnd: wallConnectedAt(walls, index, 2, joinEps)
+                };
+                faces = faces.concat(wallFacesWithOpenings(
+                    seg, openings, baseY, wallHeight, thickness, join
+                ));
+                if (join.connectedStart) {
+                    cornerKeys[seg.x1.toFixed(5) + "," + seg.z1.toFixed(5)] = {
+                        x: seg.x1, z: seg.z1
+                    };
+                }
+                if (join.connectedEnd) {
+                    cornerKeys[seg.x2.toFixed(5) + "," + seg.z2.toFixed(5)] = {
+                        x: seg.x2, z: seg.z2
+                    };
+                }
+            });
+            Object.keys(cornerKeys).forEach(function (key) {
+                var corner = cornerKeys[key];
+                faces = faces.concat(cornerPostFaces(
+                    corner.x, corner.z, baseY, wallHeight, thickness, wallColor
+                ));
+            });
+        }
         return faces;
     }
 
-    function paintFaces(ctx, faces, yaw, pitch, distance, width, height, pixelsPerUnit, center, perspective) {
-        var light = normalize3({ x: 0.35, y: 0.9, z: 0.25 });
-        var shift = center || { x: 0, y: 0, z: 0 };
-        var usePerspective = perspective !== false;
-        var prepared = faces.map(function (face) {
-            var projected = face.points.map(function (point) {
-                return projectOrbit({
-                    x: point.x - shift.x,
-                    y: point.y - shift.y,
-                    z: point.z - shift.z
-                }, yaw, pitch, distance, width, height, pixelsPerUnit, usePerspective);
-            });
-            // Screen-space cull (canvas Y grows downward).
-            var facingScreen = 0;
-            if (projected.length >= 3) {
-                facingScreen = (projected[1].x - projected[0].x) * (projected[2].y - projected[0].y)
-                    - (projected[1].y - projected[0].y) * (projected[2].x - projected[0].x);
-            }
-            if (!face.forceDraw && facingScreen > 0) {
-                return null;
-            }
-            var normal = faceNormal(face.points);
-            var facing = Math.max(0.2, Math.abs(
-                normal.x * light.x + normal.y * light.y + normal.z * light.z
-            ));
-            var shade = 0.45 + 0.55 * facing;
-            return {
-                projected: projected,
-                depth: averageDepth(projected),
-                layer: face.layer == null ? 1 : face.layer,
-                fill: shadeRgba(face.color, shade, face.alpha == null ? 1 : face.alpha),
-                stroke: shadeRgba(face.color, shade * 0.7, 0.65),
-                noStroke: !!face.noStroke
-            };
-        }).filter(function (face) {
-            return !!face;
-        });
-        // Floors first, then walls, then openings — keeps walls opaque over the floor plate.
-        prepared.sort(function (left, right) {
-            if (left.layer !== right.layer) {
-                return left.layer - right.layer;
-            }
-            return right.depth - left.depth;
-        });
-        prepared.forEach(function (face) {
-            if (!face.projected.length) {
+    function hexToThreeColorInt(hex) {
+        var value = String(hex || "#ffffff").replace("#", "");
+        if (value.length === 3) {
+            value = value[0] + value[0] + value[1] + value[1] + value[2] + value[2];
+        }
+        if (value.length !== 6) {
+            return 0xffffff;
+        }
+        var parsed = parseInt(value, 16);
+        return isNaN(parsed) ? 0xffffff : parsed;
+    }
+
+    function faceToThreeGeometry(face, THREE) {
+        var pts = face && face.points;
+        if (!pts || pts.length < 3) {
+            return null;
+        }
+        var positions = [];
+        var index;
+        for (index = 1; index < pts.length - 1; index++) {
+            positions.push(pts[0].x, pts[0].y, pts[0].z);
+            positions.push(pts[index].x, pts[index].y, pts[index].z);
+            positions.push(pts[index + 1].x, pts[index + 1].y, pts[index + 1].z);
+        }
+        if (!positions.length) {
+            return null;
+        }
+        var geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+        geometry.computeVertexNormals();
+        return geometry;
+    }
+
+    function buildThreeSceneRoot(model, THREE) {
+        var root = new THREE.Group();
+        buildSceneFaces(model).forEach(function (face) {
+            var geometry = faceToThreeGeometry(face, THREE);
+            if (!geometry) {
                 return;
             }
-            ctx.beginPath();
-            face.projected.forEach(function (point, index) {
-                if (index === 0) {
-                    ctx.moveTo(point.x, point.y);
-                } else {
-                    ctx.lineTo(point.x, point.y);
-                }
+            var opacity = face.alpha == null ? 1 : face.alpha;
+            var material = new THREE.MeshLambertMaterial({
+                color: hexToThreeColorInt(face.color),
+                side: THREE.DoubleSide,
+                transparent: opacity < 0.999,
+                opacity: opacity
             });
-            ctx.closePath();
-            ctx.fillStyle = face.fill;
-            ctx.fill();
-            if (!face.noStroke) {
-                ctx.strokeStyle = face.stroke;
-                ctx.lineWidth = 1;
-                ctx.stroke();
-            }
+            root.add(new THREE.Mesh(geometry, material));
         });
+        return root;
     }
 
     function SceneDesigner(canvas) {
         this.canvas = canvas;
-        this.ctx = canvas.getContext("2d");
+        this.ctx = canvas.getContext("2d", { alpha: true });
         this.model = defaultModel();
         this.floorIndex = 0;
         this.tool = "wall";
@@ -1184,17 +1395,26 @@
         this.viewZoom = 1;
         this.perspective = true;
         this.editZoom = 1;
+        this.eyeX = null;
+        this.eyeY = null;
+        this.eyeZ = null;
+        this._flyMoved = false;
         this.dragOrbit = false;
         this.dragHandle = null;
         this.dragCornerFrom = null;
         this.dragCornerOrigin = null;
         this.dragShiftHeld = false;
+        this._keysDown = {};
+        this._flyRaf = 0;
+        this._flyLastTs = 0;
         this.lastDragClientX = 0;
         this.lastDragClientY = 0;
         this.lastX = 0;
         this.lastY = 0;
         this.onChange = null;
         this.selection = null;
+        this._three = null;
+        this._threeUnavailable = false;
         this.bindEvents();
         this.resize();
     }
@@ -1234,11 +1454,22 @@
                 self.applyHandleDragAtClient(self.lastDragClientX, self.lastDragClientY, true);
                 return;
             }
+            var active = document.activeElement;
+            var tag = active && active.tagName ? active.tagName.toLowerCase() : "";
+            var typing = tag === "input" || tag === "textarea" || tag === "select"
+                || (active && active.isContentEditable);
+            if (!typing && self.viewMode && self.canvas && self.canvas.offsetParent !== null) {
+                var flyKey = String(event.key || "").toLowerCase();
+                if (flyKey === "w" || flyKey === "a" || flyKey === "s" || flyKey === "d") {
+                    event.preventDefault();
+                    self._keysDown[flyKey] = true;
+                    self.ensureEyeFromOrbit();
+                    self.startFlyLoop();
+                    return;
+                }
+            }
             if (event.key === "Delete" || event.key === "Del") {
-                var active = document.activeElement;
-                var tag = active && active.tagName ? active.tagName.toLowerCase() : "";
-                if (tag === "input" || tag === "textarea" || tag === "select"
-                    || (active && active.isContentEditable)) {
+                if (typing) {
                     return;
                 }
                 if (self.canvas && self.canvas.offsetParent === null) {
@@ -1249,6 +1480,10 @@
             }
         };
         this._onWindowKeyUp = function (event) {
+            var flyKey = String(event.key || "").toLowerCase();
+            if (flyKey === "w" || flyKey === "a" || flyKey === "s" || flyKey === "d") {
+                self._keysDown[flyKey] = false;
+            }
             if (event.key !== "Shift" || !self.dragHandle) {
                 return;
             }
@@ -1262,8 +1497,14 @@
             event.preventDefault();
             var factor = Math.exp(-event.deltaY * 0.0012);
             if (self.viewMode) {
+                // Wheel always zooms the orbit around scene center (same as room scaling).
+                self._flyMoved = false;
                 self.viewZoom = Math.max(0.35, Math.min(3.5, self.viewZoom * factor));
                 self.model.viewZoom = self.viewZoom;
+                self.eyeX = null;
+                self.eyeY = null;
+                self.eyeZ = null;
+                self.ensureEyeFromOrbit();
                 if (typeof self.onChange === "function") {
                     self.onChange();
                 }
@@ -1323,7 +1564,292 @@
         this._onWindowKeyUp = null;
         this.dragOrbit = false;
         this.dragHandle = null;
+        this._keysDown = {};
+        this.stopFlyLoop();
         this.onChange = null;
+        this.disposeThree();
+    };
+
+    SceneDesigner.prototype.hasEye = function () {
+        return isFinite(this.eyeX) && isFinite(this.eyeY) && isFinite(this.eyeZ);
+    };
+
+    SceneDesigner.prototype.persistEyeToModel = function () {
+        if (!this.hasEye()) {
+            return;
+        }
+        this.model.eyeX = this.eyeX;
+        this.model.eyeY = this.eyeY;
+        this.model.eyeZ = this.eyeZ;
+        this.model.yaw = this.yaw;
+        this.model.pitch = this.pitch;
+        this.model.perspective = true;
+    };
+
+    SceneDesigner.prototype.ensureEyeFromOrbit = function () {
+        if (this.hasEye()) {
+            return;
+        }
+        var seeded = orbitEyeFromAngles(this.model, this.yaw, this.pitch, this.viewZoom);
+        this.eyeX = seeded.x;
+        this.eyeY = seeded.y;
+        this.eyeZ = seeded.z;
+        this.persistEyeToModel();
+    };
+
+    SceneDesigner.prototype.startFlyLoop = function () {
+        if (this._flyRaf) {
+            return;
+        }
+        var self = this;
+        this._flyLastTs = 0;
+        function tick(ts) {
+            self._flyRaf = 0;
+            if (!self.viewMode) {
+                self._flyLastTs = 0;
+                return;
+            }
+            var moving = self._keysDown.w || self._keysDown.a || self._keysDown.s || self._keysDown.d;
+            if (!moving) {
+                self._flyLastTs = 0;
+                return;
+            }
+            var last = self._flyLastTs || ts;
+            var dt = Math.min(0.05, Math.max(0, (ts - last) / 1000));
+            self._flyLastTs = ts;
+            self.ensureEyeFromOrbit();
+            var forward = lookForwardFromAngles(self.yaw, self.pitch);
+            var flatLen = Math.sqrt(forward.x * forward.x + forward.z * forward.z);
+            var fx = flatLen > 1e-6 ? forward.x / flatLen : 0;
+            var fz = flatLen > 1e-6 ? forward.z / flatLen : 0;
+            var rightX = fz;
+            var rightZ = -fx;
+            var speed = 0.55 * Math.max(0.35, self.viewZoom || 1);
+            var step = speed * dt;
+            // W = up, S = down; A/D = ground strafe; mouse wheel = zoom.
+            if (self._keysDown.w) {
+                self.eyeY += step;
+                self._flyMoved = true;
+            }
+            if (self._keysDown.s) {
+                self.eyeY -= step;
+                self._flyMoved = true;
+            }
+            if (self._keysDown.a) {
+                self.eyeX -= rightX * step;
+                self.eyeZ -= rightZ * step;
+                self._flyMoved = true;
+            }
+            if (self._keysDown.d) {
+                self.eyeX += rightX * step;
+                self.eyeZ += rightZ * step;
+                self._flyMoved = true;
+            }
+            self.persistEyeToModel();
+            if (typeof self.onChange === "function") {
+                self.onChange();
+            }
+            self.draw();
+            self._flyRaf = window.requestAnimationFrame(tick);
+        }
+        this._flyRaf = window.requestAnimationFrame(tick);
+    };
+
+    SceneDesigner.prototype.stopFlyLoop = function () {
+        if (this._flyRaf) {
+            window.cancelAnimationFrame(this._flyRaf);
+            this._flyRaf = 0;
+        }
+        this._flyLastTs = 0;
+    };
+
+    SceneDesigner.prototype.disposeThree = function () {
+        var three = this._three;
+        if (!three) {
+            return;
+        }
+        if (three.root) {
+            three.scene.remove(three.root);
+            three.root.traverse(function (obj) {
+                if (obj.geometry) {
+                    obj.geometry.dispose();
+                }
+                if (obj.material) {
+                    if (Array.isArray(obj.material)) {
+                        obj.material.forEach(function (mat) { mat.dispose(); });
+                    } else {
+                        obj.material.dispose();
+                    }
+                }
+            });
+            three.root = null;
+        }
+        if (three.renderer) {
+            three.renderer.dispose();
+        }
+        if (three.glCanvas && three.glCanvas.parentNode) {
+            three.glCanvas.parentNode.removeChild(three.glCanvas);
+        }
+        this._three = null;
+    };
+
+    SceneDesigner.prototype.ensureThree = function () {
+        var THREE = global.THREE;
+        if (!THREE) {
+            return null;
+        }
+        if (this._three) {
+            return this._three;
+        }
+        if (this._threeUnavailable) {
+            return null;
+        }
+        var wrap = this.canvas.parentElement;
+        if (!wrap) {
+            return null;
+        }
+        var attempts = [
+            {
+                antialias: true,
+                alpha: false,
+                preserveDrawingBuffer: true,
+                powerPreference: "default",
+                failIfMajorPerformanceCaveat: false
+            },
+            {
+                antialias: false,
+                alpha: false,
+                preserveDrawingBuffer: true,
+                powerPreference: "low-power",
+                failIfMajorPerformanceCaveat: false
+            }
+        ];
+        var renderer = null;
+        var glCanvas = null;
+        var attemptIndex;
+        for (attemptIndex = 0; attemptIndex < attempts.length; attemptIndex++) {
+            glCanvas = document.createElement("canvas");
+            glCanvas.className = "scene-designer-gl-canvas";
+            wrap.insertBefore(glCanvas, this.canvas);
+            try {
+                renderer = new THREE.WebGLRenderer({
+                    canvas: glCanvas,
+                    antialias: attempts[attemptIndex].antialias,
+                    alpha: attempts[attemptIndex].alpha,
+                    preserveDrawingBuffer: attempts[attemptIndex].preserveDrawingBuffer,
+                    powerPreference: attempts[attemptIndex].powerPreference,
+                    failIfMajorPerformanceCaveat: attempts[attemptIndex].failIfMajorPerformanceCaveat
+                });
+                break;
+            } catch (error) {
+                renderer = null;
+                if (glCanvas.parentNode) {
+                    glCanvas.parentNode.removeChild(glCanvas);
+                }
+                glCanvas = null;
+            }
+        }
+        if (!renderer || !glCanvas) {
+            // Stop retry storms on pointer-move (leaked contexts disable GPU).
+            this._threeUnavailable = true;
+            return null;
+        }
+        renderer.setClearColor(0x10131a, 1);
+        renderer.setPixelRatio(Math.min(2, global.devicePixelRatio || 1));
+        var scene = new THREE.Scene();
+        // Bright ambient so walls/floors read clearly; soft key light for mild form.
+        var ambient = new THREE.AmbientLight(0xffffff, 0.95);
+        scene.add(ambient);
+        var key = new THREE.DirectionalLight(0xffffff, 0.28);
+        key.position.set(0.45, 1.1, 0.35);
+        scene.add(key);
+        this._three = {
+            THREE: THREE,
+            renderer: renderer,
+            scene: scene,
+            ambient: ambient,
+            key: key,
+            glCanvas: glCanvas,
+            root: null,
+            camera: null,
+            perspCamera: null,
+            orthoCamera: null
+        };
+        return this._three;
+    };
+
+    SceneDesigner.prototype.rebuildThreeRoot = function () {
+        var three = this.ensureThree();
+        if (!three) {
+            return;
+        }
+        if (three.root) {
+            three.scene.remove(three.root);
+            three.root.traverse(function (obj) {
+                if (obj.geometry) {
+                    obj.geometry.dispose();
+                }
+                if (obj.material) {
+                    if (Array.isArray(obj.material)) {
+                        obj.material.forEach(function (mat) { mat.dispose(); });
+                    } else {
+                        obj.material.dispose();
+                    }
+                }
+            });
+        }
+        three.root = buildThreeSceneRoot(this.model, three.THREE);
+        three.scene.add(three.root);
+    };
+
+    SceneDesigner.prototype.syncThreeCamera = function (width, height) {
+        var three = this.ensureThree();
+        if (!three) {
+            return;
+        }
+        var THREE = three.THREE;
+        var aspect = width / Math.max(1, height);
+        if (!three.perspCamera) {
+            three.perspCamera = new THREE.PerspectiveCamera(42, aspect, 0.05, 500);
+        }
+        three.perspCamera.aspect = aspect;
+        three.perspCamera.updateProjectionMatrix();
+        three.camera = three.perspCamera;
+        this.perspective = true;
+        this.model.perspective = true;
+        var orbit = orbitEyeFromAngles(this.model, this.yaw, this.pitch, this.viewZoom);
+        if (!this._flyMoved) {
+            this.eyeX = orbit.x;
+            this.eyeY = orbit.y;
+            this.eyeZ = orbit.z;
+            this.persistEyeToModel();
+            three.camera.position.set(orbit.x, orbit.y, orbit.z);
+            three.camera.lookAt(orbit.targetX, orbit.targetY, orbit.targetZ);
+        } else {
+            this.ensureEyeFromOrbit();
+            var forward = lookForwardFromAngles(this.yaw, this.pitch);
+            three.camera.position.set(this.eyeX, this.eyeY, this.eyeZ);
+            three.camera.lookAt(
+                this.eyeX + forward.x,
+                this.eyeY + forward.y,
+                this.eyeZ + forward.z
+            );
+        }
+        three.camera.updateMatrixWorld();
+    };
+
+    SceneDesigner.prototype.renderThree = function (width, height) {
+        var three = this.ensureThree();
+        if (!three) {
+            return false;
+        }
+        if (!three.root) {
+            this.rebuildThreeRoot();
+        }
+        three.renderer.setSize(width, height, false);
+        this.syncThreeCamera(width, height);
+        three.renderer.render(three.scene, three.camera);
+        return true;
     };
 
     SceneDesigner.prototype.resize = function () {
@@ -1332,24 +1858,22 @@
         var height = parent ? Math.max(320, parent.clientHeight || 420) : 420;
         this.canvas.width = Math.max(320, width);
         this.canvas.height = height;
+        if (this._three && this._three.glCanvas) {
+            this._three.glCanvas.width = this.canvas.width;
+            this._three.glCanvas.height = this.canvas.height;
+        }
         this.draw();
     };
 
     SceneDesigner.prototype.setModel = function (model) {
         this.model = model && model.floors ? cloneJson(model) : defaultModel();
-        if (!this.model.floors.length) {
-            this.model.floors = defaultModel().floors;
-        }
         if (!(this.model.wallThickness > 0)) {
             this.model.wallThickness = DEFAULT_WALL_THICKNESS;
         }
         if (!(this.model.wallHeight > 0)) {
             this.model.wallHeight = DEFAULT_WALL_HEIGHT;
         }
-        var sceneSize = this.model.sceneSize || 1;
-        this.model.floors = this.model.floors.map(function (floor) {
-            return normalizeFloor(floor, sceneSize);
-        });
+        normalizeSceneModel(this.model);
         var zoom = Number(this.model.viewZoom);
         this.viewZoom = (isFinite(zoom) && zoom > 0)
             ? Math.max(0.35, Math.min(3.5, zoom))
@@ -1363,8 +1887,26 @@
             ? Math.max(0.28, Math.min(1.25, pitch))
             : 0.62;
         this.model.pitch = this.pitch;
-        this.perspective = this.model.perspective !== false;
-        this.model.perspective = this.perspective;
+        this.perspective = true;
+        this.model.perspective = true;
+        var eyeX = Number(this.model.eyeX);
+        var eyeY = Number(this.model.eyeY);
+        var eyeZ = Number(this.model.eyeZ);
+        if (isFinite(eyeX) && isFinite(eyeY) && isFinite(eyeZ)) {
+            this.eyeX = eyeX;
+            this.eyeY = eyeY;
+            this.eyeZ = eyeZ;
+            this._flyMoved = true;
+            this.persistEyeToModel();
+        } else {
+            this.eyeX = null;
+            this.eyeY = null;
+            this.eyeZ = null;
+            this._flyMoved = false;
+            this.model.eyeX = null;
+            this.model.eyeY = null;
+            this.model.eyeZ = null;
+        }
         this.editZoom = 1;
         this.floorIndex = 0;
         this.selection = null;
@@ -1379,22 +1921,23 @@
         this.model.viewZoom = this.viewZoom;
         this.model.yaw = this.yaw;
         this.model.pitch = this.pitch;
-        this.model.perspective = this.perspective !== false;
+        this.model.perspective = true;
+        // Always materialize a concrete eye so bake + JSON share the same camera pose.
+        this.ensureEyeFromOrbit();
+        this.persistEyeToModel();
         return cloneJson(this.model);
     };
 
-    SceneDesigner.prototype.setPerspective = function (enabled) {
-        this.perspective = !!enabled;
-        this.model.perspective = this.perspective;
-        if (typeof this.onChange === "function") {
-            this.onChange();
-        }
+    SceneDesigner.prototype.setPerspective = function () {
+        // Orthographic / isometric projection removed — View scene is perspective only.
+        this.perspective = true;
+        this.model.perspective = true;
         this.draw();
         return this.perspective;
     };
 
     SceneDesigner.prototype.togglePerspective = function () {
-        return this.setPerspective(!this.perspective);
+        return this.setPerspective(true);
     };
 
     SceneDesigner.prototype.setTool = function (tool) {
@@ -1420,16 +1963,18 @@
     SceneDesigner.prototype.addWall = function () {
         var size = this.model.sceneSize || 1;
         var length = size / 7;
-        var floor = this.currentFloor();
-        var offset = ((floor.walls || []).length % 6) * (length * 0.2);
+        if (!Array.isArray(this.model.walls)) {
+            this.model.walls = [];
+        }
+        var offset = (this.model.walls.length % 6) * (length * 0.2);
         var midZ = offset - length * 0.4;
-        floor.walls.push({
+        this.model.walls.push({
             x1: -length * 0.5 + offset * 0.25,
             z1: midZ,
             x2: length * 0.5 + offset * 0.25,
             z2: midZ
         });
-        this.selection = { list: "walls", index: floor.walls.length - 1 };
+        this.selection = { list: "walls", index: this.model.walls.length - 1 };
         this.notify();
         this.draw();
     };
@@ -1437,7 +1982,33 @@
     SceneDesigner.prototype.setViewMode = function (enabled) {
         this.viewMode = !!enabled;
         this.dragHandle = null;
-        this.draw();
+        this._keysDown = {};
+        this.stopFlyLoop();
+        var wrap = this.canvas && this.canvas.parentElement;
+        if (wrap) {
+            wrap.classList.toggle("is-view-mode", this.viewMode);
+        }
+        if (!this.viewMode) {
+            // Free GPU while editing the plan.
+            this.disposeThree();
+            this.draw();
+            return;
+        }
+        // Entering View always frames the scene center (mouse drag orbits that center).
+        this._flyMoved = false;
+        this.eyeX = null;
+        this.eyeY = null;
+        this.eyeZ = null;
+        this.ensureEyeFromOrbit();
+        var self = this;
+        loadThreeJs().then(function () {
+            if (!self.viewMode) {
+                return;
+            }
+            self.draw();
+        }).catch(function () {
+            self.draw();
+        });
     };
 
     SceneDesigner.prototype.toggleViewMode = function () {
@@ -1451,14 +2022,11 @@
             y: 0,
             height: 0.3,
             color: (last && last.color) ? last.color : DEFAULT_FLOOR_COLOR,
-            polygon: defaultPolygon(this.model.sceneSize || 1),
-            walls: [],
-            windows: [],
-            doors: []
+            polygon: defaultPolygon(this.model.sceneSize || 1)
         };
         this.model.floors.push(floor);
         this.floorIndex = this.model.floors.length - 1;
-        this.selection = { list: "polygon", index: 0 };
+        this.selection = { list: "floor", floorIndex: this.floorIndex };
         this.notify();
         this.draw();
     };
@@ -1516,6 +2084,10 @@
             next = 1.5;
         }
         this.model.wallHeight = next;
+        // View mode keeps a cached Three.js mesh — rebuild so height updates immediately.
+        if (this.viewMode && this._three) {
+            this.rebuildThreeRoot();
+        }
         this.notify();
         this.draw();
     };
@@ -1524,8 +2096,7 @@
         if (!this.selection || this.selection.list !== "walls") {
             return false;
         }
-        var floor = this.currentFloor();
-        var wall = floor.walls[this.selection.index];
+        var wall = (this.model.walls || [])[this.selection.index];
         if (!wall) {
             return false;
         }
@@ -1563,13 +2134,17 @@
             z2: midZ + uz * half
         };
         var listName = kind === "door" ? "doors" : "windows";
-        floor[listName].push(seg);
-        this.selection = { list: listName, index: floor[listName].length - 1 };
+        if (!Array.isArray(this.model[listName])) {
+            this.model[listName] = [];
+        }
+        this.model[listName].push(seg);
+        this.selection = { list: listName, index: this.model[listName].length - 1 };
         this.notify();
         return true;
     };
 
     SceneDesigner.prototype.removeCurrentFloor = function () {
+        // Remove floor plate only — walls/windows/doors stay on the scene model.
         if (this.model.floors.length > 1) {
             this.model.floors.splice(this.floorIndex, 1);
             if (this.floorIndex >= this.model.floors.length) {
@@ -1581,10 +2156,7 @@
                 y: 0,
                 height: 0.3,
                 color: color,
-                polygon: defaultPolygon(this.model.sceneSize || 1),
-                walls: [],
-                windows: [],
-                doors: []
+                polygon: defaultPolygon(this.model.sceneSize || 1)
             };
             this.floorIndex = 0;
         }
@@ -1608,9 +2180,16 @@
             if (!floorPolygon || !floorPolygon.polygon) {
                 return false;
             }
-            // Floor plate is independent of walls — clearing it keeps walls/windows/doors.
+            // Floor plate only — never delete walls/windows/doors with the floor.
             if (this.selection.list === "floor" || floorPolygon.polygon.length <= 3) {
-                floorPolygon.polygon = [];
+                if (this.model.floors.length > 1) {
+                    this.model.floors.splice(this.floorIndex, 1);
+                    if (this.floorIndex >= this.model.floors.length) {
+                        this.floorIndex = this.model.floors.length - 1;
+                    }
+                } else {
+                    floorPolygon.polygon = [];
+                }
                 this.selection = null;
                 this.notify();
                 this.draw();
@@ -1626,10 +2205,10 @@
             }
             return false;
         }
-        var floor = this.currentFloor();
-        var list = floor[this.selection.list];
+        var list = this.model[this.selection.list];
         if (list && this.selection.index >= 0 && this.selection.index < list.length) {
             list.splice(this.selection.index, 1);
+            syncModelOpenings(this.model);
             this.selection = null;
             this.notify();
             this.draw();
@@ -1689,8 +2268,7 @@
         var threshold = this.handleHitSize();
         var best = null;
         var bestDist = threshold;
-        var activeFloor = this.currentFloor();
-        var activeIndex = this.floorIndex;
+        var self = this;
         var tieEps = threshold * 0.15;
 
         function consider(candidate, dist, preferFloor) {
@@ -1730,9 +2308,9 @@
                 }, Math.sqrt(dx * dx + dz * dz), true);
             });
         });
-        // Active-floor wall/window/door endpoints — separate from floor corners.
+        // All scene walls/openings — never gated by the selected floor plate.
         ["walls", "windows", "doors"].forEach(function (listName) {
-            var list = activeFloor[listName] || [];
+            var list = self.model[listName] || [];
             list.forEach(function (seg, index) {
                 [
                     { end: 1, x: seg.x1, z: seg.z1 },
@@ -1743,8 +2321,7 @@
                     consider({
                         list: listName,
                         index: index,
-                        end: handle.end,
-                        floorIndex: activeIndex
+                        end: handle.end
                     }, Math.sqrt(dx * dx + dz * dz), false);
                 });
             });
@@ -1753,12 +2330,12 @@
     };
 
     SceneDesigner.prototype.snapJoin = function (point, ignoreHandle) {
-        var floor = this.currentFloor();
         var threshold = (this.model.sceneSize || 1) * 0.03;
         var best = null;
         var bestDist = threshold;
+        var self = this;
         ["walls", "windows", "doors"].forEach(function (listName) {
-            var list = floor[listName] || [];
+            var list = self.model[listName] || [];
             list.forEach(function (seg, index) {
                 [
                     { end: 1, x: seg.x1, z: seg.z1 },
@@ -1784,53 +2361,45 @@
     };
 
     SceneDesigner.prototype.selectNear = function (point) {
-        var floor = this.currentFloor();
         var threshold = (this.model.sceneSize || 1) * 0.025;
         var best = null;
         var bestDist = threshold;
-        var tieEps = threshold * 0.15;
+        var self = this;
 
-        function consider(candidate, dist, preferFloor) {
-            if (dist > bestDist + tieEps) {
-                return;
-            }
-            if (dist < bestDist - tieEps) {
-                bestDist = dist;
-                best = candidate;
-                return;
-            }
-            if (preferFloor && best && best.list !== "polygon" && best.list !== "floor") {
-                bestDist = dist;
-                best = candidate;
-                return;
-            }
-            if (!preferFloor && best && (best.list === "polygon" || best.list === "floor")) {
-                return;
-            }
-            if (dist < bestDist) {
-                bestDist = dist;
-                best = candidate;
-            }
-        }
-
-        var polygon = floor.polygon || [];
-        var index;
-        for (index = 0; index < polygon.length; index++) {
-            var a = polygon[index];
-            var b = polygon[(index + 1) % polygon.length];
-            consider({ list: "polygon", index: index }, distPointToSeg(point.x, point.z, {
-                x1: a.x, z1: a.z, x2: b.x, z2: b.z
-            }), true);
-        }
+        // Walls/openings first — independent of which floor plate is focused.
         ["walls", "windows", "doors"].forEach(function (listName) {
-            var list = floor[listName] || [];
-            list.forEach(function (seg, index) {
-                consider({ list: listName, index: index },
-                    distPointToSeg(point.x, point.z, seg), false);
+            (self.model[listName] || []).forEach(function (seg, index) {
+                var dist = distPointToSeg(point.x, point.z, seg);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    best = { list: listName, index: index };
+                }
             });
         });
         if (best) {
-            best.floorIndex = this.floorIndex;
+            this.selection = best;
+            this.draw();
+            return best;
+        }
+
+        // Then floor polygon edges (not fill — fill is handled in onPointerDown).
+        (this.model.floors || []).forEach(function (floor, floorIndex) {
+            var polygon = floor.polygon || [];
+            var index;
+            for (index = 0; index < polygon.length; index++) {
+                var a = polygon[index];
+                var b = polygon[(index + 1) % polygon.length];
+                var dist = distPointToSeg(point.x, point.z, {
+                    x1: a.x, z1: a.z, x2: b.x, z2: b.z
+                });
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    best = { list: "polygon", index: index, floorIndex: floorIndex };
+                }
+            }
+        });
+        if (best && typeof best.floorIndex === "number") {
+            this.floorIndex = best.floorIndex;
         }
         this.selection = best;
         this.draw();
@@ -1838,12 +2407,11 @@
     };
 
     SceneDesigner.prototype.insertVertexOnWall = function (point) {
-        var floor = this.currentFloor();
         var threshold = (this.model.sceneSize || 1) * 0.03;
         var bestIndex = -1;
         var bestDist = threshold;
         var bestProj = null;
-        (floor.walls || []).forEach(function (seg, index) {
+        (this.model.walls || []).forEach(function (seg, index) {
             var dist = distPointToSeg(point.x, point.z, seg);
             if (dist < bestDist) {
                 bestDist = dist;
@@ -1854,20 +2422,21 @@
         if (bestIndex < 0 || !bestProj || bestProj.t <= 0.05 || bestProj.t >= 0.95) {
             return false;
         }
-        var wall = floor.walls[bestIndex];
+        var wall = this.model.walls[bestIndex];
         var second = { x1: bestProj.x, z1: bestProj.z, x2: wall.x2, z2: wall.z2 };
         wall.x2 = bestProj.x;
         wall.z2 = bestProj.z;
-        floor.walls.splice(bestIndex + 1, 0, second);
+        this.model.walls.splice(bestIndex + 1, 0, second);
         // Wall indices after the split shift — rebind openings by proximity.
+        var self = this;
         ["windows", "doors"].forEach(function (listName) {
-            (floor[listName] || []).forEach(function (opening) {
+            (self.model[listName] || []).forEach(function (opening) {
                 delete opening.wallIndex;
                 delete opening.t0;
                 delete opening.t1;
             });
         });
-        syncFloorOpenings(floor);
+        syncModelOpenings(this.model);
         this.selection = { list: "walls", index: bestIndex + 1 };
         this.notify();
         this.draw();
@@ -1937,12 +2506,12 @@
                 index: handle.index,
                 floorIndex: handle.floorIndex
             };
-            var floor = this.floorForHandle(handle);
             var corner;
             if (handle.list === "polygon") {
-                corner = floor.polygon[handle.index];
+                var polyFloor = this.floorForHandle(handle);
+                corner = polyFloor.polygon[handle.index];
             } else {
-                var handleSeg = floor[handle.list][handle.index];
+                var handleSeg = (this.model[handle.list] || [])[handle.index];
                 corner = handle.end === 1
                     ? { x: handleSeg.x1, z: handleSeg.z1 }
                     : { x: handleSeg.x2, z: handleSeg.z2 };
@@ -1955,16 +2524,17 @@
             this.draw();
             return;
         }
-        // Floor plate click selects the floor only — never a coincident wall.
+        // Prefer wall/opening segments over floor fill so floors never "own" walls.
+        if (this.selectNear(point)) {
+            return;
+        }
+        // Floor plate click selects the floor only — does not affect wall editability.
         var floorHit = this.findFloorIndexAt(point);
         if (floorHit >= 0) {
             this.floorIndex = floorHit;
             this.selection = { list: "floor", floorIndex: floorHit };
             this.draw();
-            return;
         }
-        // Empty canvas never creates geometry — only toolbar tools add objects.
-        this.selectNear(point);
     };
 
     SceneDesigner.prototype.applyHandleDragAtClient = function (clientX, clientY, shiftHeld) {
@@ -1977,6 +2547,7 @@
         }
         var raw = this.worldFromClient(clientX, clientY);
         var locked = resolveShiftDragPoint(
+            this.model,
             floor,
             this.dragHandle,
             this.dragCornerOrigin,
@@ -1996,19 +2567,20 @@
             this.draw();
             return;
         }
-        var list = floor[this.dragHandle.list];
+        var list = this.model[this.dragHandle.list];
         if (!list || !list[this.dragHandle.index]) {
             return;
         }
         if (this.dragHandle.list === "walls") {
             // Move only this wall's shared wall-corner group — never the floor polygon.
             moveSharedWallCorner(
-                floor,
+                this.model.walls,
                 this.dragCornerFrom.x,
                 this.dragCornerFrom.z,
                 point.x,
                 point.z
             );
+            syncModelOpenings(this.model);
             this.dragCornerFrom = { x: point.x, z: point.z };
             this.draw();
             return;
@@ -2022,18 +2594,19 @@
             seg.z2 = point.z;
         }
         if (this.dragHandle.list === "windows" || this.dragHandle.list === "doors") {
+            var walls = this.model.walls || [];
             var hostWall = (typeof seg.wallIndex === "number")
-                ? floor.walls[seg.wallIndex]
+                ? walls[seg.wallIndex]
                 : null;
             if (hostWall) {
                 var p1 = projectOnSeg(seg.x1, seg.z1, hostWall);
                 var p2 = projectOnSeg(seg.x2, seg.z2, hostWall);
                 seg.t0 = Math.min(p1.t, p2.t);
                 seg.t1 = Math.max(p1.t, p2.t);
-                syncOpeningGeometry(seg, floor.walls);
+                syncOpeningGeometry(seg, walls);
             } else {
-                bindOpeningToNearestWall(seg, floor.walls || []);
-                syncOpeningGeometry(seg, floor.walls || []);
+                bindOpeningToNearestWall(seg, walls);
+                syncOpeningGeometry(seg, walls);
             }
         }
         this.dragCornerFrom = { x: point.x, z: point.z };
@@ -2051,6 +2624,7 @@
                 ? this.worldFromClient(event.clientX, event.clientY)
                 : { x: this.dragCornerFrom.x, z: this.dragCornerFrom.z };
             var locked = resolveShiftDragPoint(
+                this.model,
                 floor,
                 this.dragHandle,
                 this.dragCornerOrigin,
@@ -2066,24 +2640,26 @@
                 }
             } else if (shiftHeld && this.dragHandle.list === "walls") {
                 moveSharedWallCorner(
-                    floor,
+                    this.model.walls,
                     this.dragCornerFrom.x,
                     this.dragCornerFrom.z,
                     locked.x,
                     locked.z
                 );
+                syncModelOpenings(this.model);
             } else {
                 var snapped = this.snapJoin(locked, this.dragHandle);
                 if (this.dragHandle.list === "walls") {
                     moveSharedWallCorner(
-                        floor,
+                        this.model.walls,
                         this.dragCornerFrom.x,
                         this.dragCornerFrom.z,
                         snapped.x,
                         snapped.z
                     );
+                    syncModelOpenings(this.model);
                 } else {
-                    var list = floor[this.dragHandle.list];
+                    var list = this.model[this.dragHandle.list];
                     var seg = list && list[this.dragHandle.index];
                     if (seg) {
                         if (this.dragHandle.end === 1) {
@@ -2094,8 +2670,8 @@
                             seg.z2 = snapped.z;
                         }
                         if (this.dragHandle.list === "windows" || this.dragHandle.list === "doors") {
-                            bindOpeningToNearestWall(seg, floor.walls || []);
-                            syncOpeningGeometry(seg, floor.walls || []);
+                            bindOpeningToNearestWall(seg, this.model.walls || []);
+                            syncOpeningGeometry(seg, this.model.walls || []);
                         }
                     }
                 }
@@ -2119,6 +2695,12 @@
             this.pitch = Math.max(0.28, Math.min(1.25, this.pitch + dy * 0.01));
             this.model.yaw = this.yaw;
             this.model.pitch = this.pitch;
+            // Always orbit the scene center so drag feels like the room rotating.
+            this._flyMoved = false;
+            this.eyeX = null;
+            this.eyeY = null;
+            this.eyeZ = null;
+            this.ensureEyeFromOrbit();
             if (typeof this.onChange === "function") {
                 this.onChange();
             }
@@ -2202,24 +2784,22 @@
         this.model.floors.forEach(function (floor, index) {
             drawFloorPlate(floor, index, index === self.floorIndex);
         });
-        function drawSegs(list, listName, color, widthPx, activeFloor) {
+        function drawSegs(list, listName, color, widthPx) {
             (list || []).forEach(function (seg, index) {
-                // Walls/openings highlight only when THAT entity is selected — never with floor.
-                var selected = activeFloor
-                    && self.selection
+                // Highlight only the selected wall/opening — never the focused floor plate.
+                var selected = self.selection
                     && self.selection.list === listName
                     && self.selection.index === index;
                 var a = toPx({ x: seg.x1, z: seg.z1 });
                 var b = toPx({ x: seg.x2, z: seg.z2 });
                 ctx.strokeStyle = selected ? "#ce93d8" : color;
                 ctx.lineWidth = selected ? widthPx + 2 : widthPx;
-                ctx.globalAlpha = activeFloor ? 1 : 0.45;
+                ctx.globalAlpha = 1;
                 ctx.lineCap = "butt";
                 ctx.beginPath();
                 ctx.moveTo(a.x, a.y);
                 ctx.lineTo(b.x, b.y);
                 ctx.stroke();
-                ctx.globalAlpha = 1;
             });
         }
         function drawHandles(list, listName, color) {
@@ -2265,23 +2845,17 @@
                 ctx.stroke();
             });
         }
-        // Draw every floor's walls on the scheme; only the active floor is editable/highlighted.
-        this.model.floors.forEach(function (floor, index) {
-            syncFloorOpenings(floor);
-            var active = index === self.floorIndex;
-            var wallColor = active ? "#d7dee8" : "#7a8494";
-            drawSegs(floor.walls, "walls", wallColor, thicknessPx, active);
-            drawSegs(floor.windows, "windows", active ? "#4fc3f7" : "#2f6f86", Math.max(2, thicknessPx * 0.55), active);
-            drawSegs(floor.doors, "doors", active ? "#ffb74d" : "#8a6430", Math.max(2, thicknessPx * 0.55), active);
-        });
-        // Polygon handles for all floors (inactive plates were undraggable / undeletable).
+        syncModelOpenings(this.model);
+        // Scene-level walls — always fully drawn/selectable, independent of floor focus.
+        drawSegs(this.model.walls, "walls", "#d7dee8", thicknessPx);
+        drawSegs(this.model.windows, "windows", "#4fc3f7", Math.max(2, thicknessPx * 0.55));
+        drawSegs(this.model.doors, "doors", "#ffb74d", Math.max(2, thicknessPx * 0.55));
         this.model.floors.forEach(function (floor, index) {
             drawPolygonHandles(floor.polygon, index, index === self.floorIndex);
         });
-        var floor = this.currentFloor();
-        drawHandles(floor.walls, "walls", "#eceff1");
-        drawHandles(floor.windows, "windows", "#4fc3f7");
-        drawHandles(floor.doors, "doors", "#ffb74d");
+        drawHandles(this.model.walls, "walls", "#eceff1");
+        drawHandles(this.model.windows, "windows", "#4fc3f7");
+        drawHandles(this.model.doors, "doors", "#ffb74d");
         ctx.fillStyle = "#9aa4b5";
         ctx.font = "12px sans-serif";
         ctx.fillText(
@@ -2298,35 +2872,25 @@
         var ctx = this.ctx;
         var width = this.canvas.width;
         var height = this.canvas.height;
+        this.model.perspective = true;
+        this.ensureEyeFromOrbit();
+        if (this.renderThree(width, height)) {
+            // Clear the 2D overlay so the Three.js canvas underneath is visible.
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = "#9aa4b5";
+            ctx.font = "12px sans-serif";
+            ctx.fillText(
+                "View scene · drag orbit · W up · S down · A/D strafe · wheel zoom",
+                10,
+                18
+            );
+            return;
+        }
         ctx.fillStyle = "#10131a";
         ctx.fillRect(0, 0, width, height);
-        var gradient = ctx.createLinearGradient(0, height * 0.45, 0, height);
-        gradient.addColorStop(0, "rgba(30,36,48,0)");
-        gradient.addColorStop(1, "rgba(20,24,34,0.9)");
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, width, height);
-        this.model.perspective = this.perspective !== false;
-        var camera = viewProjectionParams(this.model, width, height, this.yaw, this.pitch);
-        paintFaces(
-            ctx,
-            buildSceneFaces(this.model),
-            this.yaw,
-            this.pitch,
-            camera.distance,
-            width,
-            height,
-            camera.pixelsPerUnit * (this.viewZoom || 1),
-            { x: camera.centerX, y: camera.centerY, z: camera.centerZ },
-            camera.perspective
-        );
         ctx.fillStyle = "#9aa4b5";
         ctx.font = "12px sans-serif";
-        ctx.fillText(
-            "View scene · drag to orbit · wheel zoom"
-                + (this.perspective !== false ? " · perspective" : " · orthographic"),
-            10,
-            18
-        );
+        ctx.fillText("View scene · three.js unavailable", 10, 18);
     };
 
     SceneDesigner.prototype.draw = function () {
@@ -2373,42 +2937,7 @@
         return { minX: minX, maxX: maxX, minY: minY, maxY: maxY };
     }
 
-    SceneDesigner.prototype.bakeJpegBlob = function (quality) {
-        // Same aspect as the live View canvas so framing matches what the operator sees.
-        var srcW = Math.max(1, this.canvas.width || 640);
-        var srcH = Math.max(1, this.canvas.height || 420);
-        var scale = Math.max(1, Math.min(4, 1920 / Math.max(srcW, srcH)));
-        var width = Math.max(1, Math.round(srcW * scale));
-        var height = Math.max(1, Math.round(srcH * scale));
-        var off = document.createElement("canvas");
-        off.width = width;
-        off.height = height;
-        var ctx = off.getContext("2d");
-        ctx.fillStyle = "#10131a";
-        ctx.fillRect(0, 0, width, height);
-        var gradient = ctx.createLinearGradient(0, height * 0.4, 0, height);
-        gradient.addColorStop(0, "rgba(30,36,48,0)");
-        gradient.addColorStop(1, "rgba(18,22,30,0.95)");
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, width, height);
-        // Match the live View scene camera exactly (yaw / pitch / zoom / perspective).
-        var yaw = this.yaw;
-        var pitch = this.pitch;
-        this.model.perspective = this.perspective !== false;
-        var camera = viewProjectionParams(this.model, width, height, yaw, pitch);
-        paintFaces(
-            ctx,
-            buildSceneFaces(this.model),
-            yaw,
-            pitch,
-            camera.distance,
-            width,
-            height,
-            camera.pixelsPerUnit * (this.viewZoom || 1),
-            { x: camera.centerX, y: camera.centerY, z: camera.centerZ },
-            camera.perspective
-        );
-        // Crop empty margins on all sides, keep ~1 cm padding (≈38px at 96 dpi × bake scale).
+    SceneDesigner.prototype.bakeJpegFromContext = function (ctx, width, height, scale, quality) {
         var pad = Math.max(1, Math.round((96 / 2.54) * scale));
         var bounds = contentPixelBounds(ctx, width, height);
         var cropLeft = Math.max(0, bounds.minX - pad);
@@ -2424,7 +2953,7 @@
         croppedCtx.fillStyle = "#10131a";
         croppedCtx.fillRect(0, 0, cropWidth, cropHeight);
         croppedCtx.drawImage(
-            off,
+            ctx.canvas,
             cropLeft,
             cropTop,
             cropWidth,
@@ -2441,21 +2970,159 @@
         });
     };
 
+    SceneDesigner.prototype.bakeJpegBlob = function (quality) {
+        var self = this;
+        var srcW = Math.max(1, this.canvas.width || 640);
+        var srcH = Math.max(1, this.canvas.height || 420);
+        var scale = Math.max(1, Math.min(4, 1920 / Math.max(srcW, srcH)));
+        var width = Math.max(1, Math.round(srcW * scale));
+        var height = Math.max(1, Math.round(srcH * scale));
+        this.model.perspective = true;
+        this.ensureEyeFromOrbit();
+        this.persistEyeToModel();
+
+        return loadThreeJs().then(function () {
+            var wasView = self.viewMode;
+            if (!wasView) {
+                var wrap = self.canvas && self.canvas.parentElement;
+                if (wrap) {
+                    wrap.classList.add("is-view-mode");
+                }
+            }
+            if (!self.renderThree(width, height)) {
+                if (!wasView) {
+                    self.disposeThree();
+                    var wrapFail = self.canvas && self.canvas.parentElement;
+                    if (wrapFail) {
+                        wrapFail.classList.remove("is-view-mode");
+                    }
+                }
+                return Promise.reject(new Error("three.js bake unavailable"));
+            }
+            var glCanvas = self._three.glCanvas;
+            var off = document.createElement("canvas");
+            off.width = width;
+            off.height = height;
+            var ctx = off.getContext("2d");
+            ctx.fillStyle = "#10131a";
+            ctx.fillRect(0, 0, width, height);
+            ctx.drawImage(glCanvas, 0, 0, width, height);
+            if (wasView) {
+                self.renderThree(self.canvas.width, self.canvas.height);
+            } else {
+                self.disposeThree();
+                var wrapRestore = self.canvas && self.canvas.parentElement;
+                if (wrapRestore) {
+                    wrapRestore.classList.remove("is-view-mode");
+                }
+            }
+            return self.bakeJpegFromContext(ctx, width, height, scale, quality);
+        });
+    };
+
+    function scenePinStructureKey(pin) {
+        var size = normalizeScenePinSize(pin);
+        return [
+            clamp01(pin && pin.x),
+            clamp01(pin && pin.y),
+            size.w.toFixed(4),
+            size.h.toFixed(4),
+            pin && pin.kind ? pin.kind : "",
+            pin && pin.viewStyle ? pin.viewStyle : "",
+            pin && pin.ieee ? pin.ieee : "",
+            pin && (pin.automation || pin.automationId) ? (pin.automation || pin.automationId) : "",
+            pin && pin.param ? pin.param : "",
+            pin && pin.channel != null ? pin.channel : "",
+            pin && pin.icon ? pin.icon : ""
+        ].join("|");
+    }
+
+    function defaultScenePinSize(pin) {
+        if (pin && pin.viewStyle === "gauge") {
+            return { w: 0.20, h: 0.16 };
+        }
+        return { w: 0.08, h: 0.08 };
+    }
+
+    function normalizeScenePinSize(pin) {
+        var def = defaultScenePinSize(pin);
+        var legacy = parseFloat(pin && (pin.scale != null ? pin.scale : pin.iconScale));
+        if (!(legacy > 0) || legacy !== legacy) {
+            legacy = 1;
+        }
+        var w = parseFloat(pin && pin.sizeW);
+        var h = parseFloat(pin && pin.sizeH);
+        if (!(w > 0) || w !== w) {
+            w = def.w * legacy;
+        }
+        if (!(h > 0) || h !== h) {
+            h = def.h * legacy;
+        }
+        return {
+            w: Math.max(0.03, Math.min(0.7, w)),
+            h: Math.max(0.03, Math.min(0.7, h))
+        };
+    }
+
+    function applyScenePinBoxSize(pinEl, pin) {
+        if (!pinEl) {
+            return null;
+        }
+        var size = normalizeScenePinSize(pin);
+        pinEl.style.width = (size.w * 100) + "%";
+        pinEl.style.height = (size.h * 100) + "%";
+        pinEl.style.maxWidth = "none";
+        pinEl.style.maxHeight = "none";
+        pinEl.setAttribute("data-pin-size-w", String(size.w));
+        pinEl.setAttribute("data-pin-size-h", String(size.h));
+        if (pin) {
+            pin.sizeW = size.w;
+            pin.sizeH = size.h;
+        }
+        return size;
+    }
+
     function paintSceneCellPins(overlays, pins, options) {
-        overlays.innerHTML = "";
-        (pins || []).forEach(function (pin) {
+        var nextPins = pins || [];
+        var structSig = nextPins.map(scenePinStructureKey).join(";");
+        var prevSig = overlays.getAttribute("data-pins-struct") || "";
+        var existing = overlays.children;
+        // Same layout: refresh pin bodies in place (no empty flash / reflow of shells).
+        if (prevSig === structSig && existing.length === nextPins.length) {
+            nextPins.forEach(function (pin, index) {
+                var pinEl = existing[index];
+                pinEl.className = "scene-cell-pin scene-cell-pin--"
+                    + (pin.viewStyle === "gauge" ? "gauge" : "icon");
+                pinEl.style.left = (clamp01(pin.x) * 100) + "%";
+                pinEl.style.top = (clamp01(pin.y) * 100) + "%";
+                applyScenePinBoxSize(pinEl, pin);
+                pinEl.innerHTML = "";
+                if (typeof options.renderPin === "function") {
+                    options.renderPin(pinEl, pin);
+                } else {
+                    pinEl.title = pin.kind || "pin";
+                }
+            });
+            return;
+        }
+        var frag = document.createDocumentFragment();
+        nextPins.forEach(function (pin) {
             var pinEl = document.createElement("div");
             pinEl.className = "scene-cell-pin scene-cell-pin--"
                 + (pin.viewStyle === "gauge" ? "gauge" : "icon");
             pinEl.style.left = (clamp01(pin.x) * 100) + "%";
             pinEl.style.top = (clamp01(pin.y) * 100) + "%";
+            applyScenePinBoxSize(pinEl, pin);
             if (typeof options.renderPin === "function") {
                 options.renderPin(pinEl, pin);
             } else {
                 pinEl.title = pin.kind || "pin";
             }
-            overlays.appendChild(pinEl);
+            frag.appendChild(pinEl);
         });
+        overlays.innerHTML = "";
+        overlays.appendChild(frag);
+        overlays.setAttribute("data-pins-struct", structSig);
     }
 
     function mountSceneCell(host, sceneId, options) {
@@ -2544,6 +3211,10 @@
         mountSceneCell: mountSceneCell,
         takeSceneCellHost: takeSceneCellHost,
         invalidateSceneCellHost: invalidateSceneCellHost,
-        clamp01: clamp01
+        loadThreeJs: loadThreeJs,
+        clamp01: clamp01,
+        defaultScenePinSize: defaultScenePinSize,
+        normalizeScenePinSize: normalizeScenePinSize,
+        applyScenePinBoxSize: applyScenePinBoxSize
     };
 })(window);

@@ -436,7 +436,7 @@ In view mode, when the visible console content width is 13 cm or greater, visibl
 - **THEN** that widget’s width is 100% of the console content width
 
 ### Requirement: Composite viewport geometry
-When viewport is `composite`, the widget MUST store ordered rows. Each row MUST store height (positive number, unit `cm` or `u`) and ordered cells. Each cell MUST store width (positive number, unit `cm` or `u`), optional contour (default off), `alignH` / `alignV`, and content `empty`, `text`, `device`, or `camera`. Device cells MUST carry a normal binding; text cells MUST store display text in the cell `text` field; camera cells MUST store camera id, display mode, and channel. After Save and reload (including reboot), a text cell’s display text MUST equal the text the editor saved — it MUST NOT be replaced by an align token such as `center`, `left`, `right`, `top`, or `bottom`.
+When viewport is `composite`, the widget MUST store ordered rows. Each row MUST store height (positive number, unit `cm` or `u`) and ordered cells. Each cell MUST store width (positive number, unit `cm` or `u`), optional contour (default off), `alignH` / `alignV`, and content `empty`, `text`, `device`, `camera`, or `scene`. Device cells MUST carry a normal binding; text cells MUST store display text in the cell `text` field; camera cells MUST store camera id, display mode, and channel; scene cells MUST store a scene id referencing a persisted scene. After Save and reload (including reboot), a text cell’s display text MUST equal the text the editor saved — it MUST NOT be replaced by an align token such as `center`, `left`, `right`, `top`, or `bottom`.
 
 #### Scenario: Save composite with mixed cells
 - **WHEN** an editor saves a composite widget with one row of a 3 cm cell (text), a 1 u cell (device), and an empty cell with contour on
@@ -453,6 +453,17 @@ When viewport is `composite`, the widget MUST store ordered rows. Each row MUST 
 #### Scenario: Camera cell round-trips
 - **WHEN** an editor saves a composite cell with content camera, a registered camera id, mode jpegRefresh, and channel 1
 - **THEN** after reboot that cell still has content camera with the same id, mode, and channel
+
+#### Scenario: Scene cell round-trips
+- **WHEN** an editor saves a composite cell with content scene and scene id `Floor1`
+- **THEN** after reboot that cell still has content scene and scene id `Floor1`
+
+### Requirement: Scene cell shows bake and pins
+In view mode, a composite scene cell MUST render that scene’s baked image with aspect ratio preserved inside the cell and MUST overlay the scene’s pins at their relative coordinates with Icon/Gauge behavior matching other console bindings. Missing or deleted scene ids MUST show a non-revealing empty placeholder.
+
+#### Scenario: Scene cell overlays pins
+- **WHEN** a simple user opens a console whose composite cell references a scene that has an icon pin at (0.5, 0.5)
+- **THEN** the bake fills the cell without distortion and the pin appears at the cell center and is clickable
 
 ### Requirement: Camera composite cell view modes
 A composite camera cell MUST persist camera id, display mode (`jpegRefresh` or `live`), and channel index (1 or 2). In view mode, `jpegRefresh` MUST load the channel snapshot HTTP URL in the browser with periodic refresh; `live` MUST load the channel live HTTP URL in the browser. Missing mode MUST behave as `jpegRefresh`. Missing channel MUST behave as 1. Older consoles without camera cells MUST still load.

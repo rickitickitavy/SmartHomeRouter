@@ -93,6 +93,8 @@ void ConsoleStore::freeIconConfig(ConsoleIconConfig *&iconCfg) {
         return;
     }
     free(iconCfg->icon);
+    free(iconCfg->onColor);
+    free(iconCfg->offColor);
     free(iconCfg);
     iconCfg = nullptr;
 }
@@ -341,13 +343,19 @@ void ConsoleStore::appendBindingLayoutJson(PsramJsonBuffer &json, const ConsoleB
         json += "\"";
     }
     if (binding->viewStyle == CONSOLE_VIEW_STYLE_ICON && binding->iconCfg != nullptr) {
-        if (binding->iconCfg->iconScale > 0.0f && binding->iconCfg->iconScale != 1.0f) {
-            json += ",\"iconScale\":";
-            json += String(binding->iconCfg->iconScale, 4);
-        }
         if (binding->alignH != CONSOLE_ICON_ALIGN_CENTER) {
             json += ",\"iconAlign\":\"";
             json += iconAlignJsonId(binding->alignH);
+            json += "\"";
+        }
+        if (binding->iconCfg->onColor != nullptr && binding->iconCfg->onColor[0] != '\0') {
+            json += ",\"iconOnColor\":\"";
+            appendJsonEscaped(json, binding->iconCfg->onColor, CONSOLE_GAUGE_COLOR_MAX);
+            json += "\"";
+        }
+        if (binding->iconCfg->offColor != nullptr && binding->iconCfg->offColor[0] != '\0') {
+            json += ",\"iconOffColor\":\"";
+            appendJsonEscaped(json, binding->iconCfg->offColor, CONSOLE_GAUGE_COLOR_MAX);
             json += "\"";
         }
     }
@@ -726,6 +734,7 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         memset(binding, 0, sizeof(*binding));
         binding->attrId = -1;
         binding->viewStyle = CONSOLE_VIEW_STYLE_DEFAULT;
+        binding->scale = 1.0f;
         binding->fontScale = 1.0f;
         binding->alignH = CONSOLE_ICON_ALIGN_CENTER;
         binding->alignV = CONSOLE_ALIGN_V_CENTER;
@@ -791,7 +800,6 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         int decimals = -1;
         int clusterValue = 0;
         int attrValue = -1;
-        double iconScaleValue = 1.0;
         bool showTitleValue = true;
         extractJsonString(object.c_str(), "automation", automationName);
         if (automationName.length() == 0) {
@@ -808,6 +816,10 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         extractJsonString(object.c_str(), "param", paramText);
         extractJsonString(object.c_str(), "viewStyle", viewStyleText);
         extractJsonString(object.c_str(), "icon", iconText);
+        String iconOnColorText;
+        String iconOffColorText;
+        extractJsonString(object.c_str(), "iconOnColor", iconOnColorText);
+        extractJsonString(object.c_str(), "iconOffColor", iconOffColorText);
         extractJsonString(object.c_str(), "titlePosition", titlePositionText);
         extractJsonString(object.c_str(), "iconAlign", iconAlignText);
         extractJsonString(object.c_str(), "alignH", alignHText);
@@ -818,11 +830,8 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         if (!extractJsonInt(object.c_str(), "attrId", attrValue)) {
             attrValue = -1;
         }
-        if (!extractJsonDouble(object.c_str(), "iconScale", iconScaleValue)
-            || iconScaleValue <= 0.0
-            || iconScaleValue != iconScaleValue) {
-            iconScaleValue = 1.0;
-        }
+        // Scene pin size is sizeW/sizeH on pin JSON; no dialog SCALE on bindings.
+        double scaleValue = 1.0;
         if (!extractJsonBool(object.c_str(), "showTitle", showTitleValue)) {
             showTitleValue = true;
         }
@@ -904,6 +913,7 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         if (isAutomation && binding->viewStyle == CONSOLE_VIEW_STYLE_GAUGE) {
             binding->viewStyle = CONSOLE_VIEW_STYLE_DEFAULT;
         }
+        binding->scale = (float)scaleValue;
         binding->showTitle = showTitleValue;
         binding->titlePosition = parseTitlePositionId(titlePositionText.c_str());
         binding->asLogical = !isAutomation && asLogicalValue;
@@ -1013,7 +1023,7 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
                 return false;
             }
             memset(binding->iconCfg, 0, sizeof(*binding->iconCfg));
-            binding->iconCfg->iconScale = (float)iconScaleValue;
+            binding->iconCfg->iconScale = 1.0f;
             binding->iconCfg->iconAlign = binding->alignH;
             if (iconText.length() > 0) {
                 binding->iconCfg->icon =
@@ -1031,6 +1041,30 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
                     freeBindingList(*outBindings);
                     return false;
                 }
+            }
+            if (iconOnColorText.length() > 0) {
+                binding->iconCfg->onColor = duplicateBoundedString(
+                    iconOnColorText.c_str(), CONSOLE_GAUGE_COLOR_MAX - 1
+                );
+            }
+            if (iconOffColorText.length() > 0) {
+                binding->iconCfg->offColor = duplicateBoundedString(
+                    iconOffColorText.c_str(), CONSOLE_GAUGE_COLOR_MAX - 1
+                );
+            }
+            if ((iconOnColorText.length() > 0 && binding->iconCfg->onColor == nullptr)
+                || (iconOffColorText.length() > 0 && binding->iconCfg->offColor == nullptr)) {
+                freeIconConfig(binding->iconCfg);
+                free(binding->ieeeText);
+                free(binding->automationName);
+                free(binding->title);
+                free(binding->unit);
+                free(binding->param);
+                freeLogicalConfig(binding->logical);
+                freeGaugeConfig(binding->gauge);
+                free(binding);
+                freeBindingList(*outBindings);
+                return false;
             }
         }
         binding->clickActionFalseJson = nullptr;

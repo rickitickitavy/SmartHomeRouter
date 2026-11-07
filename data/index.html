@@ -342,6 +342,22 @@
                 "statusHistoryValues",
                 payload && payload.historyValuesStored != null ? String(payload.historyValuesStored) : "—"
             );
+            setStatusText(
+                "statusFsTotal",
+                payload && payload.fsTotalKb != null ? String(payload.fsTotalKb) + " kB" : "—"
+            );
+            setStatusText(
+                "statusFsFree",
+                payload && payload.fsFreeKb != null ? String(payload.fsFreeKb) + " kB" : "—"
+            );
+            setStatusText(
+                "statusFsConfig",
+                payload && payload.fsConfigKb != null ? String(payload.fsConfigKb) + " kB" : "—"
+            );
+            setStatusText(
+                "statusFsScene",
+                payload && payload.fsSceneKb != null ? String(payload.fsSceneKb) + " kB" : "—"
+            );
             if (payload && payload.wifiRssiDbm != null) {
                 setStatusText("statusWifiSignal", String(payload.wifiRssiDbm) + " dBm");
             } else {
@@ -4729,6 +4745,12 @@
                 + toneClass
                 + (iconOptions.disabled ? " is-disabled" : "");
             wrap.style.setProperty("--console-icon-scale", String(normalizeIconScale(binding && binding.iconScale)));
+            if (binding && binding.iconOnColor) {
+                wrap.style.setProperty("--console-icon-on-color", String(binding.iconOnColor));
+            }
+            if (binding && binding.iconOffColor) {
+                wrap.style.setProperty("--console-icon-off-color", String(binding.iconOffColor));
+            }
             wrap.title = stateText ? String(stateText) : iconId;
             if (iconOptions.ariaLabel) {
                 wrap.setAttribute("aria-label", iconOptions.ariaLabel);
@@ -7523,6 +7545,10 @@
         var consoleDeviceDialogDevices = [];
         var consoleDeviceGaugeRangesDraft = [];
         var consoleDeviceIconDraft = "mdi:checkbox-marked-circle";
+        var CONSOLE_ICON_ON_COLOR_DEFAULT = "#E8C547";
+        var CONSOLE_ICON_OFF_COLOR_DEFAULT = "#7a8494";
+        var consoleDeviceIconOnColorDraft = CONSOLE_ICON_ON_COLOR_DEFAULT;
+        var consoleDeviceIconOffColorDraft = CONSOLE_ICON_OFF_COLOR_DEFAULT;
         var consoleDragWidgetIndex = null;
         var consoleDragBindingWidgetIndex = null;
         var consoleDragBindingIndex = null;
@@ -12225,24 +12251,25 @@
         function syncSceneGeometryToolButtons() {
             var designer = sceneDesigner;
             var viewOn = designer ? !!designer.viewMode : false;
-            var perspectiveOn = designer ? designer.perspective !== false : true;
             var buttons = document.querySelectorAll("#sceneGeometryDialog [data-scene-tool]");
             var index;
             for (index = 0; index < buttons.length; index++) {
                 var button = buttons[index];
                 button.classList.remove("is-active");
                 button.setAttribute("aria-pressed", "false");
+                if (!viewOn && designer && button.getAttribute("data-scene-tool") === designer.tool) {
+                    button.classList.add("is-active");
+                    button.setAttribute("aria-pressed", "true");
+                }
+            }
+            var editOnly = document.querySelectorAll("#sceneGeometryDialog [data-scene-edit-only]");
+            for (index = 0; index < editOnly.length; index++) {
+                editOnly[index].hidden = viewOn;
             }
             var viewBtn = document.getElementById("sceneViewToggleBtn");
             if (viewBtn) {
                 viewBtn.classList.toggle("is-active", viewOn);
                 viewBtn.setAttribute("aria-pressed", viewOn ? "true" : "false");
-            }
-            var perspectiveBtn = document.getElementById("scenePerspectiveBtn");
-            if (perspectiveBtn) {
-                perspectiveBtn.classList.toggle("is-active", perspectiveOn);
-                perspectiveBtn.setAttribute("aria-pressed", perspectiveOn ? "true" : "false");
-                perspectiveBtn.title = perspectiveOn ? "Perspective (on)" : "Perspective (off · orthographic)";
             }
         }
 
@@ -12269,6 +12296,7 @@
         }
 
         var sceneBindPinDrag = null;
+        var sceneBindPinResize = null;
 
         function sceneBindFrameNormFromEvent(event, frame) {
             var rect = frame.getBoundingClientRect();
@@ -12325,6 +12353,7 @@
                     + (index === sceneSelectedPinIndex ? " is-selected" : "");
                 pinEl.style.left = (SceneKit.clamp01(pin.x) * 100) + "%";
                 pinEl.style.top = (SceneKit.clamp01(pin.y) * 100) + "%";
+                SceneKit.applyScenePinBoxSize(pinEl, pin);
                 pinEl.title = (pin.kind || "device") + " · " + (pin.viewStyle || "icon");
                 var binding = scenePinBindingForPreview(pin);
                 if (typeof placeBuildDeviceRow === "function") {
@@ -12338,15 +12367,27 @@
                 } else {
                     pinEl.textContent = pin.viewStyle === "gauge" ? "◐" : "●";
                 }
+                if (index === sceneSelectedPinIndex) {
+                    appendSceneBindPinResizeHandles(pinEl, pin, index, frame);
+                }
                 pinEl.onpointerdown = function (event) {
                     if (event.button != null && event.button !== 0) {
                         return;
                     }
+                    if (event.target && event.target.closest
+                        && event.target.closest(".scene-bind-pin-handle")) {
+                        return;
+                    }
                     event.preventDefault();
                     event.stopPropagation();
+                    var selectionChanged = sceneSelectedPinIndex !== index;
                     sceneSelectedPinIndex = index;
                     sceneBindTool = "";
                     syncSceneBindToolButtons();
+                    if (selectionChanged) {
+                        updateSceneBindPreview();
+                        return;
+                    }
                     sceneBindPinDrag = {
                         index: index,
                         pointerId: event.pointerId,
@@ -12363,6 +12404,9 @@
                     pinEl.classList.add("is-dragging");
                 };
                 pinEl.onpointermove = function (event) {
+                    if (sceneBindPinResize && sceneBindPinResize.index === index) {
+                        return;
+                    }
                     if (!sceneBindPinDrag || sceneBindPinDrag.index !== index) {
                         return;
                     }
@@ -12383,6 +12427,9 @@
                     pinEl.style.top = (norm.y * 100) + "%";
                 };
                 function endSceneBindPinDrag(event, openDialog) {
+                    if (sceneBindPinResize && sceneBindPinResize.index === index) {
+                        return;
+                    }
                     if (!sceneBindPinDrag || sceneBindPinDrag.index !== index) {
                         return;
                     }
@@ -12419,6 +12466,127 @@
                     event.stopPropagation();
                 };
                 overlays.appendChild(pinEl);
+            });
+        }
+
+        function scenePinKeepsAspectRatio(pin) {
+            if (!pin || pin.viewStyle !== "gauge") {
+                return true;
+            }
+            return !(pin.gauge && pin.gauge.type === "linear");
+        }
+
+        function appendSceneBindPinResizeHandles(pinEl, pin, index, frame) {
+            var edges = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
+            edges.forEach(function (edge) {
+                var handle = document.createElement("span");
+                handle.className = "scene-bind-pin-handle scene-bind-pin-handle--" + edge;
+                handle.setAttribute("data-edge", edge);
+                handle.onpointerdown = function (event) {
+                    if (event.button != null && event.button !== 0) {
+                        return;
+                    }
+                    event.preventDefault();
+                    event.stopPropagation();
+                    sceneBindPinDrag = null;
+                    var size = SceneKit.normalizeScenePinSize(pin);
+                    sceneBindPinResize = {
+                        index: index,
+                        edge: edge,
+                        pointerId: event.pointerId,
+                        startX: event.clientX,
+                        startY: event.clientY,
+                        startW: size.w,
+                        startH: size.h,
+                        keepAspect: scenePinKeepsAspectRatio(pin),
+                        aspect: size.h > 0 ? (size.w / size.h) : 1
+                    };
+                    pinEl.classList.add("is-resizing");
+                    try {
+                        handle.setPointerCapture(event.pointerId);
+                    } catch (ignore) {
+                    }
+                };
+                handle.onpointermove = function (event) {
+                    if (!sceneBindPinResize || sceneBindPinResize.index !== index) {
+                        return;
+                    }
+                    if (sceneBindPinResize.pointerId != null
+                        && event.pointerId !== sceneBindPinResize.pointerId) {
+                        return;
+                    }
+                    var rect = frame.getBoundingClientRect();
+                    if (!(rect.width > 0) || !(rect.height > 0)) {
+                        return;
+                    }
+                    var dx = (event.clientX - sceneBindPinResize.startX) / rect.width;
+                    var dy = (event.clientY - sceneBindPinResize.startY) / rect.height;
+                    var edgeId = sceneBindPinResize.edge;
+                    var nextW = sceneBindPinResize.startW;
+                    var nextH = sceneBindPinResize.startH;
+                    var movedW = false;
+                    var movedH = false;
+                    if (edgeId.indexOf("e") >= 0) {
+                        nextW = sceneBindPinResize.startW + dx;
+                        movedW = true;
+                    }
+                    if (edgeId.indexOf("w") >= 0) {
+                        nextW = sceneBindPinResize.startW - dx;
+                        movedW = true;
+                    }
+                    if (edgeId.indexOf("s") >= 0) {
+                        nextH = sceneBindPinResize.startH + dy;
+                        movedH = true;
+                    }
+                    if (edgeId.indexOf("n") >= 0) {
+                        nextH = sceneBindPinResize.startH - dy;
+                        movedH = true;
+                    }
+                    if (sceneBindPinResize.keepAspect) {
+                        var aspect = sceneBindPinResize.aspect > 0
+                            ? sceneBindPinResize.aspect
+                            : 1;
+                        if (movedW && movedH) {
+                            var scaleW = nextW / sceneBindPinResize.startW;
+                            var scaleH = nextH / sceneBindPinResize.startH;
+                            var scale = Math.abs(scaleW - 1) >= Math.abs(scaleH - 1)
+                                ? scaleW
+                                : scaleH;
+                            nextW = sceneBindPinResize.startW * scale;
+                            nextH = sceneBindPinResize.startH * scale;
+                        } else if (movedW) {
+                            nextH = nextW / aspect;
+                        } else if (movedH) {
+                            nextW = nextH * aspect;
+                        }
+                    }
+                    pin.sizeW = nextW;
+                    pin.sizeH = nextH;
+                    SceneKit.applyScenePinBoxSize(pinEl, pin);
+                };
+                function endResize(event) {
+                    if (!sceneBindPinResize || sceneBindPinResize.index !== index) {
+                        return;
+                    }
+                    if (sceneBindPinResize.pointerId != null
+                        && event.pointerId !== sceneBindPinResize.pointerId) {
+                        return;
+                    }
+                    sceneBindPinResize = null;
+                    pinEl.classList.remove("is-resizing");
+                    sceneBindDirty = true;
+                    try {
+                        handle.releasePointerCapture(event.pointerId);
+                    } catch (ignore) {
+                    }
+                }
+                handle.onpointerup = function (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    endResize(event);
+                };
+                handle.onpointercancel = endResize;
+                pinEl.appendChild(handle);
             });
         }
 
@@ -12549,8 +12717,11 @@
             if (pin.icon) {
                 binding.icon = pin.icon;
             }
-            if (pin.iconScale != null) {
-                binding.iconScale = pin.iconScale;
+            if (pin.iconOnColor) {
+                binding.iconOnColor = pin.iconOnColor;
+            }
+            if (pin.iconOffColor) {
+                binding.iconOffColor = pin.iconOffColor;
             }
             if (pin.gauge) {
                 binding.gauge = pin.gauge;
@@ -12596,6 +12767,14 @@
             if (!pin.viewStyle || pin.viewStyle === "default") {
                 pin.viewStyle = "icon";
             }
+            // Size is edited via outline handles, not the binding dialog.
+            delete pin.scale;
+            delete pin.iconScale;
+            if (pin.sizeW == null || pin.sizeH == null) {
+                var pinSize = SceneKit.normalizeScenePinSize(pin);
+                pin.sizeW = pinSize.w;
+                pin.sizeH = pinSize.h;
+            }
             return pin;
         }
 
@@ -12632,6 +12811,10 @@
                 sceneEditOverlay.classList.add("is-covered");
             }
             document.getElementById("sceneGeometryDialog").hidden = false;
+            // Prefetch three.js only while editing scenes (View / bake). Plan mode stays 2D.
+            if (window.SceneKit && typeof SceneKit.loadThreeJs === "function") {
+                SceneKit.loadThreeJs().catch(function () { /* View/bake will surface failure */ });
+            }
             var designer = ensureSceneDesigner();
             if (designer) {
                 designer.setModel(sceneDraftModel || SceneKit.defaultModel());
@@ -12789,15 +12972,6 @@
             syncSceneGeometryToolButtons();
         }
 
-        function sceneGeometryTogglePerspective() {
-            var designer = ensureSceneDesigner();
-            if (!designer) {
-                return;
-            }
-            designer.togglePerspective();
-            syncSceneGeometryToolButtons();
-        }
-
         function saveSceneGeometryTemp() {
             var errorLine = document.getElementById("sceneGeometryError");
             errorLine.hidden = true;
@@ -12812,6 +12986,8 @@
                 if (!blob) {
                     throw new Error("Bake failed");
                 }
+                // Refresh draft after bake so eyeX/Y/Z match the rendered camera.
+                sceneDraftModel = designer.getModel();
                 revokeScenePendingBakeUrl();
                 scenePendingBakeBlob = blob;
                 scenePendingBakeUrl = URL.createObjectURL(blob);
@@ -14873,8 +15049,25 @@
                     var fit = measureBodyFit(bodyEl);
                     bodyEl.style.setProperty("--composite-cell-w", String(fit.fitW) + "px");
                     bodyEl.style.setProperty("--composite-cell-h", String(fit.fitH) + "px");
-                    if (bodyEl.querySelector(".console-gauge-arc-svg")) {
+                    // Scene pins keep editor proportions — do not scale gauges to the full scene cell.
+                    if (bodyEl.querySelector(".console-gauge-arc-svg")
+                        && !bodyEl.querySelector(".scene-cell, .scene-cell-host")) {
                         gaugeBodies.push({ bodyEl: bodyEl, fitW: fit.fitW, fitH: fit.fitH });
+                    }
+                    var scenePinGauges = bodyEl.querySelectorAll(
+                        ".scene-cell-pin .console-gauge-arc-svg, .scene-bind-pin .console-gauge-arc-svg"
+                    );
+                    var pinGaugeIndex;
+                    for (pinGaugeIndex = 0; pinGaugeIndex < scenePinGauges.length; pinGaugeIndex++) {
+                        scenePinGauges[pinGaugeIndex].style.width = "";
+                        scenePinGauges[pinGaugeIndex].style.maxWidth = "";
+                        scenePinGauges[pinGaugeIndex].style.height = "";
+                        var pinValues = scenePinGauges[pinGaugeIndex]
+                            .querySelectorAll(".console-gauge-value-svg");
+                        var pinValueIndex;
+                        for (pinValueIndex = 0; pinValueIndex < pinValues.length; pinValueIndex++) {
+                            pinValues[pinValueIndex].style.fontSize = "";
+                        }
                     }
                     var icons = bodyEl.querySelectorAll(".console-binary-icon");
                     var iconIndex;
@@ -14882,6 +15075,29 @@
                     var iconFit = Math.max(16, Math.min(fit.fitW, fit.fitH) * 0.7);
                     var iconScale = Math.max(0.5, Math.min(4, iconFit / 32));
                     for (iconIndex = 0; iconIndex < icons.length; iconIndex++) {
+                        var iconNode = icons[iconIndex];
+                        var bindingScaleNode = iconNode.closest
+                            ? iconNode.closest("[data-binding-scale]")
+                            : null;
+                        var bindingScale = normalizeIconScale(
+                            bindingScaleNode
+                                ? bindingScaleNode.getAttribute("data-binding-scale")
+                                : 1
+                        );
+                        // Scene pins: size comes from saved sizeW/sizeH (% of scene frame).
+                        if (iconNode.closest && iconNode.closest(".scene-cell-pin, .scene-bind-pin")) {
+                            iconNode.style.minWidth = "0";
+                            iconNode.style.minHeight = "0";
+                            iconNode.style.maxWidth = "";
+                            iconNode.style.maxHeight = "";
+                            iconNode.style.width = "100%";
+                            iconNode.style.height = "100%";
+                            var pinGlyph = iconNode.querySelector(".mdi");
+                            if (pinGlyph) {
+                                pinGlyph.style.transform = "";
+                            }
+                            continue;
+                        }
                         (function (iconWrap, maxW, maxH, scale) {
                             iconWrap.style.setProperty("--console-icon-scale", String(scale));
                             iconWrap.style.minWidth = "0";
@@ -14906,7 +15122,7 @@
                                     ? ("scale(" + String(fitScale) + ")")
                                     : "";
                             });
-                        })(icons[iconIndex], fit.fitW, fit.fitH, iconScale);
+                        })(iconNode, fit.fitW, fit.fitH, iconScale * bindingScale);
                     }
                 }
                 var gIndex;
@@ -14914,6 +15130,13 @@
                     var gaugeBody = gaugeBodies[gIndex];
                     var titleEl = gaugeBody.bodyEl.querySelector(".console-device-row-title");
                     var hasTitle = titleIsVisible(titleEl);
+                    var gaugeScaleNode = gaugeBody.bodyEl.querySelector("[data-binding-scale]")
+                        || gaugeBody.bodyEl;
+                    var gaugeBindingScale = normalizeIconScale(
+                        gaugeScaleNode.getAttribute
+                            ? gaugeScaleNode.getAttribute("data-binding-scale")
+                            : 1
+                    );
                     var provisionalTitleBand = hasTitle
                         ? Math.max(
                             TITLE_FONT_MIN * 1.15,
@@ -14921,7 +15144,8 @@
                         )
                         : 0;
                     var availH = Math.max(28, gaugeBody.fitH - provisionalTitleBand - TITLE_GAP);
-                    var gaugeSize = Math.max(36, Math.min(gaugeBody.fitW, availH * GAUGE_ASPECT));
+                    var gaugeSize = Math.max(36, Math.min(gaugeBody.fitW, availH * GAUGE_ASPECT))
+                        * gaugeBindingScale;
                     var valueFont = Math.max(
                         VALUE_FONT_MIN,
                         Math.min(VALUE_FONT_MAX, VALUE_FONT_BASE * (gaugeSize / VALUE_FONT_REF))
@@ -14944,7 +15168,8 @@
                         titleEl.style.minHeight = "";
                         // Re-fit gauge with the real title height so digits stay larger than labels.
                         availH = Math.max(28, gaugeBody.fitH - titleBand - TITLE_GAP);
-                        gaugeSize = Math.max(36, Math.min(gaugeBody.fitW, availH * GAUGE_ASPECT));
+                        gaugeSize = Math.max(36, Math.min(gaugeBody.fitW, availH * GAUGE_ASPECT))
+                            * gaugeBindingScale;
                         valueFont = Math.max(
                             VALUE_FONT_MIN,
                             Math.min(VALUE_FONT_MAX, VALUE_FONT_BASE * (gaugeSize / VALUE_FONT_REF))
@@ -14962,6 +15187,10 @@
                     var gaugeSvgs = gaugeBody.bodyEl.querySelectorAll(".console-gauge-arc-svg");
                     var svgIndex;
                     for (svgIndex = 0; svgIndex < gaugeSvgs.length; svgIndex++) {
+                        if (gaugeSvgs[svgIndex].closest
+                            && gaugeSvgs[svgIndex].closest(".scene-cell-pin, .scene-bind-pin")) {
+                            continue;
+                        }
                         gaugeSvgs[svgIndex].style.width = String(gaugeSize) + "px";
                         gaugeSvgs[svgIndex].style.maxWidth = "100%";
                         gaugeSvgs[svgIndex].style.height = "auto";
@@ -17514,6 +17743,72 @@
             }
         }
 
+        function normalizeCssHexColor(value, fallback) {
+            var text = String(value == null ? "" : value).trim();
+            if (/^#[0-9a-fA-F]{6}$/.test(text)) {
+                return text.toLowerCase();
+            }
+            if (/^#[0-9a-fA-F]{3}$/.test(text)) {
+                return ("#" + text[1] + text[1] + text[2] + text[2] + text[3] + text[3]).toLowerCase();
+            }
+            return fallback;
+        }
+
+        function ensureConsoleDeviceIconColorPickers() {
+            var onHost = document.getElementById("consoleDeviceIconOnColorControl");
+            var offHost = document.getElementById("consoleDeviceIconOffColorControl");
+            if (onHost && onHost.getAttribute("data-ready") !== "1") {
+                var onControl = buildConsoleColorPickerControl(
+                    consoleDeviceIconOnColorDraft,
+                    function (hex) {
+                        consoleDeviceIconOnColorDraft = normalizeCssHexColor(
+                            hex, CONSOLE_ICON_ON_COLOR_DEFAULT
+                        );
+                    }
+                );
+                onHost.innerHTML = "";
+                onHost.appendChild(onControl);
+                onHost.setAttribute("data-ready", "1");
+                onHost.setColor = function (hex) {
+                    consoleDeviceIconOnColorDraft = normalizeCssHexColor(
+                        hex, CONSOLE_ICON_ON_COLOR_DEFAULT
+                    );
+                    onControl.setColor(consoleDeviceIconOnColorDraft);
+                };
+            }
+            if (offHost && offHost.getAttribute("data-ready") !== "1") {
+                var offControl = buildConsoleColorPickerControl(
+                    consoleDeviceIconOffColorDraft,
+                    function (hex) {
+                        consoleDeviceIconOffColorDraft = normalizeCssHexColor(
+                            hex, CONSOLE_ICON_OFF_COLOR_DEFAULT
+                        );
+                    }
+                );
+                offHost.innerHTML = "";
+                offHost.appendChild(offControl);
+                offHost.setAttribute("data-ready", "1");
+                offHost.setColor = function (hex) {
+                    consoleDeviceIconOffColorDraft = normalizeCssHexColor(
+                        hex, CONSOLE_ICON_OFF_COLOR_DEFAULT
+                    );
+                    offControl.setColor(consoleDeviceIconOffColorDraft);
+                };
+            }
+        }
+
+        function syncConsoleDeviceIconColorPickers() {
+            ensureConsoleDeviceIconColorPickers();
+            var onHost = document.getElementById("consoleDeviceIconOnColorControl");
+            var offHost = document.getElementById("consoleDeviceIconOffColorControl");
+            if (onHost && typeof onHost.setColor === "function") {
+                onHost.setColor(consoleDeviceIconOnColorDraft);
+            }
+            if (offHost && typeof offHost.setColor === "function") {
+                offHost.setColor(consoleDeviceIconOffColorDraft);
+            }
+        }
+
         function renderConsoleDeviceIconGrid() {
             var host = document.getElementById("consoleDeviceIconGrid");
             if (!host) {
@@ -17540,6 +17835,7 @@
                     host.appendChild(button);
                 })(BINARY_SENSOR_ICON_CHOICES[index]);
             }
+            syncConsoleDeviceIconColorPickers();
         }
 
         function refreshConsoleDeviceTitleLayoutFields() {
@@ -18108,6 +18404,12 @@
                 });
             }
             consoleDeviceIconDraft = normalizeMdiIconId(binding.icon || "mdi:checkbox-marked-circle");
+            consoleDeviceIconOnColorDraft = normalizeCssHexColor(
+                binding.iconOnColor, CONSOLE_ICON_ON_COLOR_DEFAULT
+            );
+            consoleDeviceIconOffColorDraft = normalizeCssHexColor(
+                binding.iconOffColor, CONSOLE_ICON_OFF_COLOR_DEFAULT
+            );
             // Apply after option lists exist — setting .value before Icon/Gauge options are built drops it.
             consoleDevicePreferredViewStyle = binding.viewStyle === "gauge"
                 ? "gauge"
@@ -18177,10 +18479,6 @@
                 var titlePositionSelect = document.getElementById("consoleDeviceTitlePosition");
                 if (titlePositionSelect) {
                     titlePositionSelect.value = normalizeTitlePosition(binding.titlePosition);
-                }
-                var iconScaleInput = document.getElementById("consoleDeviceIconScale");
-                if (iconScaleInput) {
-                    iconScaleInput.value = String(normalizeIconScale(binding.iconScale));
                 }
                 var alignHSelect = document.getElementById("consoleDeviceAlignH");
                 if (alignHSelect) {
@@ -18441,7 +18739,6 @@
         function applyDialogLayoutFieldsToBody(body) {
             var showTitleCheck = document.getElementById("consoleDeviceShowTitle");
             var titlePositionSelect = document.getElementById("consoleDeviceTitlePosition");
-            var iconScaleInput = document.getElementById("consoleDeviceIconScale");
             var alignHSelect = document.getElementById("consoleDeviceAlignH");
             var alignVSelect = document.getElementById("consoleDeviceAlignV");
             body.showTitle = !showTitleCheck || showTitleCheck.checked;
@@ -18451,7 +18748,6 @@
             body.alignH = normalizeIconAlign(alignHSelect ? alignHSelect.value : "center");
             body.alignV = normalizeAlignV(alignVSelect ? alignVSelect.value : "center");
             if (body.viewStyle === "icon") {
-                body.iconScale = normalizeIconScale(iconScaleInput ? iconScaleInput.value : 1);
                 body.iconAlign = body.alignH;
             }
             return body;
@@ -18494,6 +18790,12 @@
                 if (viewStyleSelect && viewStyleSelect.value === "icon") {
                     automationBody.viewStyle = "icon";
                     automationBody.icon = normalizeMdiIconId(consoleDeviceIconDraft);
+                    automationBody.iconOnColor = normalizeCssHexColor(
+                        consoleDeviceIconOnColorDraft, CONSOLE_ICON_ON_COLOR_DEFAULT
+                    );
+                    automationBody.iconOffColor = normalizeCssHexColor(
+                        consoleDeviceIconOffColorDraft, CONSOLE_ICON_OFF_COLOR_DEFAULT
+                    );
                 } else {
                     automationBody.viewStyle = "default";
                 }
@@ -18575,6 +18877,12 @@
             }
             if (body.viewStyle === "icon") {
                 body.icon = normalizeMdiIconId(consoleDeviceIconDraft);
+                body.iconOnColor = normalizeCssHexColor(
+                    consoleDeviceIconOnColorDraft, CONSOLE_ICON_ON_COLOR_DEFAULT
+                );
+                body.iconOffColor = normalizeCssHexColor(
+                    consoleDeviceIconOffColorDraft, CONSOLE_ICON_OFF_COLOR_DEFAULT
+                );
             }
             body = applyDialogLayoutFieldsToBody(body);
             return applyClickActionsToBindingBody(body);
@@ -19138,6 +19446,25 @@
                             </div>
                         </div>
                         <div class="status-group">
+                            <h3 class="group-title">File system</h3>
+                            <div class="status-row">
+                                <span class="status-row-label">Total capacity</span>
+                                <p id="statusFsTotal" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Free space</span>
+                                <p id="statusFsFree" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Config size</span>
+                                <p id="statusFsConfig" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Scene size</span>
+                                <p id="statusFsScene" class="status-value">—</p>
+                            </div>
+                        </div>
+                        <div class="status-group">
                             <h3 class="group-title">Devices</h3>
                             <div class="status-row">
                                 <span class="status-row-label">Zigbee devices</span>
@@ -19156,6 +19483,8 @@
                                 <p id="statusMqttOnline" class="status-value">—</p>
                             </div>
                         </div>
+                    </div>
+                    <div class="status-column">
                         <div class="status-group">
                             <h3 class="group-title">MQTT</h3>
                             <div class="status-row">
@@ -19171,8 +19500,6 @@
                                 <p id="statusMqttTopics" class="status-value">—</p>
                             </div>
                         </div>
-                    </div>
-                    <div class="status-column">
                         <div class="status-group">
                             <h3 class="group-title">Network</h3>
                             <div class="status-row">
@@ -20514,36 +20841,34 @@
         <h3>Edit scene</h3>
         <p id="sceneGeometryError" class="save-error" hidden></p>
         <div class="scene-designer-toolbar">
-            <button type="button" class="btn btn-secondary btn-icon" title="Add floor" aria-label="Add floor"
-                    onclick="sceneGeometryAddFloor()">
+            <button type="button" class="btn btn-secondary btn-icon" data-scene-edit-only title="Add floor"
+                    aria-label="Add floor" onclick="sceneGeometryAddFloor()">
                 <span class="mdi mdi-layers-plus" aria-hidden="true"></span>
             </button>
-            <button type="button" class="btn btn-secondary btn-icon" data-scene-tool="wall" title="Add wall"
-                    aria-label="Add wall" aria-pressed="false" onclick="setSceneGeometryTool('wall')">
+            <button type="button" class="btn btn-secondary btn-icon" data-scene-edit-only data-scene-tool="wall"
+                    title="Add wall" aria-label="Add wall" aria-pressed="false"
+                    onclick="setSceneGeometryTool('wall')">
                 <span class="mdi mdi-wall" aria-hidden="true"></span>
             </button>
-            <button type="button" class="btn btn-secondary btn-icon" data-scene-tool="window" title="Add window"
-                    aria-label="Add window" aria-pressed="false" onclick="setSceneGeometryTool('window')">
+            <button type="button" class="btn btn-secondary btn-icon" data-scene-edit-only data-scene-tool="window"
+                    title="Add window" aria-label="Add window" aria-pressed="false"
+                    onclick="setSceneGeometryTool('window')">
                 <span class="mdi mdi-window-closed-variant" aria-hidden="true"></span>
             </button>
-            <button type="button" class="btn btn-secondary btn-icon" data-scene-tool="door" title="Add door"
-                    aria-label="Add door" aria-pressed="false" onclick="setSceneGeometryTool('door')">
+            <button type="button" class="btn btn-secondary btn-icon" data-scene-edit-only data-scene-tool="door"
+                    title="Add door" aria-label="Add door" aria-pressed="false"
+                    onclick="setSceneGeometryTool('door')">
                 <span class="mdi mdi-door" aria-hidden="true"></span>
             </button>
-            <button type="button" class="btn btn-secondary btn-icon" title="Remove selected element"
-                    aria-label="Remove selected element" onclick="sceneGeometryRemoveSelected()">
+            <button type="button" class="btn btn-secondary btn-icon" data-scene-edit-only
+                    title="Remove selected element" aria-label="Remove selected element"
+                    onclick="sceneGeometryRemoveSelected()">
                 <span class="mdi mdi-trash-can-outline" aria-hidden="true"></span>
             </button>
             <button type="button" id="sceneViewToggleBtn"
                     class="btn btn-secondary btn-icon scene-view-toggle-btn" title="View scene"
                     aria-label="View scene" aria-pressed="false" onclick="sceneGeometryToggleView()">
                 <span class="mdi mdi-cube-outline" aria-hidden="true"></span>
-            </button>
-            <button type="button" id="scenePerspectiveBtn"
-                    class="btn btn-secondary btn-icon" title="Perspective"
-                    aria-label="Perspective" aria-pressed="true"
-                    onclick="sceneGeometryTogglePerspective()">
-                <span class="mdi mdi-perspective-less" aria-hidden="true"></span>
             </button>
             <div class="scene-floor-color" title="Floor color">
                 <span class="mdi mdi-palette" aria-hidden="true"></span>
@@ -20562,7 +20887,7 @@
             </div>
         </div>
         <div class="scene-designer-canvas-wrap">
-            <canvas id="sceneGeometryCanvas"></canvas>
+            <canvas id="sceneGeometryCanvas" class="scene-designer-edit-canvas"></canvas>
         </div>
         <div class="dialog-actions">
             <button type="button" class="btn btn-primary" onclick="saveSceneGeometryTemp()">Save</button>
@@ -20711,11 +21036,15 @@
             </div>
             <div id="consoleDeviceIconGroup" class="console-icon-config" hidden>
                 <p class="field-hint">Icon (Material Design Icons — Home Assistant / Pictogrammers)</p>
-                <div class="console-binding-general-row">
-                    <label for="consoleDeviceIconScale">Icon scale</label>
-                    <input id="consoleDeviceIconScale" type="number" min="0.1" step="0.1" value="1">
-                </div>
                 <div id="consoleDeviceIconGrid" class="console-icon-grid"></div>
+                <div class="console-binding-general-row">
+                    <span>ON color</span>
+                    <div id="consoleDeviceIconOnColorControl" class="console-color-picker-control-host" aria-label="ON color"></div>
+                </div>
+                <div class="console-binding-general-row">
+                    <span>OFF color</span>
+                    <div id="consoleDeviceIconOffColorControl" class="console-color-picker-control-host" aria-label="OFF color"></div>
+                </div>
             </div>
             <div id="consoleDeviceGaugeGroup" class="console-gauge-config" hidden>
                 <p class="field-hint">Gauge</p>
