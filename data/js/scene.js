@@ -219,6 +219,69 @@
         return { x: origin.x, z: point.z };
     }
 
+    function pointInPolygon(point, polygon) {
+        if (!point || !polygon || polygon.length < 3) {
+            return false;
+        }
+        var inside = false;
+        var index;
+        for (index = 0; index < polygon.length; index++) {
+            var a = polygon[index];
+            var b = polygon[(index + 1) % polygon.length];
+            var crosses = ((a.z > point.z) !== (b.z > point.z))
+                && (point.x < (b.x - a.x) * (point.z - a.z) / ((b.z - a.z) || 1e-12) + a.x);
+            if (crosses) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    }
+
+    function nearestFloorCorner(floor, point, threshold) {
+        if (!floor || !point) {
+            return null;
+        }
+        var best = null;
+        var bestDist = threshold;
+        (floor.polygon || []).forEach(function (corner) {
+            var dx = corner.x - point.x;
+            var dz = corner.z - point.z;
+            var dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = { x: corner.x, z: corner.z };
+            }
+        });
+        return best;
+    }
+
+    function resolveShiftDragPoint(floor, handle, origin, raw, shiftHeld, sceneSize) {
+        if (!shiftHeld || !raw) {
+            return raw;
+        }
+        // Walls + Shift: snap to nearest floor corner; else keep the wall horizontal/vertical.
+        if (handle && handle.list === "walls") {
+            var floorSnap = nearestFloorCorner(
+                floor,
+                raw,
+                Math.max(0.02, (sceneSize || 1) * 0.045)
+            );
+            if (floorSnap) {
+                return floorSnap;
+            }
+            var seg = floor && floor.walls && floor.walls[handle.index];
+            if (seg) {
+                var fixed = handle.end === 1
+                    ? { x: seg.x2, z: seg.z2 }
+                    : { x: seg.x1, z: seg.z1 };
+                return axisLockPoint(fixed, raw, true);
+            }
+            return raw;
+        }
+        // Corners (floor polygon) + openings: Shift locks horizontal/vertical motion.
+        return axisLockPoint(origin, raw, true);
+    }
+
     function smoothToward(current, target, factor) {
         var t = factor == null ? 0.55 : factor;
         if (t < 0) {
@@ -237,6 +300,10 @@
             sceneSize: 1.0,
             wallHeight: DEFAULT_WALL_HEIGHT,
             wallThickness: DEFAULT_WALL_THICKNESS,
+            viewZoom: 1,
+            yaw: 0.85,
+            pitch: 0.62,
+            perspective: true,
             floors: [defaultFloorRect(1.0)]
         };
     }
@@ -301,7 +368,7 @@
         return { x: ax + abx * t, z: az + abz * t, t: t };
     }
 
-    function projectOrbit(point, yaw, pitch, distance, width, height, pixelsPerUnit) {
+    function projectOrbit(point, yaw, pitch, distance, width, height, pixelsPerUnit, perspective) {
         var cy = Math.cos(yaw);
         var sy = Math.sin(yaw);
         var cp = Math.cos(pitch);
@@ -318,7 +385,9 @@
         if (depth < 0.05) {
             depth = 0.05;
         }
-        var scale = (pixelsPerUnit > 0 ? pixelsPerUnit : Math.min(width, height) * 0.42) / depth;
+        var base = pixelsPerUnit > 0 ? pixelsPerUnit : Math.min(width, height) * 0.42;
+        // Perspective divides by depth; orthographic keeps a constant scale.
+        var scale = perspective === false ? (base / Math.max(distance, 0.05)) : (base / depth);
         return {
             x: width * 0.5 + rx * scale,
             y: height * 0.58 - ry * scale,
@@ -384,6 +453,7 @@
             (model.sceneSize || 1) * 0.4
         ) * 0.5;
         var distance = Math.max(1.2, radius * 2.35);
+        var perspective = model.perspective !== false;
         var sample = [
             { x: bounds.minX - cx, y: bounds.minY - cy, z: bounds.minZ - cz },
             { x: bounds.maxX - cx, y: bounds.minY - cy, z: bounds.minZ - cz },
@@ -396,7 +466,9 @@
         ];
         var maxSpan = 0.001;
         sample.forEach(function (point) {
-            var projected = projectOrbit(point, yaw, pitch, distance, width, height, 1);
+            var projected = projectOrbit(
+                point, yaw, pitch, distance, width, height, 1, perspective
+            );
             var dx = projected.x - width * 0.5;
             var dy = projected.y - height * 0.58;
             var span = Math.sqrt(dx * dx + dy * dy);
@@ -410,7 +482,8 @@
             centerY: cy,
             centerZ: cz,
             distance: distance,
-            pixelsPerUnit: targetRadiusPx / maxSpan
+            pixelsPerUnit: targetRadiusPx / maxSpan,
+            perspective: perspective
         };
     }
 
@@ -491,12 +564,15 @@
         return false;
     }
 
-    function pushWallFace(faces, points, colorHex) {
+    function pushWallFace(faces, points, colorHex, options) {
+        options = options || {};
         faces.push({
             points: points,
             color: colorHex,
             alpha: 1,
-            forceDraw: true
+            forceDraw: options.forceDraw !== false,
+            noStroke: !!options.noStroke,
+            layer: options.layer == null ? 1 : options.layer
         });
     }
 
@@ -536,15 +612,17 @@
         var bOutTop = { x: bOut.x, y: y1, z: bOut.z };
         var bInTop = { x: bIn.x, y: y1, z: bIn.z };
         var aInTop = { x: aIn.x, y: y1, z: aIn.z };
-        pushWallFace(faces, [aOut, bOut, bOutTop, aOutTop], colorHex);
-        pushWallFace(faces, [bIn, aIn, aInTop, bInTop], colorHex);
+        var layer = options.layer == null ? 1 : options.layer;
+        var faceOpts = { noStroke: !!options.noStroke, layer: layer };
+        pushWallFace(faces, [aOut, bOut, bOutTop, aOutTop], colorHex, faceOpts);
+        pushWallFace(faces, [bIn, aIn, aInTop, bInTop], colorHex, faceOpts);
         if (!options.skipStartCap) {
-            pushWallFace(faces, [aIn, aOut, aOutTop, aInTop], colorHex);
+            pushWallFace(faces, [aIn, aOut, aOutTop, aInTop], colorHex, faceOpts);
         }
         if (!options.skipEndCap) {
-            pushWallFace(faces, [bOut, bIn, bInTop, bOutTop], colorHex);
+            pushWallFace(faces, [bOut, bIn, bInTop, bOutTop], colorHex, faceOpts);
         }
-        pushWallFace(faces, [aOutTop, bOutTop, bInTop, aInTop], colorHex);
+        pushWallFace(faces, [aOutTop, bOutTop, bInTop, aInTop], colorHex, faceOpts);
         return faces;
     }
 
@@ -621,8 +699,11 @@
         return { outer: outer, inner: inner };
     }
 
-    function ribbonSegmentFaces(outerA, outerB, innerA, innerB, y0, y1, colorHex) {
+    function ribbonSegmentFaces(outerA, outerB, innerA, innerB, y0, y1, colorHex, options) {
         var faces = [];
+        var noStroke = !!(options && options.noStroke);
+        var layer = options && options.layer != null ? options.layer : 1;
+        var faceOpts = { noStroke: noStroke, layer: layer };
         var oA0 = { x: outerA.x, y: y0, z: outerA.z };
         var oB0 = { x: outerB.x, y: y0, z: outerB.z };
         var iB0 = { x: innerB.x, y: y0, z: innerB.z };
@@ -631,9 +712,9 @@
         var oB1 = { x: outerB.x, y: y1, z: outerB.z };
         var iB1 = { x: innerB.x, y: y1, z: innerB.z };
         var iA1 = { x: innerA.x, y: y1, z: innerA.z };
-        pushWallFace(faces, [oA0, oB0, oB1, oA1], colorHex);
-        pushWallFace(faces, [iB0, iA0, iA1, iB1], colorHex);
-        pushWallFace(faces, [oA1, oB1, iB1, iA1], colorHex);
+        pushWallFace(faces, [oA0, oB0, oB1, oA1], colorHex, faceOpts);
+        pushWallFace(faces, [iB0, iA0, iA1, iB1], colorHex, faceOpts);
+        pushWallFace(faces, [oA1, oB1, iB1, iA1], colorHex, faceOpts);
         return faces;
     }
 
@@ -667,7 +748,8 @@
                     t1: span.t1,
                     color: opening.color,
                     y0: opening.y0,
-                    y1: opening.y1
+                    y1: opening.y1,
+                    fillPanel: !!opening.fillPanel
                 });
             });
             cuts.sort(function (left, right) {
@@ -678,7 +760,7 @@
             var iA = ribbon.inner[edgeIndex];
             var iB = ribbon.inner[(edgeIndex + 1) % count];
 
-            function solidRibbon(t0, t1, yy0, yy1, color) {
+            function solidRibbon(t0, t1, yy0, yy1, color, faceOptions) {
                 if (t1 <= t0 + 1e-4 || yy1 <= yy0 + 1e-6) {
                     return;
                 }
@@ -689,7 +771,8 @@
                     lerp2(iA, iB, t1),
                     yy0,
                     yy1,
-                    color
+                    color,
+                    faceOptions
                 ));
             }
 
@@ -700,26 +783,49 @@
                 cuts.forEach(function (cut) {
                     var t0 = Math.max(cursor, cut.t0);
                     var t1 = Math.max(t0, cut.t1);
+                    // Wall pieces that abut a window: noStroke so cut edges don't draw seams.
+                    var abutOpts = cut.fillPanel ? { noStroke: true } : null;
                     if (t0 > cursor + 1e-4) {
-                        solidRibbon(cursor, t0, y0, y1, wallColor);
+                        solidRibbon(cursor, t0, y0, y1, wallColor, abutOpts);
                     }
                     if (cut.y0 > y0 + 1e-4) {
-                        solidRibbon(t0, t1, y0, cut.y0, wallColor);
+                        solidRibbon(t0, t1, y0, cut.y0, wallColor, abutOpts);
                     }
                     if (cut.y1 < y1 - 1e-4) {
-                        solidRibbon(t0, t1, cut.y1, y1, wallColor);
+                        solidRibbon(t0, t1, cut.y1, y1, wallColor, abutOpts);
                     }
-                    var openingLen = (t1 - t0) * wallLength(center);
-                    var jamb = Math.min(0.004, openingLen * 0.08);
-                    if (jamb * 2.2 < openingLen) {
-                        var dt = jamb / Math.max(wallLength(center), 1e-6);
-                        solidRibbon(t0, t0 + dt, cut.y0, cut.y1, cut.color);
-                        solidRibbon(t1 - dt, t1, cut.y0, cut.y1, cut.color);
+                    if (cut.fillPanel) {
+                        // Window panel overlaps cut slightly; no stroke (layer above wall).
+                        var padT = 0.006;
+                        solidRibbon(
+                            Math.max(0, t0 - padT),
+                            Math.min(1, t1 + padT),
+                            cut.y0,
+                            cut.y1,
+                            cut.color,
+                            { noStroke: true, layer: 2 }
+                        );
+                    } else {
+                        var openingLen = (t1 - t0) * wallLength(center);
+                        var jamb = Math.min(0.004, openingLen * 0.08);
+                        if (jamb * 2.2 < openingLen) {
+                            var dt = jamb / Math.max(wallLength(center), 1e-6);
+                            solidRibbon(t0, t0 + dt, cut.y0, cut.y1, cut.color, { layer: 2 });
+                            solidRibbon(t1 - dt, t1, cut.y0, cut.y1, cut.color, { layer: 2 });
+                        }
                     }
                     cursor = Math.max(cursor, t1);
                 });
                 if (cursor < 1 - 1e-4) {
-                    solidRibbon(cursor, 1, y0, y1, wallColor);
+                    var lastCut = cuts[cuts.length - 1];
+                    solidRibbon(
+                        cursor,
+                        1,
+                        y0,
+                        y1,
+                        wallColor,
+                        lastCut && lastCut.fillPanel ? { noStroke: true } : null
+                    );
                 }
             }
         }
@@ -789,14 +895,15 @@
                 t1: span.t1,
                 color: opening.color,
                 y0: opening.y0,
-                y1: opening.y1
+                y1: opening.y1,
+                fillPanel: !!opening.fillPanel
             });
         });
         cuts.sort(function (left, right) {
             return left.t0 - right.t0;
         });
 
-        function solidSpan(t0, t1, y0, height, color) {
+        function solidSpan(t0, t1, y0, height, color, extraOptions) {
             if (t1 <= t0 || height <= 1e-6) {
                 return;
             }
@@ -814,6 +921,11 @@
                 options.trimEnd = trimEnd;
                 options.skipEndCap = skipEndCap;
             }
+            if (extraOptions) {
+                Object.keys(extraOptions).forEach(function (key) {
+                    options[key] = extraOptions[key];
+                });
+            }
             faces = faces.concat(wallSlab(wall, t0, t1, y0, height, thickness, color, 1, options));
         }
 
@@ -825,32 +937,53 @@
         cuts.forEach(function (cut) {
             var t0 = Math.max(cursor, cut.t0);
             var t1 = Math.max(t0, cut.t1);
+            var abutOpts = cut.fillPanel ? { noStroke: true } : null;
             if (t0 > cursor + 1e-4) {
-                solidSpan(cursor, t0, baseY, wallHeight, wallColor);
+                solidSpan(cursor, t0, baseY, wallHeight, wallColor, abutOpts);
             }
             if (cut.y0 > baseY + 1e-4) {
-                solidSpan(t0, t1, baseY, cut.y0 - baseY, wallColor);
+                solidSpan(t0, t1, baseY, cut.y0 - baseY, wallColor, abutOpts);
             }
             if (cut.y1 < baseY + wallHeight - 1e-4) {
-                solidSpan(t0, t1, cut.y1, (baseY + wallHeight) - cut.y1, wallColor);
+                solidSpan(t0, t1, cut.y1, (baseY + wallHeight) - cut.y1, wallColor, abutOpts);
             }
-            var openingLen = (t1 - t0) * wallLength(wall);
-            var jamb = Math.min(0.004, openingLen * 0.08);
-            if (jamb * 2.2 < openingLen) {
-                var dt = jamb / wallLength(wall);
-                faces = faces.concat(wallSlab(
-                    wall, t0, t0 + dt, cut.y0, cut.y1 - cut.y0, thickness, cut.color, 1,
-                    { skipStartCap: true, skipEndCap: true }
-                ));
-                faces = faces.concat(wallSlab(
-                    wall, t1 - dt, t1, cut.y0, cut.y1 - cut.y0, thickness, cut.color, 1,
-                    { skipStartCap: true, skipEndCap: true }
-                ));
+            if (cut.fillPanel) {
+                var padT = 0.006;
+                solidSpan(
+                    Math.max(0, t0 - padT),
+                    Math.min(1, t1 + padT),
+                    cut.y0,
+                    cut.y1 - cut.y0,
+                    cut.color,
+                    { noStroke: true, skipStartCap: true, skipEndCap: true, layer: 2 }
+                );
+            } else {
+                var openingLen = (t1 - t0) * wallLength(wall);
+                var jamb = Math.min(0.004, openingLen * 0.08);
+                if (jamb * 2.2 < openingLen) {
+                    var dt = jamb / wallLength(wall);
+                    faces = faces.concat(wallSlab(
+                        wall, t0, t0 + dt, cut.y0, cut.y1 - cut.y0, thickness, cut.color, 1,
+                        { skipStartCap: true, skipEndCap: true, layer: 2 }
+                    ));
+                    faces = faces.concat(wallSlab(
+                        wall, t1 - dt, t1, cut.y0, cut.y1 - cut.y0, thickness, cut.color, 1,
+                        { skipStartCap: true, skipEndCap: true, layer: 2 }
+                    ));
+                }
             }
             cursor = Math.max(cursor, t1);
         });
         if (cursor < 1 - 1e-4) {
-            solidSpan(cursor, 1, baseY, wallHeight, wallColor);
+            var lastCut = cuts[cuts.length - 1];
+            solidSpan(
+                cursor,
+                1,
+                baseY,
+                wallHeight,
+                wallColor,
+                lastCut && lastCut.fillPanel ? { noStroke: true } : null
+            );
         }
         return faces;
     }
@@ -920,7 +1053,8 @@
             points: floorPoints,
             color: colorHex || DEFAULT_FLOOR_COLOR,
             alpha: 1,
-            forceDraw: true
+            forceDraw: true,
+            layer: 0
         };
     }
 
@@ -943,21 +1077,26 @@
                 faces.push(floorFace);
             }
 
+            // Doors = void + jambs; windows = cyan panels cut into the wall (no overlapping z-fight).
             var openings = [];
-            (floor.windows || []).forEach(function (seg) {
-                openings.push({
-                    seg: seg,
-                    color: "#4fc3f7",
-                    y0: baseY + wallHeight * 0.28,
-                    y1: baseY + wallHeight * 0.78
-                });
-            });
             (floor.doors || []).forEach(function (seg) {
                 openings.push({
                     seg: seg,
                     color: "#ffb74d",
                     y0: baseY,
-                    y1: baseY + wallHeight * 0.92
+                    y1: baseY + wallHeight * 0.92,
+                    fillPanel: false
+                });
+            });
+            (floor.windows || []).forEach(function (seg) {
+                var lift = wallHeight * 0.28;
+                var panelHeight = wallHeight * 0.5;
+                openings.push({
+                    seg: seg,
+                    color: "#4fc3f7",
+                    y0: baseY + lift,
+                    y1: baseY + lift + panelHeight,
+                    fillPanel: true
                 });
             });
 
@@ -965,32 +1104,32 @@
                 faces = faces.concat(closedLoopWallFaces(
                     loop, openings, baseY, wallHeight, thickness, wallColor
                 ));
-                return;
+            } else {
+                walls.forEach(function (seg, index) {
+                    var join = {
+                        connectedStart: wallConnectedAt(walls, index, 1),
+                        connectedEnd: wallConnectedAt(walls, index, 2)
+                    };
+                    faces = faces.concat(wallFacesWithOpenings(
+                        seg, openings, baseY, wallHeight, thickness, join
+                    ));
+                });
             }
-
-            walls.forEach(function (seg, index) {
-                var join = {
-                    connectedStart: wallConnectedAt(walls, index, 1),
-                    connectedEnd: wallConnectedAt(walls, index, 2)
-                };
-                faces = faces.concat(wallFacesWithOpenings(
-                    seg, openings, baseY, wallHeight, thickness, join
-                ));
-            });
         });
         return faces;
     }
 
-    function paintFaces(ctx, faces, yaw, pitch, distance, width, height, pixelsPerUnit, center) {
+    function paintFaces(ctx, faces, yaw, pitch, distance, width, height, pixelsPerUnit, center, perspective) {
         var light = normalize3({ x: 0.35, y: 0.9, z: 0.25 });
         var shift = center || { x: 0, y: 0, z: 0 };
+        var usePerspective = perspective !== false;
         var prepared = faces.map(function (face) {
             var projected = face.points.map(function (point) {
                 return projectOrbit({
                     x: point.x - shift.x,
                     y: point.y - shift.y,
                     z: point.z - shift.z
-                }, yaw, pitch, distance, width, height, pixelsPerUnit);
+                }, yaw, pitch, distance, width, height, pixelsPerUnit, usePerspective);
             });
             // Screen-space cull (canvas Y grows downward).
             var facingScreen = 0;
@@ -1009,13 +1148,19 @@
             return {
                 projected: projected,
                 depth: averageDepth(projected),
+                layer: face.layer == null ? 1 : face.layer,
                 fill: shadeRgba(face.color, shade, face.alpha == null ? 1 : face.alpha),
-                stroke: shadeRgba(face.color, shade * 0.7, 0.65)
+                stroke: shadeRgba(face.color, shade * 0.7, 0.65),
+                noStroke: !!face.noStroke
             };
         }).filter(function (face) {
             return !!face;
         });
+        // Floors first, then walls, then openings — keeps walls opaque over the floor plate.
         prepared.sort(function (left, right) {
+            if (left.layer !== right.layer) {
+                return left.layer - right.layer;
+            }
             return right.depth - left.depth;
         });
         prepared.forEach(function (face) {
@@ -1033,9 +1178,11 @@
             ctx.closePath();
             ctx.fillStyle = face.fill;
             ctx.fill();
-            ctx.strokeStyle = face.stroke;
-            ctx.lineWidth = 1;
-            ctx.stroke();
+            if (!face.noStroke) {
+                ctx.strokeStyle = face.stroke;
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            }
         });
     }
 
@@ -1049,6 +1196,8 @@
         this.yaw = 0.85;
         this.pitch = 0.62;
         this.viewZoom = 1;
+        this.perspective = true;
+        this.editZoom = 1;
         this.dragOrbit = false;
         this.dragHandle = null;
         this.dragCornerFrom = null;
@@ -1066,50 +1215,129 @@
 
     SceneDesigner.prototype.bindEvents = function () {
         var self = this;
-        this.canvas.addEventListener("mousedown", function (event) {
+        // Drop any prior designer still wired to this canvas (orphan after null-without-dispose).
+        if (this.canvas && this.canvas.__sceneDesigner && this.canvas.__sceneDesigner !== this) {
+            this.canvas.__sceneDesigner.dispose();
+        }
+        if (this.canvas) {
+            this.canvas.__sceneDesigner = this;
+        }
+        this._onCanvasMouseDown = function (event) {
+            event.preventDefault();
+            event.stopPropagation();
             self.onPointerDown(event);
-        });
-        this.canvas.addEventListener("mousemove", function (event) {
+        };
+        this._onCanvasMouseMove = function (event) {
             self.onPointerMove(event);
-        });
-        window.addEventListener("mousemove", function (event) {
-            if (!self.dragHandle) {
+        };
+        this._onWindowMouseMove = function (event) {
+            if (!self.dragOrbit && !self.dragHandle) {
                 return;
             }
             self.onPointerMove(event);
-        });
-        window.addEventListener("mouseup", function (event) {
+        };
+        this._onWindowMouseUp = function (event) {
             self.dragOrbit = false;
             if (self.dragHandle) {
                 self.finishHandleDrag(event);
             }
-        });
-        window.addEventListener("keydown", function (event) {
-            if (event.key !== "Shift" || !self.dragHandle) {
+        };
+        this._onWindowKeyDown = function (event) {
+            if (event.key === "Shift" && self.dragHandle) {
+                self.dragShiftHeld = true;
+                self.applyHandleDragAtClient(self.lastDragClientX, self.lastDragClientY, true);
                 return;
             }
-            self.dragShiftHeld = true;
-            self.applyHandleDragAtClient(self.lastDragClientX, self.lastDragClientY, true);
-        });
-        window.addEventListener("keyup", function (event) {
+            if (event.key === "Delete" || event.key === "Del") {
+                var active = document.activeElement;
+                var tag = active && active.tagName ? active.tagName.toLowerCase() : "";
+                if (tag === "input" || tag === "textarea" || tag === "select"
+                    || (active && active.isContentEditable)) {
+                    return;
+                }
+                if (self.canvas && self.canvas.offsetParent === null) {
+                    return;
+                }
+                event.preventDefault();
+                self.removeSelected();
+            }
+        };
+        this._onWindowKeyUp = function (event) {
             if (event.key !== "Shift" || !self.dragHandle) {
                 return;
             }
             self.dragShiftHeld = false;
             self.applyHandleDragAtClient(self.lastDragClientX, self.lastDragClientY, false);
-        });
-        this.canvas.addEventListener("dblclick", function (event) {
+        };
+        this._onCanvasDblClick = function (event) {
             self.onDoubleClick(event);
-        });
-        this.canvas.addEventListener("wheel", function (event) {
-            if (!self.viewMode) {
-                return;
-            }
+        };
+        this._onCanvasWheel = function (event) {
             event.preventDefault();
             var factor = Math.exp(-event.deltaY * 0.0012);
-            self.viewZoom = Math.max(0.35, Math.min(3.5, self.viewZoom * factor));
+            if (self.viewMode) {
+                self.viewZoom = Math.max(0.35, Math.min(3.5, self.viewZoom * factor));
+                self.model.viewZoom = self.viewZoom;
+                if (typeof self.onChange === "function") {
+                    self.onChange();
+                }
+            } else {
+                // Plan/edit zoom only — not persisted (3D viewZoom is separate).
+                self.editZoom = Math.max(0.35, Math.min(6, self.editZoom * factor));
+            }
             self.draw();
-        }, { passive: false });
+        };
+        this.canvas.addEventListener("mousedown", this._onCanvasMouseDown);
+        this.canvas.addEventListener("mousemove", this._onCanvasMouseMove);
+        this.canvas.addEventListener("dblclick", this._onCanvasDblClick);
+        this.canvas.addEventListener("wheel", this._onCanvasWheel, { passive: false });
+        window.addEventListener("mousemove", this._onWindowMouseMove);
+        window.addEventListener("mouseup", this._onWindowMouseUp);
+        window.addEventListener("keydown", this._onWindowKeyDown);
+        window.addEventListener("keyup", this._onWindowKeyUp);
+    };
+
+    SceneDesigner.prototype.dispose = function () {
+        if (this.canvas) {
+            if (this._onCanvasMouseDown) {
+                this.canvas.removeEventListener("mousedown", this._onCanvasMouseDown);
+            }
+            if (this._onCanvasMouseMove) {
+                this.canvas.removeEventListener("mousemove", this._onCanvasMouseMove);
+            }
+            if (this._onCanvasDblClick) {
+                this.canvas.removeEventListener("dblclick", this._onCanvasDblClick);
+            }
+            if (this._onCanvasWheel) {
+                this.canvas.removeEventListener("wheel", this._onCanvasWheel);
+            }
+            if (this.canvas.__sceneDesigner === this) {
+                this.canvas.__sceneDesigner = null;
+            }
+        }
+        if (this._onWindowMouseMove) {
+            window.removeEventListener("mousemove", this._onWindowMouseMove);
+        }
+        if (this._onWindowMouseUp) {
+            window.removeEventListener("mouseup", this._onWindowMouseUp);
+        }
+        if (this._onWindowKeyDown) {
+            window.removeEventListener("keydown", this._onWindowKeyDown);
+        }
+        if (this._onWindowKeyUp) {
+            window.removeEventListener("keyup", this._onWindowKeyUp);
+        }
+        this._onCanvasMouseDown = null;
+        this._onCanvasMouseMove = null;
+        this._onCanvasDblClick = null;
+        this._onCanvasWheel = null;
+        this._onWindowMouseMove = null;
+        this._onWindowMouseUp = null;
+        this._onWindowKeyDown = null;
+        this._onWindowKeyUp = null;
+        this.dragOrbit = false;
+        this.dragHandle = null;
+        this.onChange = null;
     };
 
     SceneDesigner.prototype.resize = function () {
@@ -1136,6 +1364,22 @@
         this.model.floors = this.model.floors.map(function (floor) {
             return normalizeFloor(floor, sceneSize);
         });
+        var zoom = Number(this.model.viewZoom);
+        this.viewZoom = (isFinite(zoom) && zoom > 0)
+            ? Math.max(0.35, Math.min(3.5, zoom))
+            : 1;
+        this.model.viewZoom = this.viewZoom;
+        var yaw = Number(this.model.yaw);
+        this.yaw = isFinite(yaw) ? yaw : 0.85;
+        this.model.yaw = this.yaw;
+        var pitch = Number(this.model.pitch);
+        this.pitch = isFinite(pitch)
+            ? Math.max(0.28, Math.min(1.25, pitch))
+            : 0.62;
+        this.model.pitch = this.pitch;
+        this.perspective = this.model.perspective !== false;
+        this.model.perspective = this.perspective;
+        this.editZoom = 1;
         this.floorIndex = 0;
         this.selection = null;
         this.dragHandle = null;
@@ -1146,7 +1390,25 @@
     };
 
     SceneDesigner.prototype.getModel = function () {
+        this.model.viewZoom = this.viewZoom;
+        this.model.yaw = this.yaw;
+        this.model.pitch = this.pitch;
+        this.model.perspective = this.perspective !== false;
         return cloneJson(this.model);
+    };
+
+    SceneDesigner.prototype.setPerspective = function (enabled) {
+        this.perspective = !!enabled;
+        this.model.perspective = this.perspective;
+        if (typeof this.onChange === "function") {
+            this.onChange();
+        }
+        this.draw();
+        return this.perspective;
+    };
+
+    SceneDesigner.prototype.togglePerspective = function () {
+        return this.setPerspective(!this.perspective);
     };
 
     SceneDesigner.prototype.setTool = function (tool) {
@@ -1199,23 +1461,15 @@
 
     SceneDesigner.prototype.addFloor = function () {
         var last = this.model.floors[this.model.floors.length - 1];
-        var floor = defaultFloorRect(this.model.sceneSize || 1);
-        floor.y = 0;
-        if (last && last.color) {
-            floor.color = last.color;
-        }
-        // Offset in plan so the new floor is visible beside the previous one.
-        var offset = (this.model.floors.length) * ((this.model.sceneSize || 1) * 0.2);
-        (floor.polygon || []).forEach(function (corner) {
-            corner.x += offset;
-            corner.z += offset;
-        });
-        (floor.walls || []).forEach(function (seg) {
-            seg.x1 += offset;
-            seg.z1 += offset;
-            seg.x2 += offset;
-            seg.z2 += offset;
-        });
+        var floor = {
+            y: 0,
+            height: 0.3,
+            color: (last && last.color) ? last.color : DEFAULT_FLOOR_COLOR,
+            polygon: defaultPolygon(this.model.sceneSize || 1),
+            walls: [],
+            windows: [],
+            doors: []
+        };
         this.model.floors.push(floor);
         this.floorIndex = this.model.floors.length - 1;
         this.selection = { list: "polygon", index: 0 };
@@ -1329,36 +1583,67 @@
         return true;
     };
 
-    SceneDesigner.prototype.removeSelected = function () {
-        if (this.selection) {
-            if (this.selection.list === "polygon") {
-                var floorPolygon = this.currentFloor();
-                if (floorPolygon.polygon && floorPolygon.polygon.length > 3
-                    && this.selection.index >= 0
-                    && this.selection.index < floorPolygon.polygon.length) {
-                    floorPolygon.polygon.splice(this.selection.index, 1);
-                    this.selection = null;
-                    this.notify();
-                    this.draw();
-                    return true;
-                }
-                return false;
-            }
-            var floor = this.currentFloor();
-            var list = floor[this.selection.list];
-            if (list && this.selection.index >= 0 && this.selection.index < list.length) {
-                list.splice(this.selection.index, 1);
-                this.selection = null;
-                this.notify();
-                this.draw();
-                return true;
-            }
-        }
+    SceneDesigner.prototype.removeCurrentFloor = function () {
         if (this.model.floors.length > 1) {
             this.model.floors.splice(this.floorIndex, 1);
             if (this.floorIndex >= this.model.floors.length) {
                 this.floorIndex = this.model.floors.length - 1;
             }
+        } else {
+            var color = this.getCurrentFloorColor();
+            this.model.floors[0] = {
+                y: 0,
+                height: 0.3,
+                color: color,
+                polygon: defaultPolygon(this.model.sceneSize || 1),
+                walls: [],
+                windows: [],
+                doors: []
+            };
+            this.floorIndex = 0;
+        }
+        this.selection = null;
+        this.notify();
+        this.draw();
+        return true;
+    };
+
+    SceneDesigner.prototype.removeSelected = function () {
+        if (!this.selection) {
+            return false;
+        }
+        if (typeof this.selection.floorIndex === "number"
+            && this.selection.floorIndex !== this.floorIndex
+            && this.model.floors[this.selection.floorIndex]) {
+            this.floorIndex = this.selection.floorIndex;
+        }
+        if (this.selection.list === "polygon") {
+            var floorPolygon = this.currentFloor();
+            if (!floorPolygon || !floorPolygon.polygon) {
+                return false;
+            }
+            // Floor plate is independent of walls — clearing it keeps walls/windows/doors.
+            if (floorPolygon.polygon.length <= 3) {
+                floorPolygon.polygon = [];
+                this.selection = null;
+                this.notify();
+                this.draw();
+                return true;
+            }
+            if (this.selection.index >= 0
+                && this.selection.index < floorPolygon.polygon.length) {
+                floorPolygon.polygon.splice(this.selection.index, 1);
+                this.selection = null;
+                this.notify();
+                this.draw();
+                return true;
+            }
+            return false;
+        }
+        var floor = this.currentFloor();
+        var list = floor[this.selection.list];
+        if (list && this.selection.index >= 0 && this.selection.index < list.length) {
+            list.splice(this.selection.index, 1);
             this.selection = null;
             this.notify();
             this.draw();
@@ -1383,9 +1668,10 @@
         var px = (clientX - rect.left) / rect.width;
         var py = (clientY - rect.top) / rect.height;
         var size = this.model.sceneSize || 1;
+        var zoom = this.viewMode ? 1 : Math.max(0.35, this.editZoom || 1);
         return {
-            x: (px - 0.5) * size,
-            z: (py - 0.5) * size
+            x: ((px - 0.5) / zoom) * size,
+            z: ((py - 0.5) / zoom) * size
         };
     };
 
@@ -1393,14 +1679,36 @@
         return (this.model.sceneSize || 1) * 0.028;
     };
 
+    SceneDesigner.prototype.floorForHandle = function (handle) {
+        if (handle && typeof handle.floorIndex === "number"
+            && this.model.floors[handle.floorIndex]) {
+            return this.model.floors[handle.floorIndex];
+        }
+        return this.currentFloor();
+    };
+
+    SceneDesigner.prototype.findFloorIndexAt = function (point) {
+        var floors = this.model.floors || [];
+        var index;
+        // Top-most drawn floor wins (later index painted later).
+        for (index = floors.length - 1; index >= 0; index--) {
+            if (pointInPolygon(point, floors[index].polygon || [])) {
+                return index;
+            }
+        }
+        return -1;
+    };
+
     SceneDesigner.prototype.findHandleAt = function (point) {
-        var floor = this.currentFloor();
         var threshold = this.handleHitSize();
         var best = null;
         var bestDist = threshold;
-        // Prefer wall/window/door endpoints over floor corners so they stay independent.
+        var self = this;
+        var activeFloor = this.currentFloor();
+        var activeIndex = this.floorIndex;
+        // Prefer active-floor wall/window/door endpoints over floor corners.
         ["walls", "windows", "doors"].forEach(function (listName) {
-            var list = floor[listName] || [];
+            var list = activeFloor[listName] || [];
             list.forEach(function (seg, index) {
                 [
                     { end: 1, x: seg.x1, z: seg.z1 },
@@ -1411,7 +1719,12 @@
                     var dist = Math.sqrt(dx * dx + dz * dz);
                     if (dist < bestDist) {
                         bestDist = dist;
-                        best = { list: listName, index: index, end: handle.end };
+                        best = {
+                            list: listName,
+                            index: index,
+                            end: handle.end,
+                            floorIndex: activeIndex
+                        };
                     }
                 });
             });
@@ -1419,14 +1732,22 @@
         if (best) {
             return best;
         }
-        (floor.polygon || []).forEach(function (corner, index) {
-            var dx = corner.x - point.x;
-            var dz = corner.z - point.z;
-            var dist = Math.sqrt(dx * dx + dz * dz);
-            if (dist < bestDist) {
-                bestDist = dist;
-                best = { list: "polygon", index: index, end: 0 };
-            }
+        // Floor polygon corners for EVERY floor so inactive plates stay editable.
+        (this.model.floors || []).forEach(function (floor, floorIndex) {
+            (floor.polygon || []).forEach(function (corner, index) {
+                var dx = corner.x - point.x;
+                var dz = corner.z - point.z;
+                var dist = Math.sqrt(dx * dx + dz * dz);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    best = {
+                        list: "polygon",
+                        index: index,
+                        end: 0,
+                        floorIndex: floorIndex
+                    };
+                }
+            });
         });
         return best;
     };
@@ -1491,6 +1812,9 @@
                     best = { list: "polygon", index: index };
                 }
             }
+        }
+        if (best) {
+            best.floorIndex = this.floorIndex;
         }
         this.selection = best;
         this.draw();
@@ -1588,13 +1912,21 @@
         var point = this.worldFromEvent(event);
         var handle = this.findHandleAt(point);
         if (handle) {
+            if (typeof handle.floorIndex === "number" && handle.floorIndex !== this.floorIndex) {
+                this.floorIndex = handle.floorIndex;
+            }
             this.dragHandle = handle;
-            this.selection = { list: handle.list, index: handle.index };
+            this.selection = {
+                list: handle.list,
+                index: handle.index,
+                floorIndex: handle.floorIndex
+            };
+            var floor = this.floorForHandle(handle);
             var corner;
             if (handle.list === "polygon") {
-                corner = this.currentFloor().polygon[handle.index];
+                corner = floor.polygon[handle.index];
             } else {
-                var handleSeg = this.currentFloor()[handle.list][handle.index];
+                var handleSeg = floor[handle.list][handle.index];
                 corner = handle.end === 1
                     ? { x: handleSeg.x1, z: handleSeg.z1 }
                     : { x: handleSeg.x2, z: handleSeg.z2 };
@@ -1607,6 +1939,13 @@
             this.draw();
             return;
         }
+        // Click an inactive floor plate to activate it (so its corners can be deleted).
+        var floorHit = this.findFloorIndexAt(point);
+        if (floorHit >= 0 && floorHit !== this.floorIndex) {
+            this.floorIndex = floorHit;
+            this.selection = null;
+            this.draw();
+        }
         // Empty canvas never creates geometry — only toolbar tools add objects.
         this.selectNear(point);
     };
@@ -1615,13 +1954,20 @@
         if (!this.dragHandle || this.viewMode) {
             return;
         }
-        var floor = this.currentFloor();
+        var floor = this.floorForHandle(this.dragHandle);
         if (!this.dragCornerFrom) {
             return;
         }
         var raw = this.worldFromClient(clientX, clientY);
-        var locked = axisLockPoint(this.dragCornerOrigin, raw, shiftHeld);
-        var point = smoothToward(this.dragCornerFrom, locked, 0.65);
+        var locked = resolveShiftDragPoint(
+            floor,
+            this.dragHandle,
+            this.dragCornerOrigin,
+            raw,
+            shiftHeld,
+            this.model.sceneSize || 1
+        );
+        var point = smoothToward(this.dragCornerFrom, locked, shiftHeld ? 1 : 0.65);
         if (this.dragHandle.list === "polygon") {
             var corner = floor.polygon && floor.polygon[this.dragHandle.index];
             if (!corner) {
@@ -1681,19 +2027,34 @@
         if (!this.dragHandle) {
             return;
         }
-        var floor = this.currentFloor();
+        var floor = this.floorForHandle(this.dragHandle);
         if (this.dragCornerFrom) {
             var shiftHeld = event ? !!event.shiftKey : this.dragShiftHeld;
             var raw = event
                 ? this.worldFromClient(event.clientX, event.clientY)
                 : { x: this.dragCornerFrom.x, z: this.dragCornerFrom.z };
-            var locked = axisLockPoint(this.dragCornerOrigin, raw, shiftHeld);
+            var locked = resolveShiftDragPoint(
+                floor,
+                this.dragHandle,
+                this.dragCornerOrigin,
+                raw,
+                shiftHeld,
+                this.model.sceneSize || 1
+            );
             if (this.dragHandle.list === "polygon") {
                 var corner = floor.polygon && floor.polygon[this.dragHandle.index];
                 if (corner) {
                     corner.x = locked.x;
                     corner.z = locked.z;
                 }
+            } else if (shiftHeld && this.dragHandle.list === "walls") {
+                moveSharedWallCorner(
+                    floor,
+                    this.dragCornerFrom.x,
+                    this.dragCornerFrom.z,
+                    locked.x,
+                    locked.z
+                );
             } else {
                 var snapped = this.snapJoin(locked, this.dragHandle);
                 if (this.dragHandle.list === "walls") {
@@ -1739,6 +2100,11 @@
             this.lastY = event.clientY;
             this.yaw += dx * 0.01;
             this.pitch = Math.max(0.28, Math.min(1.25, this.pitch + dy * 0.01));
+            this.model.yaw = this.yaw;
+            this.model.pitch = this.pitch;
+            if (typeof this.onChange === "function") {
+                this.onChange();
+            }
             this.draw();
             return;
         }
@@ -1780,10 +2146,11 @@
             ctx.stroke();
         }
         var self = this;
+        var editZoom = Math.max(0.35, this.editZoom || 1);
         function toPx(point) {
             return {
-                x: ((point.x / size) + 0.5) * width,
-                y: ((point.z / size) + 0.5) * height
+                x: width * 0.5 + (point.x / size) * width * editZoom,
+                y: height * 0.5 + (point.z / size) * height * editZoom
             };
         }
         function drawFloorPlate(floor, active) {
@@ -1852,16 +2219,21 @@
                 });
             });
         }
-        function drawPolygonHandles(polygon) {
+        function drawPolygonHandles(polygon, floorIndex, active) {
             (polygon || []).forEach(function (corner, index) {
                 var selected = self.selection
                     && self.selection.list === "polygon"
-                    && self.selection.index === index;
+                    && self.selection.index === index
+                    && (self.selection.floorIndex == null
+                        ? floorIndex === self.floorIndex
+                        : self.selection.floorIndex === floorIndex);
                 var p = toPx(corner);
                 ctx.beginPath();
-                ctx.arc(p.x, p.y, selected ? 6 : 5, 0, Math.PI * 2);
-                ctx.fillStyle = selected ? "#ce93d8" : "#81c784";
+                ctx.arc(p.x, p.y, selected ? 6 : (active ? 5 : 4), 0, Math.PI * 2);
+                ctx.fillStyle = selected ? "#ce93d8" : (active ? "#81c784" : "#4e7a52");
+                ctx.globalAlpha = active ? 1 : 0.85;
                 ctx.fill();
+                ctx.globalAlpha = 1;
                 ctx.strokeStyle = "#111";
                 ctx.lineWidth = 1;
                 ctx.stroke();
@@ -1876,8 +2248,11 @@
             drawSegs(floor.windows, "windows", active ? "#4fc3f7" : "#2f6f86", Math.max(2, thicknessPx * 0.55), active);
             drawSegs(floor.doors, "doors", active ? "#ffb74d" : "#8a6430", Math.max(2, thicknessPx * 0.55), active);
         });
+        // Polygon handles for all floors (inactive plates were undraggable / undeletable).
+        this.model.floors.forEach(function (floor, index) {
+            drawPolygonHandles(floor.polygon, index, index === self.floorIndex);
+        });
         var floor = this.currentFloor();
-        drawPolygonHandles(floor.polygon);
         drawHandles(floor.walls, "walls", "#eceff1");
         drawHandles(floor.windows, "windows", "#4fc3f7");
         drawHandles(floor.doors, "doors", "#ffb74d");
@@ -1886,7 +2261,8 @@
         ctx.fillText(
             "Floor " + (this.floorIndex + 1) + "/" + this.model.floors.length
                 + " · tool: " + this.tool
-                + " · thickness: " + this.getWallThickness().toFixed(2),
+                + " · thickness: " + this.getWallThickness().toFixed(2)
+                + " · wheel zoom",
             10,
             18
         );
@@ -1903,6 +2279,7 @@
         gradient.addColorStop(1, "rgba(20,24,34,0.9)");
         ctx.fillStyle = gradient;
         ctx.fillRect(0, 0, width, height);
+        this.model.perspective = this.perspective !== false;
         var camera = viewProjectionParams(this.model, width, height, this.yaw, this.pitch);
         paintFaces(
             ctx,
@@ -1913,11 +2290,17 @@
             width,
             height,
             camera.pixelsPerUnit * (this.viewZoom || 1),
-            { x: camera.centerX, y: camera.centerY, z: camera.centerZ }
+            { x: camera.centerX, y: camera.centerY, z: camera.centerZ },
+            camera.perspective
         );
         ctx.fillStyle = "#9aa4b5";
         ctx.font = "12px sans-serif";
-        ctx.fillText("View scene · drag to orbit · wheel zoom", 10, 18);
+        ctx.fillText(
+            "View scene · drag to orbit · wheel zoom"
+                + (this.perspective !== false ? " · perspective" : " · orthographic"),
+            10,
+            18
+        );
     };
 
     SceneDesigner.prototype.draw = function () {
@@ -1928,9 +2311,49 @@
         }
     };
 
+    function contentPixelBounds(ctx, width, height) {
+        var image = ctx.getImageData(0, 0, width, height);
+        var data = image.data;
+        var minX = width;
+        var maxX = -1;
+        var minY = height;
+        var maxY = -1;
+        var y;
+        var x;
+        for (y = 0; y < height; y++) {
+            var row = y * width * 4;
+            for (x = 0; x < width; x++) {
+                var i = row + x * 4;
+                // Anything brighter/different from near-black background counts as content.
+                if (data[i] > 28 || data[i + 1] > 32 || data[i + 2] > 40) {
+                    if (x < minX) {
+                        minX = x;
+                    }
+                    if (x > maxX) {
+                        maxX = x;
+                    }
+                    if (y < minY) {
+                        minY = y;
+                    }
+                    if (y > maxY) {
+                        maxY = y;
+                    }
+                }
+            }
+        }
+        if (maxX < minX || maxY < minY) {
+            return { minX: 0, maxX: width - 1, minY: 0, maxY: height - 1 };
+        }
+        return { minX: minX, maxX: maxX, minY: minY, maxY: maxY };
+    }
+
     SceneDesigner.prototype.bakeJpegBlob = function (quality) {
-        var width = 1920;
-        var height = 1080;
+        // Same aspect as the live View canvas so framing matches what the operator sees.
+        var srcW = Math.max(1, this.canvas.width || 640);
+        var srcH = Math.max(1, this.canvas.height || 420);
+        var scale = Math.max(1, Math.min(4, 1920 / Math.max(srcW, srcH)));
+        var width = Math.max(1, Math.round(srcW * scale));
+        var height = Math.max(1, Math.round(srcH * scale));
         var off = document.createElement("canvas");
         off.width = width;
         off.height = height;
@@ -1942,8 +2365,10 @@
         gradient.addColorStop(1, "rgba(18,22,30,0.95)");
         ctx.fillStyle = gradient;
         ctx.fillRect(0, 0, width, height);
-        var yaw = 0.85;
-        var pitch = 0.62;
+        // Match the live View scene camera exactly (yaw / pitch / zoom / perspective).
+        var yaw = this.yaw;
+        var pitch = this.pitch;
+        this.model.perspective = this.perspective !== false;
         var camera = viewProjectionParams(this.model, width, height, yaw, pitch);
         paintFaces(
             ctx,
@@ -1953,34 +2378,95 @@
             camera.distance,
             width,
             height,
-            camera.pixelsPerUnit,
-            { x: camera.centerX, y: camera.centerY, z: camera.centerZ }
+            camera.pixelsPerUnit * (this.viewZoom || 1),
+            { x: camera.centerX, y: camera.centerY, z: camera.centerZ },
+            camera.perspective
+        );
+        // Crop empty margins on all sides, keep ~1 cm padding (≈38px at 96 dpi × bake scale).
+        var pad = Math.max(1, Math.round((96 / 2.54) * scale));
+        var bounds = contentPixelBounds(ctx, width, height);
+        var cropLeft = Math.max(0, bounds.minX - pad);
+        var cropTop = Math.max(0, bounds.minY - pad);
+        var cropRight = Math.min(width - 1, bounds.maxX + pad);
+        var cropBottom = Math.min(height - 1, bounds.maxY + pad);
+        var cropWidth = Math.max(1, cropRight - cropLeft + 1);
+        var cropHeight = Math.max(1, cropBottom - cropTop + 1);
+        var cropped = document.createElement("canvas");
+        cropped.width = cropWidth;
+        cropped.height = cropHeight;
+        var croppedCtx = cropped.getContext("2d");
+        croppedCtx.fillStyle = "#10131a";
+        croppedCtx.fillRect(0, 0, cropWidth, cropHeight);
+        croppedCtx.drawImage(
+            off,
+            cropLeft,
+            cropTop,
+            cropWidth,
+            cropHeight,
+            0,
+            0,
+            cropWidth,
+            cropHeight
         );
         return new Promise(function (resolve) {
-            off.toBlob(function (blob) {
+            cropped.toBlob(function (blob) {
                 resolve(blob);
             }, "image/jpeg", quality == null ? 0.82 : quality);
         });
     };
 
+    function paintSceneCellPins(overlays, pins, options) {
+        overlays.innerHTML = "";
+        (pins || []).forEach(function (pin) {
+            var pinEl = document.createElement("div");
+            pinEl.className = "scene-cell-pin scene-cell-pin--"
+                + (pin.viewStyle === "gauge" ? "gauge" : "icon");
+            pinEl.style.left = (clamp01(pin.x) * 100) + "%";
+            pinEl.style.top = (clamp01(pin.y) * 100) + "%";
+            if (typeof options.renderPin === "function") {
+                options.renderPin(pinEl, pin);
+            } else {
+                pinEl.title = pin.kind || "pin";
+            }
+            overlays.appendChild(pinEl);
+        });
+    }
+
     function mountSceneCell(host, sceneId, options) {
         options = options || {};
         host.classList.add("scene-cell");
-        host.innerHTML = "";
-        var frame = document.createElement("div");
-        frame.className = "scene-cell-frame";
-        var img = document.createElement("img");
-        img.className = "scene-cell-bake";
-        img.alt = "Scene";
-        var overlays = document.createElement("div");
-        overlays.className = "scene-cell-overlays";
-        frame.appendChild(img);
-        frame.appendChild(overlays);
-        host.appendChild(frame);
+        host.classList.remove("scene-cell--empty");
         if (!sceneId) {
+            host.removeAttribute("data-scene-id");
+            host.innerHTML = "";
             host.classList.add("scene-cell--empty");
             host.textContent = "No scene";
             return;
+        }
+        var sceneKey = String(sceneId);
+        var reuse = host.getAttribute("data-scene-id") === sceneKey
+            && host.querySelector("img.scene-cell-bake")
+            && host.querySelector(".scene-cell-overlays");
+        var frame;
+        var img;
+        var overlays;
+        if (reuse) {
+            frame = host.querySelector(".scene-cell-frame");
+            img = host.querySelector("img.scene-cell-bake");
+            overlays = host.querySelector(".scene-cell-overlays");
+        } else {
+            host.setAttribute("data-scene-id", sceneKey);
+            host.innerHTML = "";
+            frame = document.createElement("div");
+            frame.className = "scene-cell-frame";
+            img = document.createElement("img");
+            img.className = "scene-cell-bake";
+            img.alt = "Scene";
+            overlays = document.createElement("div");
+            overlays.className = "scene-cell-overlays";
+            frame.appendChild(img);
+            frame.appendChild(overlays);
+            host.appendChild(frame);
         }
         fetch("/api/scenes/view?id=" + encodeURIComponent(sceneId), { cache: "no-store" })
             .then(function (response) {
@@ -1990,31 +2476,48 @@
                 return response.json();
             })
             .then(function (view) {
-                img.src = "/api/scenes/bake?id=" + encodeURIComponent(sceneId) + "&t=" + Date.now();
-                overlays.innerHTML = "";
-                (view.pins || []).forEach(function (pin) {
-                    var pinEl = document.createElement("div");
-                    pinEl.className = "scene-cell-pin scene-cell-pin--" + (pin.viewStyle === "gauge" ? "gauge" : "icon");
-                    pinEl.style.left = (clamp01(pin.x) * 100) + "%";
-                    pinEl.style.top = (clamp01(pin.y) * 100) + "%";
-                    if (typeof options.renderPin === "function") {
-                        options.renderPin(pinEl, pin);
-                    } else {
-                        pinEl.title = pin.kind || "pin";
-                    }
-                    overlays.appendChild(pinEl);
-                });
+                // Stable bake URL — avoid cache-bust remount flicker on every console refresh.
+                var bakeSrc = "/api/scenes/bake?id=" + encodeURIComponent(sceneId);
+                if (img.getAttribute("src") !== bakeSrc) {
+                    img.src = bakeSrc;
+                }
+                paintSceneCellPins(overlays, view.pins || [], options);
             })
             .catch(function () {
+                host.removeAttribute("data-scene-id");
                 host.classList.add("scene-cell--empty");
                 host.textContent = "Scene unavailable";
             });
+    }
+
+    var sceneCellHostCache = {};
+
+    function takeSceneCellHost(cacheKey, sceneId) {
+        var key = String(cacheKey || "") + "|" + String(sceneId || "");
+        var host = sceneCellHostCache[key];
+        if (!host) {
+            host = document.createElement("div");
+            host.className = "scene-cell-host";
+            sceneCellHostCache[key] = host;
+        }
+        return host;
+    }
+
+    function invalidateSceneCellHost(sceneId) {
+        var suffix = "|" + String(sceneId || "");
+        Object.keys(sceneCellHostCache).forEach(function (key) {
+            if (key.length >= suffix.length && key.slice(-suffix.length) === suffix) {
+                delete sceneCellHostCache[key];
+            }
+        });
     }
 
     global.SceneKit = {
         defaultModel: defaultModel,
         SceneDesigner: SceneDesigner,
         mountSceneCell: mountSceneCell,
+        takeSceneCellHost: takeSceneCellHost,
+        invalidateSceneCellHost: invalidateSceneCellHost,
         clamp01: clamp01
     };
 })(window);

@@ -3596,27 +3596,35 @@
                         }
                         cellBody.appendChild(buildConsoleCameraView(cell, cameraLiveCacheKey));
                     } else if (cell.content === "scene") {
-                        var sceneHost = document.createElement("div");
-                        sceneHost.className = "scene-cell-host";
+                        var sceneHost;
+                        if (live && window.SceneKit && typeof SceneKit.takeSceneCellHost === "function") {
+                            sceneHost = SceneKit.takeSceneCellHost(
+                                (options.consoleKey || "user") + "|"
+                                    + String(widgetIndex != null ? widgetIndex : "") + "|"
+                                    + String(rowIndex) + "|" + String(cellIndex),
+                                cell.sceneId || ""
+                            );
+                        } else {
+                            sceneHost = document.createElement("div");
+                            sceneHost.className = "scene-cell-host";
+                        }
                         if (window.SceneKit) {
                             SceneKit.mountSceneCell(sceneHost, cell.sceneId || "", {
                                 renderPin: function (pinEl, pin) {
                                     pinEl.classList.add("scene-cell-pin-live");
-                                    if (pin.kind === "automation") {
-                                        pinEl.textContent = "A";
-                                        pinEl.title = pin.automationId || "automation";
-                                        return;
+                                    pinEl.innerHTML = "";
+                                    var pinBinding = Object.assign({}, pin);
+                                    pinBinding.title = "";
+                                    pinBinding.showTitle = false;
+                                    if (pin.kind === "automation" || pin.automation) {
+                                        pinBinding.automation = pin.automation || pin.automationId || "";
                                     }
-                                    var pinBinding = {
-                                        ieee: pin.ieee || "",
-                                        channel: pin.channel || 1,
-                                        title: "",
-                                        unit: "",
-                                        decimals: -1,
-                                        param: pin.param || "",
-                                        viewStyle: pin.viewStyle === "gauge" ? "gauge" : "icon"
-                                    };
-                                    if (typeof buildBindingRow === "function") {
+                                    if (!pinBinding.viewStyle || pinBinding.viewStyle === "default") {
+                                        pinBinding.viewStyle = "icon";
+                                    }
+                                    if (typeof placeBuildDeviceRow === "function") {
+                                        pinEl.appendChild(placeBuildDeviceRow(pinBinding));
+                                    } else if (typeof buildBindingRow === "function") {
                                         pinEl.appendChild(buildBindingRow(pinBinding));
                                     } else {
                                         pinEl.textContent = "•";

@@ -5007,6 +5007,15 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     display: none !important;
 }
 
+/* Geometry editor sits above Edit scene — block the lower dialog from taking clicks. */
+#sceneEditDialog.console-edit-overlay.is-covered {
+    pointer-events: none;
+}
+
+#sceneGeometryDialog.console-edit-overlay {
+    z-index: 26;
+}
+
 #sceneEditDialog .scene-edit-dialog,
 #sceneGeometryDialog .scene-edit-dialog {
     width: 100%;
@@ -5148,6 +5157,39 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     cursor: pointer;
 }
 
+.scene-bind-pin.scene-bind-pin--live {
+    min-width: 0;
+    min-height: 0;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    padding: 0;
+    color: inherit;
+    cursor: grab;
+    touch-action: none;
+}
+
+.scene-bind-pin.scene-bind-pin--live.is-dragging {
+    cursor: grabbing;
+    z-index: 5;
+}
+
+.scene-bind-pin.scene-bind-pin--live.is-selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+}
+
+.scene-bind-pin.scene-bind-pin--live .console-device-row {
+    margin: 0;
+    background: transparent;
+    pointer-events: none;
+}
+
+.scene-bind-pin.scene-bind-pin--live .console-device-row.is-preview-only,
+.scene-bind-pin.scene-bind-pin--live .console-device-row.is-preview-only * {
+    pointer-events: none;
+}
+
 .scene-bind-pin.is-selected {
     border-color: var(--accent);
     color: var(--accent);
@@ -5192,8 +5234,13 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 }
 
 .scene-cell-pin-live {
-    min-width: 2rem;
-    min-height: 2rem;
+    min-width: 0;
+    min-height: 0;
+}
+
+.scene-cell-pin-live .console-device-row {
+    margin: 0;
+    background: transparent;
 }
 
 .scene-cell--empty,
