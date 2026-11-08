@@ -432,9 +432,7 @@
         if (!model || typeof model !== "object") {
             return true;
         }
-        if ((model.walls || []).length
-            || (model.windows || []).length
-            || (model.doors || []).length) {
+        if (modelHasWallGeometry(model)) {
             return false;
         }
         var floors = model.floors || [];
@@ -450,25 +448,44 @@
         );
     }
 
-    // Plan + camera only (no walls/openings) for "export scheme".
+    // True if the model has walls/windows/doors at top level or nested under floors.
+    function modelHasWallGeometry(model) {
+        if (!model || typeof model !== "object") {
+            return false;
+        }
+        if ((model.walls || []).length
+            || (model.windows || []).length
+            || (model.doors || []).length) {
+            return true;
+        }
+        var floors = model.floors || [];
+        var index;
+        for (index = 0; index < floors.length; index++) {
+            var floor = floors[index];
+            if (!floor || typeof floor !== "object") {
+                continue;
+            }
+            if ((floor.walls || []).length
+                || (floor.windows || []).length
+                || (floor.doors || []).length) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Scheme = house geometry + camera (floors, walls, windows, doors). Not floors-only.
     function schemeModelFrom(model) {
-        var source = model && model.floors ? cloneJson(model) : defaultModel();
-        return {
-            sceneSize: source.sceneSize || 1,
-            wallHeight: source.wallHeight || DEFAULT_WALL_HEIGHT,
-            wallThickness: source.wallThickness || DEFAULT_WALL_THICKNESS,
-            viewZoom: source.viewZoom || 1,
-            yaw: source.yaw,
-            pitch: source.pitch,
-            perspective: true,
-            eyeX: source.eyeX,
-            eyeY: source.eyeY,
-            eyeZ: source.eyeZ,
-            walls: [],
-            windows: [],
-            doors: [],
-            floors: source.floors || [defaultFloorRect(source.sceneSize || 1)]
-        };
+        var source = model && typeof model === "object" ? cloneJson(model) : defaultModel();
+        normalizeSceneModel(source);
+        return source;
+    }
+
+    // Import: always keep geometry (including walls). kindHint is informational only.
+    function prepareImportedSceneModel(model, kindHint) {
+        var prepared = model && typeof model === "object" ? cloneJson(model) : defaultModel();
+        normalizeSceneModel(prepared);
+        return prepared;
     }
 
     function planScaleFor(sceneSize, editZoom) {
@@ -3347,8 +3364,8 @@
             return null;
         }
         var size = normalizeScenePinSize(pin);
-        // sizeW/sizeH are both fractions of frame WIDTH so box aspect = sizeW/sizeH
-        // (independent of viewport / bake image aspect). Height via aspect-ratio.
+        // sizeW/sizeH are both fractions of the bake-image content box WIDTH
+        // (overlays match that box). Height via aspect-ratio = sizeW/sizeH.
         pinEl.style.width = (size.w * 100) + "%";
         pinEl.style.height = "auto";
         pinEl.style.aspectRatio = String(size.w) + " / " + String(size.h);
@@ -3361,6 +3378,117 @@
             pin.sizeH = size.h;
         }
         return size;
+    }
+
+    /**
+     * object-fit: contain content box of img inside frame (letterbox-aware).
+     * left/top/width/height are frame-local CSS pixels; *Pct are % of frame size.
+     */
+    function containContentBox(frame, img) {
+        var frameRect = frame && frame.getBoundingClientRect
+            ? frame.getBoundingClientRect()
+            : { left: 0, top: 0, width: 0, height: 0 };
+        var fw = frameRect.width;
+        var fh = frameRect.height;
+        var nw = img && img.naturalWidth ? img.naturalWidth : 0;
+        var nh = img && img.naturalHeight ? img.naturalHeight : 0;
+        if (!(fw > 0) || !(fh > 0)) {
+            return {
+                frameLeft: frameRect.left,
+                frameTop: frameRect.top,
+                left: 0,
+                top: 0,
+                width: 0,
+                height: 0,
+                leftPct: 0,
+                topPct: 0,
+                widthPct: 100,
+                heightPct: 100
+            };
+        }
+        if (!(nw > 0) || !(nh > 0)) {
+            return {
+                frameLeft: frameRect.left,
+                frameTop: frameRect.top,
+                left: 0,
+                top: 0,
+                width: fw,
+                height: fh,
+                leftPct: 0,
+                topPct: 0,
+                widthPct: 100,
+                heightPct: 100
+            };
+        }
+        var scale = Math.min(fw / nw, fh / nh);
+        var contentW = nw * scale;
+        var contentH = nh * scale;
+        var left = (fw - contentW) / 2;
+        var top = (fh - contentH) / 2;
+        return {
+            frameLeft: frameRect.left,
+            frameTop: frameRect.top,
+            left: left,
+            top: top,
+            width: contentW,
+            height: contentH,
+            leftPct: (left / fw) * 100,
+            topPct: (top / fh) * 100,
+            widthPct: (contentW / fw) * 100,
+            heightPct: (contentH / fh) * 100
+        };
+    }
+
+    function layoutSceneOverlaysToImage(frame, img, overlays) {
+        if (!frame || !overlays) {
+            return null;
+        }
+        var box = containContentBox(frame, img);
+        overlays.style.left = box.leftPct + "%";
+        overlays.style.top = box.topPct + "%";
+        overlays.style.width = box.widthPct + "%";
+        overlays.style.height = box.heightPct + "%";
+        overlays.style.right = "auto";
+        overlays.style.bottom = "auto";
+        return box;
+    }
+
+    function normFromClientInContentBox(clientX, clientY, frame, img) {
+        var box = containContentBox(frame, img);
+        if (!(box.width > 0) || !(box.height > 0)) {
+            return { x: 0, y: 0 };
+        }
+        return {
+            x: clamp01((clientX - (box.frameLeft + box.left)) / box.width),
+            y: clamp01((clientY - (box.frameTop + box.top)) / box.height)
+        };
+    }
+
+    function bindSceneOverlayLayout(frame, img, overlays) {
+        if (!frame || !overlays) {
+            return;
+        }
+        function sync() {
+            layoutSceneOverlaysToImage(frame, img, overlays);
+        }
+        sync();
+        if (img) {
+            if (img._sceneOverlayLoadSync) {
+                img.removeEventListener("load", img._sceneOverlayLoadSync);
+            }
+            img._sceneOverlayLoadSync = sync;
+            img.addEventListener("load", sync);
+        }
+        if (typeof ResizeObserver !== "undefined") {
+            if (frame._sceneOverlayRo) {
+                try {
+                    frame._sceneOverlayRo.disconnect();
+                } catch (ignore) {
+                }
+            }
+            frame._sceneOverlayRo = new ResizeObserver(sync);
+            frame._sceneOverlayRo.observe(frame);
+        }
     }
 
     function paintSceneCellPins(overlays, pins, options) {
@@ -3455,6 +3583,7 @@
                 if (img.getAttribute("src") !== bakeSrc) {
                     img.src = bakeSrc;
                 }
+                bindSceneOverlayLayout(frame, img, overlays);
                 paintSceneCellPins(overlays, view.pins || [], options);
             })
             .catch(function () {
@@ -3490,6 +3619,9 @@
         defaultModel: defaultModel,
         isSceneModelEmpty: isSceneModelEmpty,
         schemeModelFrom: schemeModelFrom,
+        modelHasWallGeometry: modelHasWallGeometry,
+        prepareImportedSceneModel: prepareImportedSceneModel,
+        normalizeSceneModel: normalizeSceneModel,
         SceneDesigner: SceneDesigner,
         mountSceneCell: mountSceneCell,
         takeSceneCellHost: takeSceneCellHost,
@@ -3498,6 +3630,10 @@
         clamp01: clamp01,
         defaultScenePinSize: defaultScenePinSize,
         normalizeScenePinSize: normalizeScenePinSize,
-        applyScenePinBoxSize: applyScenePinBoxSize
+        applyScenePinBoxSize: applyScenePinBoxSize,
+        containContentBox: containContentBox,
+        layoutSceneOverlaysToImage: layoutSceneOverlaysToImage,
+        normFromClientInContentBox: normFromClientInContentBox,
+        bindSceneOverlayLayout: bindSceneOverlayLayout
     };
 })(window);

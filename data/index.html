@@ -2857,6 +2857,7 @@
                     loadConsoles();
                     loadAutomations();
                     loadCameras();
+                    loadScenes();
                 });
             }).catch(function (error) {
                 if (restoreError) {
@@ -4744,7 +4745,9 @@
                 + (interactive ? " console-binary-icon--control" : "")
                 + toneClass
                 + (iconOptions.disabled ? " is-disabled" : "");
-            wrap.style.setProperty("--console-icon-scale", String(normalizeIconScale(binding && binding.iconScale)));
+            var iconScaleValue = normalizeIconScale(binding && binding.iconScale);
+            wrap.style.setProperty("--console-icon-scale", String(iconScaleValue));
+            wrap.setAttribute("data-binding-scale", String(iconScaleValue));
             if (binding && binding.iconOnColor) {
                 wrap.style.setProperty("--console-icon-on-color", String(binding.iconOnColor));
             }
@@ -12249,13 +12252,19 @@
             return sceneDesigner;
         }
 
+        function currentSceneModelForIo() {
+            if (sceneDesigner && typeof sceneDesigner.getModel === "function") {
+                return sceneDesigner.getModel();
+            }
+            return sceneDraftModel || (window.SceneKit ? SceneKit.defaultModel() : null);
+        }
+
         function syncSceneGeometryImportButton() {
-            var importBtn = document.getElementById("sceneGeometryImportBtn");
+            var importBtn = document.getElementById("sceneBindImportBtn");
             if (!importBtn || !window.SceneKit) {
                 return;
             }
-            var designer = sceneDesigner;
-            var model = designer && designer.model ? designer.model : null;
+            var model = currentSceneModelForIo();
             var empty = typeof SceneKit.isSceneModelEmpty === "function"
                 ? SceneKit.isSceneModelEmpty(model)
                 : true;
@@ -12279,43 +12288,102 @@
             URL.revokeObjectURL(objectUrl);
         }
 
+        function cloneSceneModelForIo(model) {
+            var copy = JSON.parse(JSON.stringify(model || {}));
+            if (typeof SceneKit.normalizeSceneModel === "function") {
+                SceneKit.normalizeSceneModel(copy);
+            }
+            return copy;
+        }
+
         function exportSceneGeometryFull() {
-            var designer = ensureSceneDesigner();
-            if (!designer) {
+            var model = currentSceneModelForIo();
+            if (!model) {
                 return;
             }
+            // Full scene = scheme (house geometry) + pin bindings.
+            var fullModel = cloneSceneModelForIo(model);
             downloadSceneGeometryJson({
                 format: "home-scene",
                 version: 1,
                 kind: "full",
-                sceneModel: designer.getModel()
+                sceneModel: fullModel,
+                pins: Array.isArray(sceneEditorPins)
+                    ? JSON.parse(JSON.stringify(sceneEditorPins))
+                    : []
             }, "scene-full.json");
         }
 
         function exportSceneGeometryScheme() {
-            var designer = ensureSceneDesigner();
-            if (!designer || !window.SceneKit || typeof SceneKit.schemeModelFrom !== "function") {
+            var model = currentSceneModelForIo();
+            if (!model || !window.SceneKit || typeof SceneKit.schemeModelFrom !== "function") {
                 return;
             }
+            // Scheme = house geometry + camera (floors, walls, windows, doors). No pins.
             downloadSceneGeometryJson({
                 format: "home-scene",
                 version: 1,
                 kind: "scheme",
-                sceneModel: SceneKit.schemeModelFrom(designer.getModel())
+                sceneModel: SceneKit.schemeModelFrom(model)
             }, "scene-scheme.json");
         }
 
+        function bakeSceneDraftAfterImport() {
+            var errorLine = document.getElementById("sceneDialogError");
+            if (!window.SceneKit || typeof SceneKit.loadThreeJs !== "function") {
+                return Promise.reject(new Error("Scene kit unavailable"));
+            }
+            return SceneKit.loadThreeJs().then(function () {
+                var designer = ensureSceneDesigner();
+                if (!designer) {
+                    throw new Error("Designer unavailable");
+                }
+                designer.setModel(sceneDraftModel || SceneKit.defaultModel());
+                designer.setViewMode(false);
+                return designer.bakeJpegBlob(0.82).then(function (blob) {
+                    if (!blob) {
+                        throw new Error("Bake failed");
+                    }
+                    sceneDraftModel = designer.getModel();
+                    revokeScenePendingBakeUrl();
+                    scenePendingBakeBlob = blob;
+                    scenePendingBakeUrl = URL.createObjectURL(blob);
+                    sceneServerHasBake = false;
+                    sceneGeometryDirty = false;
+                    sceneBindDirty = true;
+                    var geoDialog = document.getElementById("sceneGeometryDialog");
+                    if (geoDialog) {
+                        geoDialog.hidden = true;
+                    }
+                    var sceneEditOverlay = document.getElementById("sceneEditDialog");
+                    if (sceneEditOverlay) {
+                        sceneEditOverlay.classList.remove("is-covered");
+                    }
+                    disposeSceneDesigner();
+                    updateSceneBindPreview();
+                    syncSceneGeometryImportButton();
+                });
+            }).catch(function (bakeError) {
+                disposeSceneDesigner();
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = bakeError && bakeError.message
+                        ? ("Import ok; bake failed: " + bakeError.message)
+                        : "Import ok; bake failed";
+                }
+            });
+        }
+
         function chooseSceneGeometryImportFile() {
-            var importBtn = document.getElementById("sceneGeometryImportBtn");
+            var importBtn = document.getElementById("sceneBindImportBtn");
             if (importBtn && importBtn.disabled) {
                 return;
             }
-            var designer = ensureSceneDesigner();
-            if (!designer || !window.SceneKit || !SceneKit.isSceneModelEmpty(designer.getModel())) {
+            if (!window.SceneKit || !SceneKit.isSceneModelEmpty(currentSceneModelForIo())) {
                 syncSceneGeometryImportButton();
                 return;
             }
-            var fileInput = document.getElementById("sceneGeometryImportFile");
+            var fileInput = document.getElementById("sceneBindImportFile");
             if (!fileInput) {
                 return;
             }
@@ -12324,18 +12392,20 @@
         }
 
         function detectSceneImportKind(payload, model) {
-            if (payload && (payload.kind === "full" || payload.kind === "scheme")) {
-                return payload.kind;
-            }
             if (!model || typeof model !== "object") {
                 return null;
             }
-            if ((model.walls && model.walls.length)
-                || (model.windows && model.windows.length)
-                || (model.doors && model.doors.length)) {
+            if (payload && (payload.kind === "full" || payload.kind === "scheme")) {
+                return payload.kind;
+            }
+            // Legacy files without kind: pins ⇒ full scene, else scheme (geometry).
+            if (payload && Array.isArray(payload.pins)) {
                 return "full";
             }
-            if (Array.isArray(model.floors)) {
+            if (Array.isArray(model.floors)
+                || (model.walls && model.walls.length)
+                || (model.windows && model.windows.length)
+                || (model.doors && model.doors.length)) {
                 return "scheme";
             }
             return null;
@@ -12347,12 +12417,11 @@
             if (fileInput) {
                 fileInput.value = "";
             }
-            var designer = ensureSceneDesigner();
-            var errorLine = document.getElementById("sceneGeometryError");
-            if (!designer || !file || !window.SceneKit) {
+            var errorLine = document.getElementById("sceneDialogError");
+            if (!file || !window.SceneKit) {
                 return;
             }
-            if (!SceneKit.isSceneModelEmpty(designer.getModel())) {
+            if (!SceneKit.isSceneModelEmpty(currentSceneModelForIo())) {
                 syncSceneGeometryImportButton();
                 return;
             }
@@ -12370,20 +12439,38 @@
                     if (!model || !kind) {
                         throw new Error("Invalid scene JSON");
                     }
-                    if (kind === "scheme") {
-                        model = SceneKit.schemeModelFrom(model);
+                    if (typeof SceneKit.prepareImportedSceneModel === "function") {
+                        model = SceneKit.prepareImportedSceneModel(model, kind);
+                    } else if (typeof SceneKit.normalizeSceneModel === "function") {
+                        model = SceneKit.normalizeSceneModel(JSON.parse(JSON.stringify(model)));
                     }
-                    designer.setModel(model);
-                    designer.setViewMode(false);
+                    sceneDraftModel = model;
+                    // Full scene import restores pin bindings; scheme is geometry only.
+                    if (kind === "full" && payload && Array.isArray(payload.pins)) {
+                        sceneEditorPins = JSON.parse(JSON.stringify(payload.pins));
+                    } else if (kind === "full" && !payload.pins) {
+                        sceneEditorPins = [];
+                    }
+                    sceneSelectedPinIndex = -1;
+                    if (sceneDesigner && typeof sceneDesigner.setModel === "function") {
+                        sceneDesigner.setModel(model);
+                        sceneDesigner.setViewMode(false);
+                        syncSceneGeometryToolButtons();
+                        syncSceneFloorColorPicker();
+                        syncSceneWallThicknessInput();
+                        syncSceneWallHeightInput();
+                    }
+                    revokeScenePendingBakeUrl();
+                    scenePendingBakeBlob = null;
+                    sceneServerHasBake = false;
                     sceneGeometryDirty = true;
+                    sceneBindDirty = true;
                     if (errorLine) {
                         errorLine.hidden = true;
                     }
-                    syncSceneGeometryToolButtons();
-                    syncSceneFloorColorPicker();
-                    syncSceneWallThicknessInput();
-                    syncSceneWallHeightInput();
                     syncSceneGeometryImportButton();
+                    syncSceneBindToolButtons();
+                    bakeSceneDraftAfterImport();
                 } catch (importError) {
                     if (errorLine) {
                         errorLine.hidden = false;
@@ -12448,6 +12535,15 @@
         var sceneBindPinResize = null;
 
         function sceneBindFrameNormFromEvent(event, frame) {
+            var img = document.getElementById("sceneBindImage");
+            if (typeof SceneKit.normFromClientInContentBox === "function") {
+                return SceneKit.normFromClientInContentBox(
+                    event.clientX,
+                    event.clientY,
+                    frame,
+                    img
+                );
+            }
             var rect = frame.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) {
                 return { x: 0, y: 0 };
@@ -12493,6 +12589,9 @@
             frame.hidden = false;
             if (img.getAttribute("src") !== previewUrl) {
                 img.src = previewUrl;
+            }
+            if (typeof SceneKit.bindSceneOverlayLayout === "function") {
+                SceneKit.bindSceneOverlayLayout(frame, img, overlays);
             }
             overlays.innerHTML = "";
             sceneEditorPins.forEach(function (pin, index) {
@@ -12664,13 +12763,19 @@
                         && event.pointerId !== sceneBindPinResize.pointerId) {
                         return;
                     }
-                    var rect = frame.getBoundingClientRect();
-                    if (!(rect.width > 0) || !(rect.height > 0)) {
+                    var img = document.getElementById("sceneBindImage");
+                    var box = typeof SceneKit.containContentBox === "function"
+                        ? SceneKit.containContentBox(frame, img)
+                        : null;
+                    var baseW = box && box.width > 0
+                        ? box.width
+                        : frame.getBoundingClientRect().width;
+                    if (!(baseW > 0)) {
                         return;
                     }
-                    // Both sizeW and sizeH are fractions of frame width (shared base).
-                    var dx = (event.clientX - sceneBindPinResize.startX) / rect.width;
-                    var dy = (event.clientY - sceneBindPinResize.startY) / rect.width;
+                    // Both sizeW and sizeH are fractions of bake-image content width.
+                    var dx = (event.clientX - sceneBindPinResize.startX) / baseW;
+                    var dy = (event.clientY - sceneBindPinResize.startY) / baseW;
                     var edgeId = sceneBindPinResize.edge;
                     var nextW = sceneBindPinResize.startW;
                     var nextH = sceneBindPinResize.startH;
@@ -12754,6 +12859,7 @@
             sceneDraftModel = SceneKit.defaultModel();
             updateSceneBindPreview();
             syncSceneBindToolButtons();
+            syncSceneGeometryImportButton();
             if (!sceneDialogIsEdit) {
                 return;
             }
@@ -12772,6 +12878,7 @@
                     sceneEditorPins = Array.isArray(scene.pins) ? scene.pins : [];
                     sceneServerHasBake = !!scene.hasBake;
                     updateSceneBindPreview();
+                    syncSceneGeometryImportButton();
                 })
                 .catch(function (error) {
                     document.getElementById("sceneDialogError").hidden = false;
@@ -12805,12 +12912,9 @@
             if (!frame || frame.hidden) {
                 return;
             }
-            var rect = frame.getBoundingClientRect();
-            if (rect.width <= 0 || rect.height <= 0) {
-                return;
-            }
-            var x = SceneKit.clamp01((event.clientX - rect.left) / rect.width);
-            var y = SceneKit.clamp01((event.clientY - rect.top) / rect.height);
+            var norm = sceneBindFrameNormFromEvent(event, frame);
+            var x = norm.x;
+            var y = norm.y;
             if (sceneBindTool === "add-pin") {
                 scenePendingPin = {
                     id: "pin-" + Date.now().toString(16),
@@ -13309,25 +13413,91 @@
             }
             var reader = new FileReader();
             reader.onload = function () {
-                var text = String(reader.result || "");
-                fetch("/api/scenes/restore", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: text
-                }).then(function (response) {
-                    return response.text().then(function (bodyText) {
-                        if (!response.ok) {
-                            throw new Error(bodyText || ("HTTP " + response.status));
-                        }
-                    });
-                }).then(function () {
-                    setScenesSuccess("Scenes imported");
-                    loadScenes();
-                }).catch(function (error) {
-                    setScenesError(error && error.message ? error.message : "Import failed");
-                });
+                restoreScenesFromText(String(reader.result || ""), false);
             };
             reader.readAsText(file);
+        }
+
+        function chooseScenesImportOnlyNewFile() {
+            setMaintenanceStoreError("");
+            setScenesError("");
+            setScenesSuccess("");
+            var status = document.getElementById("maintenanceScenesStatus");
+            if (status) {
+                status.hidden = true;
+                status.textContent = "";
+            }
+            var input = document.getElementById("scenesImportOnlyNewFile");
+            if (input) {
+                input.value = "";
+                input.click();
+            }
+        }
+
+        function onScenesImportOnlyNewFileSelected(event) {
+            var file = event && event.target && event.target.files && event.target.files[0];
+            if (!file) {
+                return;
+            }
+            var reader = new FileReader();
+            reader.onload = function () {
+                restoreScenesFromText(String(reader.result || ""), true);
+            };
+            reader.readAsText(file);
+        }
+
+        function restoreScenesFromText(text, onlyNew) {
+            var path = onlyNew ? "/api/scenes/restore?onlyNew=1" : "/api/scenes/restore";
+            fetch(path, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: text
+            }).then(function (response) {
+                return response.text().then(function (bodyText) {
+                    if (!response.ok) {
+                        throw new Error(bodyText || ("HTTP " + response.status));
+                    }
+                    return bodyText;
+                });
+            }).then(function (bodyText) {
+                if (onlyNew) {
+                    var added = 0;
+                    var skipped = 0;
+                    var full = false;
+                    try {
+                        var parsed = JSON.parse(bodyText || "{}");
+                        added = parsed.added | 0;
+                        skipped = parsed.skipped | 0;
+                        full = !!parsed.full;
+                    } catch (ignore) {
+                    }
+                    var message = "Imported " + added + " new scene(s), skipped " + skipped;
+                    if (full) {
+                        message += " (store full)";
+                    }
+                    setScenesSuccess(message);
+                    setMaintenanceStoreError("");
+                    var status = document.getElementById("maintenanceScenesStatus");
+                    if (status) {
+                        status.hidden = false;
+                        status.textContent = message;
+                    }
+                } else {
+                    setScenesSuccess("Scenes imported");
+                }
+                loadScenes();
+            }).catch(function (error) {
+                var message = error && error.message ? error.message : "Import failed";
+                setScenesError(message);
+                if (onlyNew) {
+                    setMaintenanceStoreError(message);
+                    var statusFail = document.getElementById("maintenanceScenesStatus");
+                    if (statusFail) {
+                        statusFail.hidden = true;
+                        statusFail.textContent = "";
+                    }
+                }
+            });
         }
 
         function setCamerasSuccess(message) {
@@ -15223,9 +15393,9 @@
                     }
                     var icons = bodyEl.querySelectorAll(".console-binary-icon");
                     var iconIndex;
-                    // Size under cell bounds; MDI glyphs can extend past the em box (e.g. mdi:engine).
+                    // Fit-to-cell base (scale=1), then multiply by binding Icon scale.
                     var iconFit = Math.max(16, Math.min(fit.fitW, fit.fitH) * 0.7);
-                    var iconScale = Math.max(0.5, Math.min(4, iconFit / 32));
+                    var fitBaseScale = Math.max(0.5, Math.min(4, iconFit / 32));
                     for (iconIndex = 0; iconIndex < icons.length; iconIndex++) {
                         var iconNode = icons[iconIndex];
                         var bindingScaleNode = iconNode.closest
@@ -15236,7 +15406,7 @@
                                 ? bindingScaleNode.getAttribute("data-binding-scale")
                                 : 1
                         );
-                        // Scene pins: sizeW/sizeH are fractions of frame width (aspect via ratio).
+                        // Scene pins: outline sizeW/sizeH only — do not apply Icon scale.
                         if (iconNode.closest && iconNode.closest(".scene-cell-pin, .scene-bind-pin")) {
                             iconNode.style.minWidth = "0";
                             iconNode.style.minHeight = "0";
@@ -15250,12 +15420,13 @@
                             }
                             continue;
                         }
-                        (function (iconWrap, maxW, maxH, scale) {
-                            iconWrap.style.setProperty("--console-icon-scale", String(scale));
+                        (function (iconWrap, maxW, maxH, fitBase, bindScale) {
+                            var combined = fitBase * bindScale;
+                            iconWrap.style.setProperty("--console-icon-scale", String(combined));
                             iconWrap.style.minWidth = "0";
                             iconWrap.style.minHeight = "0";
-                            iconWrap.style.maxWidth = "100%";
-                            iconWrap.style.maxHeight = "100%";
+                            iconWrap.style.maxWidth = "none";
+                            iconWrap.style.maxHeight = "none";
                             var glyph = iconWrap.querySelector(".mdi");
                             if (glyph) {
                                 glyph.style.transformOrigin = "center center";
@@ -15268,13 +15439,17 @@
                                 if (!(glyphW > 0 && glyphH > 0)) {
                                     return;
                                 }
-                                var fitScale = Math.min(1, (maxW * 0.85) / glyphW, (maxH * 0.85) / glyphH);
+                                // Soft MDI em-box trim against scale-relative allowance so
+                                // Icon scale is not cancelled by a hard cell clamp.
+                                var allowW = maxW * 0.85 * bindScale;
+                                var allowH = maxH * 0.85 * bindScale;
+                                var overflowFit = Math.min(1, allowW / glyphW, allowH / glyphH);
                                 target.style.transformOrigin = "center center";
-                                target.style.transform = fitScale < 0.999
-                                    ? ("scale(" + String(fitScale) + ")")
+                                target.style.transform = overflowFit < 0.999
+                                    ? ("scale(" + String(overflowFit) + ")")
                                     : "";
                             });
-                        })(iconNode, fit.fitW, fit.fitH, iconScale * bindingScale);
+                        })(iconNode, fit.fitW, fit.fitH, fitBaseScale, bindingScale);
                     }
                 }
                 var gIndex;
@@ -18087,6 +18262,10 @@
             var displayAsIcon = allowsIconStyle && styleValue === "icon";
             setHidden(gaugeGroup, !displayAsGauge);
             setHidden(iconGroup, !displayAsIcon);
+            setHidden(
+                document.getElementById("consoleDeviceIconScaleField"),
+                !displayAsIcon || consoleDeviceDialogScenePin
+            );
             if (displayAsGauge) {
                 ensureConsoleDeviceGaugeAddColorControl();
                 refreshConsoleDeviceLinearStyleField();
@@ -18118,6 +18297,7 @@
                 setHidden(document.getElementById("consoleDeviceViewStyleField"), true);
                 setHidden(document.getElementById("consoleDeviceGaugeGroup"), true);
                 setHidden(document.getElementById("consoleDeviceIconGroup"), true);
+                setHidden(document.getElementById("consoleDeviceIconScaleField"), true);
                 setHidden(document.getElementById("consoleDeviceAsLogicalField"), true);
                 setHidden(document.getElementById("consoleDeviceLogicalThresholdField"), true);
                 updateConsoleDeviceUnitField();
@@ -18640,6 +18820,10 @@
                 if (alignVSelect) {
                     alignVSelect.value = normalizeAlignV(binding.alignV);
                 }
+                var iconScaleInput = document.getElementById("consoleDeviceIconScale");
+                if (iconScaleInput) {
+                    iconScaleInput.value = String(normalizeIconScale(binding.iconScale));
+                }
                 var clusterInput = document.getElementById("consoleDeviceCluster");
                 var attrInput = document.getElementById("consoleDeviceAttr");
                 if (clusterInput) {
@@ -18893,6 +19077,7 @@
             var titlePositionSelect = document.getElementById("consoleDeviceTitlePosition");
             var alignHSelect = document.getElementById("consoleDeviceAlignH");
             var alignVSelect = document.getElementById("consoleDeviceAlignV");
+            var iconScaleInput = document.getElementById("consoleDeviceIconScale");
             body.showTitle = !showTitleCheck || showTitleCheck.checked;
             body.titlePosition = normalizeTitlePosition(
                 titlePositionSelect ? titlePositionSelect.value : "left"
@@ -18901,6 +19086,11 @@
             body.alignV = normalizeAlignV(alignVSelect ? alignVSelect.value : "center");
             if (body.viewStyle === "icon") {
                 body.iconAlign = body.alignH;
+                if (!consoleDeviceDialogScenePin) {
+                    body.iconScale = normalizeIconScale(
+                        iconScaleInput ? iconScaleInput.value : 1
+                    );
+                }
             }
             return body;
         }
@@ -20272,7 +20462,7 @@
                         <p id="maintenanceStoreError" class="save-error" hidden></p>
                         <div id="maintenanceSettingsCard" class="upload-card">
                             <h3 class="upload-title">Settings</h3>
-                            <p class="field-hint">Export MQTT, Zigbee, hardware, devices, users, consoles, and automations. Restore replaces those groups when present in the file. Wi-Fi and e-mail account settings are never included.</p>
+                            <p class="field-hint">Export MQTT, Zigbee, hardware, devices, users, consoles, automations, cameras, and scenes. Restore replaces those groups when present in the file. Wi-Fi is never included. E-mail password is exported empty (restore keeps the current password when blank).</p>
                             <p id="settingsRestoreError" class="save-error" hidden></p>
                             <input id="settingsRestoreFile" type="file" accept="application/json,.json" hidden onchange="onSettingsRestoreFileSelected(event)">
                             <div class="dialog-actions">
@@ -20302,6 +20492,17 @@
                             <div class="dialog-actions">
                                 <button type="button" class="btn btn-secondary btn-inline" onclick="exportAllAutomations()">Export</button>
                                 <button type="button" class="btn btn-primary btn-inline" onclick="chooseAutomationsRestoreFile(false)">Restore</button>
+                            </div>
+                        </div>
+                        <div class="upload-card">
+                            <h3 class="upload-title">Scenes</h3>
+                            <p class="field-hint">Export all scenes (model and pins; bake JPEGs stay on the device). Import only new adds scenes whose id is not already stored and leaves existing scenes unchanged.</p>
+                            <p id="maintenanceScenesStatus" class="field-hint" hidden></p>
+                            <input id="scenesImportOnlyNewFile" type="file" accept="application/json,.json" hidden
+                                   onchange="onScenesImportOnlyNewFileSelected(event)">
+                            <div class="dialog-actions">
+                                <button type="button" class="btn btn-secondary btn-inline" onclick="exportAllScenes()">Export</button>
+                                <button type="button" class="btn btn-primary btn-inline" onclick="chooseScenesImportOnlyNewFile()">Import only new</button>
                             </div>
                         </div>
                         <div class="upload-card">
@@ -20646,7 +20847,7 @@
         <div id="settingsRestoreConfirmDialog" class="dialog-overlay dialog-overlay-front" hidden>
             <div class="dialog-panel" role="dialog" aria-label="Confirm restore settings">
                 <h3 class="upload-title">Restore settings</h3>
-                <p class="field-hint">MQTT, Zigbee, hardware, devices, users, consoles, automations, and cameras will match this file when those sections are present (cameras include username and password). Devices, consoles, automations, or cameras missing from the file are removed for those sections. Wi-Fi is not changed. Continue?</p>
+                <p class="field-hint">MQTT, Zigbee, hardware, devices, users, consoles, automations, cameras, and scenes will match this file when those sections are present (cameras include username and password). Devices, consoles, automations, cameras, or scenes missing from the file are removed for those sections. Wi-Fi is not changed. Continue?</p>
                 <div class="dialog-actions">
                     <button type="button" class="btn btn-primary" onclick="confirmSettingsRestore()">Restore</button>
                     <button type="button" class="btn btn-secondary" onclick="closeSettingsRestoreConfirmDialog()">Cancel</button>
@@ -20979,7 +21180,17 @@
                 <div id="sceneBindOverlays" class="scene-bind-overlays"></div>
             </div>
         </div>
+        <input id="sceneBindImportFile" type="file" accept="application/json,.json" hidden
+               onchange="onSceneGeometryImportFileSelected(event)">
         <div class="dialog-actions">
+            <button type="button" class="btn btn-secondary btn-inline"
+                    title="Full scene: house scheme (floors/walls/windows/doors) plus pin bindings"
+                    onclick="exportSceneGeometryFull()">Export</button>
+            <button type="button" class="btn btn-secondary btn-inline"
+                    title="Scheme only: house geometry and camera (floors, walls, windows, doors) — no pins"
+                    onclick="exportSceneGeometryScheme()">Export scheme</button>
+            <button type="button" id="sceneBindImportBtn" class="btn btn-secondary btn-inline"
+                    onclick="chooseSceneGeometryImportFile()">Import</button>
             <button type="button" class="btn btn-primary" onclick="saveSceneDialog()">Save</button>
             <button type="button" id="sceneDeleteBtn" class="btn btn-secondary" hidden onclick="deleteSceneDialog()">Delete</button>
             <button type="button" class="btn btn-secondary" onclick="requestCloseSceneDialog()">Cancel</button>
@@ -21041,13 +21252,7 @@
         <div class="scene-designer-canvas-wrap">
             <canvas id="sceneGeometryCanvas" class="scene-designer-edit-canvas"></canvas>
         </div>
-        <input id="sceneGeometryImportFile" type="file" accept="application/json,.json" hidden
-               onchange="onSceneGeometryImportFileSelected(event)">
         <div class="dialog-actions">
-            <button type="button" class="btn btn-secondary btn-inline" onclick="exportSceneGeometryFull()">Export</button>
-            <button type="button" class="btn btn-secondary btn-inline" onclick="exportSceneGeometryScheme()">Export scheme</button>
-            <button type="button" id="sceneGeometryImportBtn" class="btn btn-secondary btn-inline"
-                    onclick="chooseSceneGeometryImportFile()">Import</button>
             <button type="button" class="btn btn-primary" onclick="saveSceneGeometryTemp()">Save</button>
             <button type="button" class="btn btn-secondary" onclick="requestCloseSceneGeometryEditor()">Cancel</button>
         </div>
@@ -21194,6 +21399,10 @@
             </div>
             <div id="consoleDeviceIconGroup" class="console-icon-config" hidden>
                 <p class="field-hint">Icon (Material Design Icons — Home Assistant / Pictogrammers)</p>
+                <div id="consoleDeviceIconScaleField" class="console-binding-general-row">
+                    <label for="consoleDeviceIconScale">Icon scale</label>
+                    <input id="consoleDeviceIconScale" type="number" min="0.1" step="0.1" value="1">
+                </div>
                 <div id="consoleDeviceIconGrid" class="console-icon-grid"></div>
                 <div class="console-binding-general-row">
                     <span>ON color</span>

@@ -358,6 +358,10 @@ void ConsoleStore::appendBindingLayoutJson(PsramJsonBuffer &json, const ConsoleB
             appendJsonEscaped(json, binding->iconCfg->offColor, CONSOLE_GAUGE_COLOR_MAX);
             json += "\"";
         }
+        if (binding->iconCfg->iconScale > 0.0f && binding->iconCfg->iconScale != 1.0f) {
+            json += ",\"iconScale\":";
+            json += String(binding->iconCfg->iconScale, 4);
+        }
     }
 }
 
@@ -830,8 +834,20 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         if (!extractJsonInt(object.c_str(), "attrId", attrValue)) {
             attrValue = -1;
         }
-        // Scene pin size is sizeW/sizeH on pin JSON; no dialog SCALE on bindings.
+        // Binding Icon scale (dialog). Scene pins use sizeW/sizeH instead — UI omits iconScale there.
         double scaleValue = 1.0;
+        double iconScaleValue = 1.0;
+        if (!extractJsonDouble(object.c_str(), "iconScale", iconScaleValue)
+            || iconScaleValue <= 0.0
+            || iconScaleValue != iconScaleValue) {
+            // Legacy: some clients stored the same factor as "scale".
+            if (!extractJsonDouble(object.c_str(), "scale", iconScaleValue)
+                || iconScaleValue <= 0.0
+                || iconScaleValue != iconScaleValue) {
+                iconScaleValue = 1.0;
+            }
+        }
+        scaleValue = iconScaleValue;
         if (!extractJsonBool(object.c_str(), "showTitle", showTitleValue)) {
             showTitleValue = true;
         }
@@ -1023,7 +1039,10 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
                 return false;
             }
             memset(binding->iconCfg, 0, sizeof(*binding->iconCfg));
-            binding->iconCfg->iconScale = 1.0f;
+            binding->iconCfg->iconScale = (float)iconScaleValue;
+            if (!(binding->iconCfg->iconScale > 0.0f)) {
+                binding->iconCfg->iconScale = 1.0f;
+            }
             binding->iconCfg->iconAlign = binding->alignH;
             if (iconText.length() > 0) {
                 binding->iconCfg->icon =

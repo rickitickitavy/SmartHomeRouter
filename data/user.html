@@ -2398,7 +2398,9 @@
                 + (interactive ? " console-binary-icon--control" : "")
                 + toneClass
                 + (iconOptions.disabled ? " is-disabled" : "");
-            wrap.style.setProperty("--console-icon-scale", String(normalizeIconScale(binding && binding.iconScale)));
+            var iconScaleValue = normalizeIconScale(binding && binding.iconScale);
+            wrap.style.setProperty("--console-icon-scale", String(iconScaleValue));
+            wrap.setAttribute("data-binding-scale", String(iconScaleValue));
             if (binding && binding.iconOnColor) {
                 wrap.style.setProperty("--console-icon-on-color", String(binding.iconOnColor));
             }
@@ -3129,9 +3131,9 @@
                     }
                     var icons = bodyEl.querySelectorAll(".console-binary-icon");
                     var iconIndex;
-                    // Size under cell bounds; MDI glyphs can extend past the em box (e.g. mdi:engine).
+                    // Fit-to-cell base (scale=1), then multiply by binding Icon scale.
                     var iconFit = Math.max(16, Math.min(fit.fitW, fit.fitH) * 0.7);
-                    var iconScale = Math.max(0.5, Math.min(4, iconFit / 32));
+                    var fitBaseScale = Math.max(0.5, Math.min(4, iconFit / 32));
                     for (iconIndex = 0; iconIndex < icons.length; iconIndex++) {
                         var iconNode = icons[iconIndex];
                         var bindingScaleNode = iconNode.closest
@@ -3142,7 +3144,7 @@
                                 ? bindingScaleNode.getAttribute("data-binding-scale")
                                 : 1
                         );
-                        // Scene pins: sizeW/sizeH are fractions of frame width (aspect via ratio).
+                        // Scene pins: outline sizeW/sizeH only — do not apply Icon scale.
                         if (iconNode.closest && iconNode.closest(".scene-cell-pin, .scene-bind-pin")) {
                             iconNode.style.minWidth = "0";
                             iconNode.style.minHeight = "0";
@@ -3156,12 +3158,13 @@
                             }
                             continue;
                         }
-                        (function (iconWrap, maxW, maxH, scale) {
-                            iconWrap.style.setProperty("--console-icon-scale", String(scale));
+                        (function (iconWrap, maxW, maxH, fitBase, bindScale) {
+                            var combined = fitBase * bindScale;
+                            iconWrap.style.setProperty("--console-icon-scale", String(combined));
                             iconWrap.style.minWidth = "0";
                             iconWrap.style.minHeight = "0";
-                            iconWrap.style.maxWidth = "100%";
-                            iconWrap.style.maxHeight = "100%";
+                            iconWrap.style.maxWidth = "none";
+                            iconWrap.style.maxHeight = "none";
                             var glyph = iconWrap.querySelector(".mdi");
                             if (glyph) {
                                 glyph.style.transformOrigin = "center center";
@@ -3174,13 +3177,17 @@
                                 if (!(glyphW > 0 && glyphH > 0)) {
                                     return;
                                 }
-                                var fitScale = Math.min(1, (maxW * 0.85) / glyphW, (maxH * 0.85) / glyphH);
+                                // Soft MDI em-box trim against scale-relative allowance so
+                                // Icon scale is not cancelled by a hard cell clamp.
+                                var allowW = maxW * 0.85 * bindScale;
+                                var allowH = maxH * 0.85 * bindScale;
+                                var overflowFit = Math.min(1, allowW / glyphW, allowH / glyphH);
                                 target.style.transformOrigin = "center center";
-                                target.style.transform = fitScale < 0.999
-                                    ? ("scale(" + String(fitScale) + ")")
+                                target.style.transform = overflowFit < 0.999
+                                    ? ("scale(" + String(overflowFit) + ")")
                                     : "";
                             });
-                        })(iconNode, fit.fitW, fit.fitH, iconScale * bindingScale);
+                        })(iconNode, fit.fitW, fit.fitH, fitBaseScale, bindingScale);
                     }
                 }
                 var gIndex;

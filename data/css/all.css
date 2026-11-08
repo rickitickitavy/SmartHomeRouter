@@ -5156,13 +5156,14 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 }
 
 .scene-bind-overlays {
+    /* left/top/width/height set by SceneKit.layoutSceneOverlaysToImage (contain box). */
     position: absolute;
     inset: 0;
     pointer-events: none;
 }
 
 .scene-bind-pin {
-    /* Width % + aspect-ratio from sizeW/sizeH (both vs frame width) — not viewport aspect. */
+    /* Width % + aspect-ratio from sizeW/sizeH (both vs content-box width). */
     position: absolute;
     box-sizing: border-box;
     max-width: none;
@@ -5296,13 +5297,14 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 }
 
 .scene-cell-overlays {
+    /* left/top/width/height set by SceneKit.layoutSceneOverlaysToImage (contain box). */
     position: absolute;
     inset: 0;
     pointer-events: none;
 }
 
 .scene-cell-pin {
-    /* Width % + aspect-ratio from sizeW/sizeH (both vs frame width) — not viewport aspect. */
+    /* Width % + aspect-ratio from sizeW/sizeH (both vs content-box width). */
     position: absolute;
     box-sizing: border-box;
     max-width: none;
@@ -5352,7 +5354,7 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 }
 
 /*
- * Scene pins fill their saved box. Box width is % of frame width; height from aspect-ratio.
+ * Scene pins fill their saved box. Box width is % of bake-image content width; height from aspect-ratio.
  */
 .console-composite-cell-body .scene-cell-pin .console-device-row,
 .console-composite-cell-body .scene-cell-pin .console-device-row--gauge,
@@ -5391,14 +5393,14 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 .console-composite-cell-body .scene-cell-pin .console-gauge-value-svg,
 .scene-cell-pin .console-gauge-value-svg,
 .scene-bind-pin .console-gauge-value-svg {
-    font-size: clamp(8px, 8cqmin, 22px);
+    font-size: clamp(16px, 16cqmin, 44px);
     font-weight: 700;
 }
 
 .console-composite-cell-body .scene-cell-pin .console-gauge-value,
 .scene-cell-pin .console-gauge-value,
 .scene-bind-pin .console-gauge-value {
-    font-size: clamp(8px, 8cqmin, 22px);
+    font-size: clamp(16px, 16cqmin, 44px);
     font-weight: 700;
 }
 

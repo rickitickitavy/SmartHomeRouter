@@ -788,7 +788,7 @@ When the pointer is over a registered-device row that has type actions, the cons
 - **THEN** **…** is not shown
 
 ### Requirement: Maintenance exports settings without Wi-Fi
-System → Maintenance SHALL show **Export settings** above **Restore settings**. Both SHALL use compact inline buttons, not full-width bars. Export SHALL download a JSON file that includes MQTT settings, Zigbee settings, hardware SPI speed and blue/green LED brightness, the signed-in user’s theme, the persisted device list (same device fields as Devices Export, no live telemetry), the users table, control consoles, automations (persisted fields only, no last-activation or TIMER runtime telemetry), and cameras (same ONVIF fields as Cameras Export, including each camera’s username and password). Each exported user SHALL include user name, added-at, roles including `editConsoles`, `consoles`, `isBlocked`, theme, and password **hash and salt**. The file SHALL NOT contain a plaintext user password. The file SHALL NOT contain a Wi-Fi group (no BSSID, password, MODE, AP IP, hostname, or OTG). Only `isAdmin` SHALL see or use Export settings and Restore settings.
+System → Maintenance SHALL show **Export settings** above **Restore settings**. Both SHALL use compact inline buttons, not full-width bars. Export SHALL download a JSON file that includes MQTT settings, Zigbee settings, hardware SPI speed and blue/green LED brightness, the signed-in user’s theme, the persisted device list (same device fields as Devices Export, no live telemetry), the users table, control consoles, automations (persisted fields only, no last-activation or TIMER runtime telemetry), cameras (same ONVIF fields as Cameras Export, including each camera’s username and password), and scenes (same fields as Scenes store export: id, name, sceneModel, pins, bakePath/hasBake — bake JPEG bytes are not embedded). Each exported user SHALL include user name, added-at, roles including `editConsoles`, `consoles`, `isBlocked`, theme, and password **hash and salt**. The file SHALL NOT contain a plaintext user password. The file SHALL NOT contain a Wi-Fi group (no BSSID, password, MODE, AP IP, hostname, or OTG). Only `isAdmin` SHALL see or use Export settings and Restore settings.
 
 #### Scenario: Export omits Wi-Fi
 - **WHEN** the operator clicks Export settings and the host has Wi-Fi, MQTT, Zigbee, hardware, a saved theme, and at least one registered device
@@ -818,8 +818,12 @@ System → Maintenance SHALL show **Export settings** above **Restore settings**
 - **WHEN** the host has a saved ONVIF camera with username and password and an `isAdmin` operator exports settings
 - **THEN** the JSON `cameras` array includes that camera with the same username and password
 
+#### Scenario: Export includes scenes
+- **WHEN** the host has a saved scene and an `isAdmin` operator exports settings
+- **THEN** the JSON `scenes` array includes that scene’s id, name, sceneModel, and pins
+
 ### Requirement: Maintenance restores settings after confirm
-Restore settings SHALL ask the operator to confirm before applying a file. After confirm, the host SHALL replace MQTT, Zigbee, hardware SPI speed, blue/green LED brightness, and the registered device list from the file. When `ui.theme` is present, the host SHALL apply it to the **signed-in user** only. When a users list is present, the host SHALL replace the users table from that list (hashes and salts, never plaintext passwords). When a consoles list is present, the host SHALL replace control consoles from that list. When an automations list is present, the host SHALL replace automations from that list. When a cameras list is present, the host SHALL replace the camera registry from that list (including ONVIF username and password). The host SHALL leave Wi-Fi unchanged even if the file contains a wifi object. A file that is not valid JSON, or that lacks a usable settings body, SHALL be rejected and SHALL NOT write settings. Only `isAdmin` SHALL restore settings. Devices Export/Restore on the Devices page SHALL remain. A restore file whose `hardware` object lacks brightness fields SHALL keep the host’s current brightness values.
+Restore settings SHALL ask the operator to confirm before applying a file. After confirm, the host SHALL replace MQTT, Zigbee, hardware SPI speed, blue/green LED brightness, and the registered device list from the file. When `ui.theme` is present, the host SHALL apply it to the **signed-in user** only. When a users list is present, the host SHALL replace the users table from that list (hashes and salts, never plaintext passwords). When a consoles list is present, the host SHALL replace control consoles from that list. When an automations list is present, the host SHALL replace automations from that list. When a cameras list is present, the host SHALL replace the camera registry from that list (including ONVIF username and password). When a scenes list is present, the host SHALL replace the scene registry from that list (model and pins; bake JPEGs kept only when id and bakePath still match). The host SHALL leave Wi-Fi unchanged even if the file contains a wifi object. A file that is not valid JSON, or that lacks a usable settings body, SHALL be rejected and SHALL NOT write settings. Only `isAdmin` SHALL restore settings. Devices Export/Restore on the Devices page SHALL remain. A restore file whose `hardware` object lacks brightness fields SHALL keep the host’s current brightness values.
 
 #### Scenario: Confirm then apply
 - **WHEN** the operator chooses Restore settings, selects a valid export file, and confirms
@@ -2147,6 +2151,13 @@ The gateway operator console MUST show a main **Scenes** section when the signed
 #### Scenario: Simple user has no Scenes tab
 - **WHEN** a simple user uses the control page
 - **THEN** there is no Scenes management tab
+
+### Requirement: Maintenance Scenes export and import only new
+System → Maintenance SHALL include a **Scenes** card with **Export** (same JSON as Scenes store export) and **Import only new**. Import only new SHALL POST to `/api/scenes/restore?onlyNew=1`, add scenes whose `id` is not already stored, skip matching ids, and MUST NOT replace or delete existing scenes. Bake JPEG bytes are not in the JSON; imported scenes may need a re-bake when no bake file exists for that id.
+
+#### Scenario: Import only new skips existing id
+- **WHEN** the host already has scene id `kitchen` and the operator imports a file that also contains `kitchen` plus a new id `garage`
+- **THEN** `garage` is added and `kitchen` is left unchanged
 
 ### Requirement: Composite cell can choose scene content
 In the Consoles composite cell editor, content options MUST include Scene. Choosing Scene MUST offer a picker of persisted scenes. Saving MUST store content `scene` and the selected scene id. Preview MUST show the bake when available (display-only).

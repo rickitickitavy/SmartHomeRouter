@@ -53,6 +53,12 @@ public:
     SceneWriteResult deleteById(const char *sceneId);
     SceneWriteResult replaceAllFromJson(const char *arrayJson);
     SceneWriteResult replaceAllFromJson(const String &arrayJson);
+    // Insert scenes whose id is not already stored; skip duplicates. Empty ids get new ids.
+    SceneWriteResult importOnlyNewFromJson(
+        const char *arrayJson,
+        int *addedOut = nullptr,
+        int *skippedOut = nullptr
+    );
 
     SceneWriteResult writeBakeJpeg(const char *sceneId, const uint8_t *data, size_t length);
     bool readBakeJpeg(const char *sceneId, uint8_t **dataOut, size_t *lengthOut) const;
