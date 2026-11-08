@@ -1403,7 +1403,7 @@ The simple-user control page and Place view-mode MUST lay out each widget’s bi
 - **THEN** cells size per the composite size rules and device cells show their bindings
 
 ### Requirement: Binding dialog icon scale
-When View style is Icon, the Consoles binding dialog MUST show an Icon scale numeric field (default `1`). Saving MUST store `iconScale` on the binding. The field MUST be hidden when View style is not Icon.
+When View style is Icon, the Consoles binding dialog MUST show an Icon scale numeric field (default `1`). Saving MUST store `iconScale` on the binding. The field MUST be hidden when View style is not Icon. When the same dialog is opened as a **scene pin** editor, the Icon scale field MUST remain hidden (scene pin size is controlled by outline handles / `sizeW`/`sizeH` only).
 
 #### Scenario: Scale field appears for icon
 - **WHEN** an editor selects View style Icon for an On/Off, binary, or automation binding
@@ -1412,6 +1412,10 @@ When View style is Icon, the Consoles binding dialog MUST show an Icon scale num
 #### Scenario: Save icon scale
 - **WHEN** the editor sets Icon scale to `1.25` and saves
 - **THEN** the binding stores `iconScale` `1.25`
+
+#### Scenario: Scene pin dialog hides Scale
+- **WHEN** the operator opens a scene pin binding dialog with View style Icon
+- **THEN** Icon scale is not shown
 
 ### Requirement: Binding dialog show title and title position
 The Consoles binding dialog MUST show a Show title checkbox for every device and automation binding (default checked). When Show title is checked, the dialog MUST show a Title position select with Left, Right, Top, and Bottom (default Left). Saving MUST store `showTitle` and `titlePosition`. When Show title is unchecked, Title position MAY stay hidden and the saved `titlePosition` MAY keep its last value or default `left`.
