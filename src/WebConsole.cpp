@@ -2085,6 +2085,30 @@ void WebConsole::handleScenesRestorePost(AsyncWebServerRequest *request) {
         request->send(400, "text/plain", "Need a scenes JSON array");
         return;
     }
+    const bool onlyNew = request->hasParam("onlyNew")
+        && request->getParam("onlyNew")->value() == "1";
+    if (onlyNew) {
+        int added = 0;
+        int skipped = 0;
+        const SceneWriteResult result =
+            sceneStore->importOnlyNewFromJson(trimmed.c_str(), &added, &skipped);
+        if (result != SceneWriteOk && !(result == SceneWriteFull && added > 0)) {
+            sendSceneWriteResult(request, result);
+            return;
+        }
+        AsyncResponseStream *response = request->beginResponseStream("application/json");
+        response->addHeader("Cache-Control", "no-store");
+        response->print("{\"added\":");
+        response->print(added);
+        response->print(",\"skipped\":");
+        response->print(skipped);
+        if (result == SceneWriteFull) {
+            response->print(",\"full\":true");
+        }
+        response->print('}');
+        request->send(response);
+        return;
+    }
     const SceneWriteResult result = sceneStore->replaceAllFromJson(trimmed);
     if (result != SceneWriteOk) {
         sendSceneWriteResult(request, result);
@@ -3448,6 +3472,14 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
             return;
         }
     }
+    String scenesJson = "[]";
+    if (sceneStore != nullptr) {
+        scenesJson = sceneStore->exportJson();
+        if (scenesJson.length() == 0) {
+            request->send(507, "text/plain", "Out of memory");
+            return;
+        }
+    }
     GlobalSettings *settings = settingsManager->getSettings();
     AsyncResponseStream *response = request->beginResponseStream("application/json");
     response->addHeader("Cache-Control", "no-store");
@@ -3495,6 +3527,8 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
     response->print(automationStore != nullptr ? automationStore->listFullJson() : "[]");
     response->print(",\"cameras\":");
     response->print(camerasJson);
+    response->print(",\"scenes\":");
+    response->print(scenesJson);
     response->print('}');
     request->send(response);
 }
@@ -3524,11 +3558,13 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
     String consolesJson;
     String automationsJson;
     String camerasJson;
+    String scenesJson;
     const bool haveUi = extractJsonKeyedSlice(body.c_str(), "ui", '{', uiJson);
     const bool haveUsers = extractJsonKeyedSlice(body.c_str(), "users", '[', usersJson);
     const bool haveConsoles = extractJsonKeyedSlice(body.c_str(), "consoles", '[', consolesJson);
     const bool haveAutomations = extractJsonKeyedSlice(body.c_str(), "automations", '[', automationsJson);
     const bool haveCameras = extractJsonKeyedSlice(body.c_str(), "cameras", '[', camerasJson);
+    const bool haveScenes = extractJsonKeyedSlice(body.c_str(), "scenes", '[', scenesJson);
     if (haveMqtt && !applyMqttJson(mqttJson.c_str(), &errorText)) {
         request->send(400, "text/plain", errorText);
         return;
@@ -3590,6 +3626,21 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
                 + CameraStore::writeResultText(camerasResult) + ")"
             );
             request->send(400, "text/plain", "Need a valid cameras list");
+            return;
+        }
+    }
+    if (haveScenes) {
+        if (sceneStore == nullptr) {
+            request->send(500, "text/plain", "Scenes unavailable");
+            return;
+        }
+        const SceneWriteResult scenesResult = sceneStore->replaceAllFromJson(scenesJson);
+        if (scenesResult != SceneWriteOk) {
+            LOGGER.error(
+                String("Settings restore failed: scenes list rejected (")
+                + SceneStore::writeResultText(scenesResult) + ")"
+            );
+            request->send(400, "text/plain", "Need a valid scenes list");
             return;
         }
     }

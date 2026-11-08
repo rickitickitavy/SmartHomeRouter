@@ -1,0 +1,27 @@
+---
+description: New feature config must join global settings export unless explicitly excluded
+alwaysApply: true
+---
+
+# Global settings export includes every feature
+
+When adding or changing a **feature that has persisted configuration** (stores, registries, lists, credentials, layouts, scenes, etc.), that config MUST be included in the **global / common settings export and restore** path (`GET /api/settings/export`, `POST /api/settings/restore`, Maintenance → Export/Restore settings) **unless the human explicitly excludes it**.
+
+## Required
+
+1. Add the feature’s slice to settings **export** (same JSON shape the feature’s own store export uses when practical).
+2. On settings **restore**, when that slice is present in the file, apply it with the same replace/merge semantics already used for peer entities (consoles, automations, cameras, …) unless the human specifies otherwise.
+3. Update Maintenance Settings card hint / restore confirm copy so operators see the feature is included.
+4. Document the exclusion in code comments and specs **only when** the human explicitly said to omit the feature (e.g. Wi‑Fi).
+
+## Forbidden
+
+- Shipping a new persisted feature store while leaving it out of global export/restore by default
+- Assuming “Maintenance already has a dedicated card” means global export can skip the feature
+
+## Allowed exclusions (examples already in product)
+
+- Wi‑Fi credentials / join settings (never in export)
+- Other groups the human named as excluded for this product
+
+If unsure whether something is “config,” treat durable operator data the UI can edit as in-scope and ask only when product semantics conflict.

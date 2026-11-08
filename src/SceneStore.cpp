@@ -702,6 +702,86 @@ SceneWriteResult SceneStore::replaceAllFromJson(const char *arrayJson) {
     return SceneWriteOk;
 }
 
+SceneWriteResult SceneStore::importOnlyNewFromJson(
+    const char *arrayJson,
+    int *addedOut,
+    int *skippedOut
+) {
+    if (addedOut != nullptr) {
+        *addedOut = 0;
+    }
+    if (skippedOut != nullptr) {
+        *skippedOut = 0;
+    }
+    SceneRecord *incoming = nullptr;
+    int count = 0;
+    const SceneWriteResult parsed = parseArray(arrayJson, &incoming, &count);
+    if (parsed != SceneWriteOk) {
+        return parsed;
+    }
+    int added = 0;
+    int skipped = 0;
+    SceneRecord *scene = incoming;
+    while (scene != nullptr) {
+        SceneRecord *next = scene->next;
+        scene->next = nullptr;
+        if (scene->id[0] != '\0' && findById(scene->id) != nullptr) {
+            freeScene(scene);
+            skipped++;
+            scene = next;
+            continue;
+        }
+        if (storedCount >= SCENE_STORE_MAX) {
+            freeScene(scene);
+            freeSceneList(next);
+            if (addedOut != nullptr) {
+                *addedOut = added;
+            }
+            if (skippedOut != nullptr) {
+                *skippedOut = skipped;
+            }
+            if (added > 0) {
+                requestPersist();
+            }
+            return SceneWriteFull;
+        }
+        if (scene->id[0] == '\0') {
+            generateUniqueId(scene->id);
+        } else if (!isIdSafe(scene->id)) {
+            freeScene(scene);
+            freeSceneList(next);
+            if (addedOut != nullptr) {
+                *addedOut = added;
+            }
+            if (skippedOut != nullptr) {
+                *skippedOut = skipped;
+            }
+            if (added > 0) {
+                requestPersist();
+            }
+            return SceneWriteBadId;
+        }
+        if (scene->bakePath[0] == '\0') {
+            snprintf(scene->bakePath, sizeof(scene->bakePath), "%s/%s.jpg", SCENE_BAKES_DIR, scene->id);
+        }
+        scene->next = head;
+        head = scene;
+        storedCount++;
+        added++;
+        scene = next;
+    }
+    if (addedOut != nullptr) {
+        *addedOut = added;
+    }
+    if (skippedOut != nullptr) {
+        *skippedOut = skipped;
+    }
+    if (added > 0) {
+        requestPersist();
+    }
+    return SceneWriteOk;
+}
+
 SceneWriteResult SceneStore::writeBakeJpeg(const char *sceneId, const uint8_t *data, size_t length) {
     SceneRecord *scene = findById(sceneId);
     if (scene == nullptr) {
