@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Scene geometry export and import
-Export (full scene model), Export scheme (floors and camera pose only), and Import MUST be available on the **scene bind editor** (the dialog where the operator manages the bake image and pins), not on the plan geometry editor. The plan geometry editor MUST keep Save/Cancel for geometry only. Import MUST remain enabled only when the imported target model is empty as previously defined, and MUST auto-detect full vs scheme JSON.
+Export (full scene = house scheme plus pin bindings), Export scheme (house geometry and camera: floors, walls, windows, doors — no pins), and Import MUST be available on the **scene bind editor** (the dialog where the operator manages the bake image and pins), not on the plan geometry editor. The plan geometry editor MUST keep Save/Cancel for geometry only. Import MUST remain enabled only when the imported target model is empty as previously defined, MUST auto-detect full vs scheme JSON, MUST restore pins when present, and MUST regenerate the bake after import.
 
 #### Scenario: Export lives on bind editor
 - **WHEN** the operator opens the scene dialog used to place pins on the bake
@@ -10,6 +10,10 @@ Export (full scene model), Export scheme (floors and camera pose only), and Impo
 #### Scenario: Geometry editor has no export/import
 - **WHEN** the operator opens the plan geometry editor
 - **THEN** Export / Export scheme / Import are not offered on that dialog
+
+#### Scenario: Scheme keeps walls
+- **WHEN** the operator exports scheme from a scene that has walls and windows
+- **THEN** the scheme JSON includes those walls and windows
 
 ## ADDED Requirements
 
