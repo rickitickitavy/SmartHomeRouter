@@ -1578,14 +1578,17 @@ void ZigbeeCoordinator::handleAttributeReport(
     adoptReportIdentity(ieee, shortAddr, srcEndpoint);
     completeStatusRead(ieee, clusterId, srcEndpoint);
     BoundZigbeeDevice *slot = findByIeee(ieee);
-    if (clusterId == kZigbeeClusterBasic
-        && (attribute->id == kZigbeeAttrBasicManufacturerName
-            || attribute->id == kZigbeeAttrBasicModelIdentifier)) {
+    // Basic is identity/metadata only (ApplicationVersion, ZCLVersion, manuf/model, …).
+    // Never forward it as channel status — mature gateways keep appVersion off On/Off state.
+    if (clusterId == kZigbeeClusterBasic) {
         char eventName[96];
         formatAttrEventName(eventName, sizeof(eventName), clusterId, attribute->id, value);
         logDeviceEvent(eventName, ieee, shortAddr, srcEndpoint, registeredName(ieee), registeredMap);
         pulseInboundDevice(ieee);
-        applyBasicIdentityAttribute(slot, attribute->id, attribute);
+        if (attribute->id == kZigbeeAttrBasicManufacturerName
+            || attribute->id == kZigbeeAttrBasicModelIdentifier) {
+            applyBasicIdentityAttribute(slot, attribute->id, attribute);
+        }
         return;
     }
     char eventName[96];

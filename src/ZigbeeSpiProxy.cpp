@@ -75,6 +75,19 @@ bool ZigbeeSpiProxy::endpointStatusOccupied(const EndpointStatus *status) {
         || status->covering->discrete[0] != '\0';
 }
 
+static bool isDiscreteChannelStateText(const char *text) {
+    if (text == nullptr || text[0] == '\0') {
+        return false;
+    }
+    return strcmp(text, "ON") == 0
+        || strcmp(text, "OFF") == 0
+        || strcmp(text, "LEAK") == 0
+        || strcmp(text, "DRY") == 0
+        || strcmp(text, "UP") == 0
+        || strcmp(text, "DOWN") == 0
+        || strcmp(text, "STOPPED") == 0;
+}
+
 void ZigbeeSpiProxy::clearEndpointStatus(EndpointStatus *status) {
     if (status == nullptr) {
         return;
@@ -351,6 +364,30 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
                     slot->hasBattery = true;
                     slot->batteryPercent = batteryFromConverted;
                 }
+                // Battery must not replace channel On/Off (same as BATTERY %u early return).
+                if (statusValueChanged != nullptr && DeviceTopicMap::isUsableEndpoint(endpoint)) {
+                    statusValueChanged(
+                        slot->ieee,
+                        endpoint,
+                        kZigbeeClusterPowerConfig,
+                        reportableConverted,
+                        true
+                    );
+                }
+                return;
+            }
+            // Basic ApplicationVersion / identity metadata is not channel status.
+            if ((uint16_t)parsedCluster == kZigbeeClusterBasic) {
+                if (statusValueChanged != nullptr && DeviceTopicMap::isUsableEndpoint(endpoint)) {
+                    statusValueChanged(
+                        slot->ieee,
+                        endpoint,
+                        kZigbeeClusterBasic,
+                        reportableConverted,
+                        true
+                    );
+                }
+                return;
             }
             // Prefer converted text for endpoint status so legacy gauges keep working.
             message = reportableConverted;
@@ -358,7 +395,8 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
                    && (uint16_t)parsedCluster != kUserDataClusterId
                    && (uint16_t)parsedCluster != kZigbeeClusterOnOff
                    && (uint16_t)parsedCluster != kZigbeeClusterIasZone
-                   && (uint16_t)parsedCluster != kZigbeeClusterWindowCovering) {
+                   && (uint16_t)parsedCluster != kZigbeeClusterWindowCovering
+                   && (uint16_t)parsedCluster != kZigbeeClusterBasic) {
             // Always log unknown reportable pairs, even when device DEBUG is off.
             char ieeeText[24];
             snprintf(
@@ -382,6 +420,10 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
                 + " ieee="
                 + ieeeText
             );
+        }
+        // Basic never becomes channel status, even when conversion fails.
+        if ((uint16_t)parsedCluster == kZigbeeClusterBasic) {
+            return;
         }
     }
     String userDataBraceList;
@@ -475,6 +517,23 @@ void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, c
     }
     if (statusSlot == nullptr) {
         LOGGER.warning("Host channel cache full for device");
+        return;
+    }
+    // Never let converted cl=/attr= measurement text replace a discrete On/Off/zone state.
+    if (haveClAttrVal
+        && isDiscreteChannelStateText(statusSlot->state)
+        && !isDiscreteChannelStateText(message)) {
+        if (convertedReportableCluster != 0
+            && statusValueChanged != nullptr
+            && DeviceTopicMap::isUsableEndpoint(endpoint)) {
+            statusValueChanged(
+                slot->ieee,
+                endpoint,
+                convertedReportableCluster,
+                message,
+                true
+            );
+        }
         return;
     }
     const bool valueChanged =
