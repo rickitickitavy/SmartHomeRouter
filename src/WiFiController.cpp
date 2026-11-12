@@ -6,6 +6,8 @@
 #include <esp_wifi.h>
 #include <esp_coexist.h>
 #include <esp_system.h>
+#include <esp_log.h>
+#include <nvs_flash.h>
 
 static bool parseApIp(const char *text, IPAddress &address) {
     if (text == nullptr || text[0] == '\0') {
@@ -21,6 +23,26 @@ WiFiController::WiFiController(SettingsManager *settingsManager, bool forceAp)
     : settingsManager(settingsManager) {
     GlobalSettings *settings = settingsManager->getSettings();
     WiFi.persistent(false);
+#if defined(BOARD_HOST_P4)
+    // ESP-Hosted: keep WIFI_INIT_CONFIG_DEFAULT layout (incl. wifi_task_stack_size)
+    // aligned with hybrid-built esp_hosted; avoid Arduino cache_tx_buf_num=4.
+    WiFi.useStaticBuffers(true);
+    esp_log_level_set("rpc_core", ESP_LOG_INFO);
+    esp_log_level_set("rpc_rsp", ESP_LOG_INFO);
+    esp_log_level_set("rpc_wrap", ESP_LOG_INFO);
+    esp_log_level_set("H_API", ESP_LOG_INFO);
+    esp_log_level_set("transport", ESP_LOG_INFO);
+    esp_log_level_set("H_SDIO_DRV", ESP_LOG_INFO);
+    // Hosted wifi_init path expects NVS ready even when nvs_enable is forced off.
+    esp_err_t nvsErr = nvs_flash_init();
+    if (nvsErr == ESP_ERR_NVS_NO_FREE_PAGES || nvsErr == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        nvsErr = nvs_flash_init();
+    }
+    if (nvsErr != ESP_OK) {
+        LOGGER.warning(String("P4 NVS init 0x") + String((int)nvsErr, HEX));
+    }
+#endif
     WiFi.mode(WIFI_OFF);
     const bool coldStart = esp_reset_reason() == ESP_RST_POWERON
         || esp_reset_reason() == ESP_RST_BROWNOUT;
@@ -148,15 +170,24 @@ void WiFiController::startAp(bool useRecoveryIdentity) {
     WiFi.softAPConfig(apIp, apIp, subnet);
 
     const bool ok = WiFi.softAP(ssid.c_str(), password.c_str(), 6, 0, 4);
-    WiFi.setTxPower(WIFI_POWER_8_5dBm);
+    if (ok) {
+        // Hosted SoftAP may still be asserting AP_START when create() returns; wait briefly.
+        for (int i = 0; i < 50 && !WiFi.AP.started(); ++i) {
+            delay(20);
+        }
+        WiFi.setTxPower(WIFI_POWER_8_5dBm);
+    }
 
     apActive = ok;
     staEnabledAtBoot = false;
     lastApRestartMs = millis();
     if (ok) {
-        LOGGER.info(
-            "AP " + ssid + " IP " + WiFi.softAPIP().toString() + " MAC " + WiFi.softAPmacAddress()
-        );
+        const String apIpStr = WiFi.softAPIP().toString();
+        const String apMacStr = WiFi.softAPmacAddress();
+#if defined(BOARD_HOST_P4)
+        ESP_LOGI("WiFiCtrl", "SoftAP up ssid=%s ip=%s mac=%s", ssid.c_str(), apIpStr.c_str(), apMacStr.c_str());
+#endif
+        LOGGER.info("AP " + ssid + " IP " + apIpStr + " MAC " + apMacStr);
         LOGGER.info("STA MAC " + WiFi.macAddress());
     } else {
         LOGGER.error("softAP FAILED");
@@ -168,7 +199,10 @@ void WiFiController::applyStaRadio() {
     esp_wifi_set_ps(WIFI_PS_NONE);
     WiFi.setTxPower(WIFI_POWER_21dBm);
     esp_wifi_set_max_tx_power(84);
+    // ESP32-P4 host builds lack on-chip coexist (Wi‑Fi is often ESP-Hosted); S3 keeps preference.
+#if !defined(BOARD_HOST_P4)
     esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
+#endif
 }
 
 void WiFiController::enableIeee154Coex() {

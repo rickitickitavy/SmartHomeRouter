@@ -2,6 +2,7 @@
 #include <LittleFS.h>
 #include <WiFi.h>
 #include <esp_mac.h>
+#include <esp_wifi.h>
 #include <esp_system.h>
 #include <time.h>
 
@@ -52,6 +53,12 @@
 #include "lwip/tcp.h"
 #include "lwip/priv/tcp_priv.h"
 #include "lwip/tcpip.h"
+#endif
+#if defined(BOARD_HOST_P4)
+#include <esp_heap_caps.h>
+#include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #endif
 
 #if defined(BOARD_ROLE_SLAVE) && !defined(ZIGBEE_MODE_ZCZR)
@@ -979,6 +986,62 @@ static size_t littleFsConfigSizeBytes() {
         + littleFsFileSizeBytes(SCENES_STORE_PATH);
 }
 
+static bool formatMacBytes(const uint8_t *macBytes, char *staMacText, size_t staMacTextLen) {
+    if (macBytes == nullptr || staMacText == nullptr || staMacTextLen < 18) {
+        return false;
+    }
+    bool allZero = true;
+    for (int byteIndex = 0; byteIndex < 6; byteIndex++) {
+        if (macBytes[byteIndex] != 0) {
+            allZero = false;
+            break;
+        }
+    }
+    if (allZero) {
+        return false;
+    }
+    snprintf(
+        staMacText,
+        staMacTextLen,
+        "%02X:%02X:%02X:%02X:%02X:%02X",
+        macBytes[0],
+        macBytes[1],
+        macBytes[2],
+        macBytes[3],
+        macBytes[4],
+        macBytes[5]
+    );
+    return true;
+}
+
+// Status "STA MAC" must be WIFI_IF_STA, never SoftAP.
+// P4: esp_read_mac(ESP_MAC_WIFI_STA) is NOT_SUPPORTED; use esp_wifi_get_mac (Hosted→C6).
+static bool fillWifiStaMacText(char *staMacText, size_t staMacTextLen) {
+    if (staMacText == nullptr || staMacTextLen < 18) {
+        return false;
+    }
+    staMacText[0] = '\0';
+
+    uint8_t macBytes[6] = {};
+    if (esp_wifi_get_mac(WIFI_IF_STA, macBytes) == ESP_OK
+        && formatMacBytes(macBytes, staMacText, staMacTextLen)) {
+        return true;
+    }
+
+    memset(macBytes, 0, sizeof(macBytes));
+    if (WiFi.macAddress(macBytes) != nullptr
+        && formatMacBytes(macBytes, staMacText, staMacTextLen)) {
+        return true;
+    }
+
+    memset(macBytes, 0, sizeof(macBytes));
+    if (esp_read_mac(macBytes, ESP_MAC_WIFI_STA) == ESP_OK
+        && formatMacBytes(macBytes, staMacText, staMacTextLen)) {
+        return true;
+    }
+    return false;
+}
+
 static String hostGatewayStatusJson() {
     int zigbeeDevices = 0;
     int zigbeeOnline = 0;
@@ -1078,9 +1141,9 @@ static String hostGatewayStatusJson() {
     json += ",\"mqttPacketsTx\":";
     json += String((unsigned long)mqttPacketsTx);
     json += ",\"version\":\"";
-    json += FIRMWARE_VERSION_HOST;
+    json += FIRMWARE_VERSION;
     json += "\",\"masterVersion\":\"";
-    json += FIRMWARE_VERSION_HOST;
+    json += FIRMWARE_VERSION;
     json += "\",\"slaveVersion\":\"";
     json += INTER_CHIP_HOST.slaveFirmwareVersion();
     json += "\",\"pairingActive\":";
@@ -1113,21 +1176,8 @@ static String hostGatewayStatusJson() {
     appendJsonEscaped(json, wifiBssid, 64);
     json += "\",\"wifiStaMac\":\"";
     {
-        uint8_t staMacBytes[6] = {};
         char staMacText[18] = {};
-        if (esp_read_mac(staMacBytes, ESP_MAC_WIFI_STA) == ESP_OK) {
-            snprintf(
-                staMacText,
-                sizeof(staMacText),
-                "%02X:%02X:%02X:%02X:%02X:%02X",
-                staMacBytes[0],
-                staMacBytes[1],
-                staMacBytes[2],
-                staMacBytes[3],
-                staMacBytes[4],
-                staMacBytes[5]
-            );
-        }
+        fillWifiStaMacText(staMacText, sizeof(staMacText));
         appendJsonEscaped(json, staMacText, sizeof(staMacText));
     }
     json += "\",\"wifiRssiDbm\":";
@@ -1876,8 +1926,88 @@ static void onSlaveZclCommand(
 }
 #endif
 
+#if defined(BOARD_HOST_P4)
+static void dumpP4HeapMap(const char *tag) {
+    multi_heap_info_t internalInfo = {};
+    multi_heap_info_t spiramInfo = {};
+    multi_heap_info_t dmaInfo = {};
+    heap_caps_get_info(&internalInfo, MALLOC_CAP_INTERNAL);
+    heap_caps_get_info(&spiramInfo, MALLOC_CAP_SPIRAM);
+    heap_caps_get_info(&dmaInfo, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    const size_t internalTotal = internalInfo.total_free_bytes + internalInfo.total_allocated_bytes;
+    const size_t spiramTotal = spiramInfo.total_free_bytes + spiramInfo.total_allocated_bytes;
+    ESP_LOGI(
+        "HeapMap",
+        "%s INTERNAL total=%u used=%u free=%u largest=%u blocks_alloc=%u blocks_free=%u",
+        tag,
+        (unsigned)internalTotal,
+        (unsigned)internalInfo.total_allocated_bytes,
+        (unsigned)internalInfo.total_free_bytes,
+        (unsigned)internalInfo.largest_free_block,
+        (unsigned)internalInfo.allocated_blocks,
+        (unsigned)internalInfo.free_blocks
+    );
+    ESP_LOGI(
+        "HeapMap",
+        "%s SPIRAM total=%u used=%u free=%u | DMA_INTERNAL used=%u free=%u",
+        tag,
+        (unsigned)spiramTotal,
+        (unsigned)spiramInfo.total_allocated_bytes,
+        (unsigned)spiramInfo.total_free_bytes,
+        (unsigned)dmaInfo.total_allocated_bytes,
+        (unsigned)dmaInfo.total_free_bytes
+    );
+    ESP_LOGI(
+        "HeapMap",
+        "%s Arduino heapSize=%u freeHeap=%u freePsram=%u",
+        tag,
+        (unsigned)ESP.getHeapSize(),
+        (unsigned)ESP.getFreeHeap(),
+        (unsigned)ESP.getFreePsram()
+    );
+
+    UBaseType_t taskCount = uxTaskGetNumberOfTasks();
+    if (taskCount == 0 || taskCount > 64) {
+        return;
+    }
+    TaskStatus_t *tasks = (TaskStatus_t *)heap_caps_malloc(
+        sizeof(TaskStatus_t) * taskCount,
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
+    );
+    if (tasks == nullptr) {
+        ESP_LOGE("HeapMap", "%s task list alloc failed", tag);
+        return;
+    }
+    uint32_t totalRuntime = 0;
+    const UBaseType_t got = uxTaskGetSystemState(tasks, taskCount, &totalRuntime);
+    size_t stackBytes = 0;
+    for (UBaseType_t i = 0; i < got; ++i) {
+        // High water mark is remaining free words on stack.
+        const uint32_t usedWords = 0;  // not directly available; print watermark instead
+        (void)usedWords;
+        const uint32_t freeWords = tasks[i].usStackHighWaterMark;
+        ESP_LOGI(
+            "HeapMap",
+            "%s task=%s state=%u prio=%u stackFreeWords=%u",
+            tag,
+            tasks[i].pcTaskName != nullptr ? tasks[i].pcTaskName : "?",
+            (unsigned)tasks[i].eCurrentState,
+            (unsigned)tasks[i].uxCurrentPriority,
+            (unsigned)freeWords
+        );
+        // Estimate reserved stack from free watermark is incomplete; still useful.
+        stackBytes += (size_t)freeWords * sizeof(StackType_t);
+    }
+    ESP_LOGI("HeapMap", "%s tasks=%u stackFreeWordsSum~=%u", tag, (unsigned)got, (unsigned)(stackBytes / sizeof(StackType_t)));
+    heap_caps_free(tasks);
+}
+#endif
+
 #if defined(BOARD_ROLE_HOST)
 static void setupHost() {
+#if defined(BOARD_HOST_P4)
+    dumpP4HeapMap("boot-before-setup");
+#endif
     INTER_CHIP_HOST.resetSlaveSynchronous();
     STATUS_RGB.setBootHeld(true);
     LOGGER.setRoleLabel("host");
@@ -2050,7 +2180,7 @@ static void setupHost() {
         }
     }
     LOGGER.info("role=host");
-    LOGGER.info("z2m-gateway host " FIRMWARE_VERSION_HOST);
+    LOGGER.info("z2m-gateway host " FIRMWARE_VERSION);
     LOGGER.info("USB CDC on native ESP32-C6 port (not USB-OTG host)");
     LOGGER.info("Reset " + String((int)esp_reset_reason()));
     WiFi.onEvent(onWiFiArduinoEvent);
@@ -2118,6 +2248,9 @@ static void setupHost() {
     automationStore->setDeviceMap(topicMap);
     foundDevices = new FoundDeviceList();
     wifiController = new WiFiController(settingsManager, forceAp);
+#if defined(BOARD_HOST_P4)
+    dumpP4HeapMap("after-wifi");
+#endif
     mqttClient = new MqttClient(settingsManager, topicMap);
     mqttBroker = new MqttBroker(settingsManager);
     webConsole = new WebConsole(settingsManager, userStore, consoleStore, automationStore, cameraStore, sceneStore);
@@ -2191,6 +2324,9 @@ static void setupHost() {
         return 200;
     });
     webConsole->begin();
+#if defined(BOARD_HOST_P4)
+    dumpP4HeapMap("after-webConsole");
+#endif
     ZIGBEE_SPI_PROXY.setDeviceLiveChangedHandler([](const uint8_t ieee[8]) {
         if (webConsole != nullptr) {
             webConsole->notifyDeviceLiveChanged(ieee);
@@ -2254,6 +2390,9 @@ static void setupHost() {
     INTER_CHIP_HOST.begin();
     runDeviceRegistryFixtures();
     LOGGER.info("Host SPI ready; Zigbee radio stays on the slave");
+#if defined(BOARD_HOST_P4)
+    dumpP4HeapMap("setupHost-done");
+#endif
 }
 #endif
 

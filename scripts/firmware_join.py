@@ -12,6 +12,9 @@ def read_define_string(defines_path: Path, macro_name: str) -> str:
     text = defines_path.read_text(encoding="utf-8")
     needle = f"#define {macro_name}"
     for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            continue
         if needle not in line or '"' not in line:
             continue
         start = line.find('"')
@@ -21,8 +24,22 @@ def read_define_string(defines_path: Path, macro_name: str) -> str:
     raise SystemExit(f"{macro_name} not found in {defines_path}")
 
 
-def read_firmware_versions(defines_path: Path) -> tuple[str, str]:
-    host = read_define_string(defines_path, "FIRMWARE_VERSION_HOST")
+def read_firmware_versions(
+    defines_path: Path, *, host_board: str = "s3"
+) -> tuple[str, str]:
+    """Resolve host version with SoC prefix (S3- / P4-) from FIRMWARE_VERSION_HOST_CORE."""
+    try:
+        core = read_define_string(defines_path, "FIRMWARE_VERSION_HOST_CORE")
+    except SystemExit:
+        # Older Defines.h without CORE: use FIRMWARE_VERSION_HOST as-is.
+        host = read_define_string(defines_path, "FIRMWARE_VERSION_HOST")
+        slave = read_define_string(defines_path, "FIRMWARE_VERSION_SLAVE")
+        return host, slave
+    board = (host_board or "s3").strip().lower()
+    if board in ("p4", "esp32-p4", "esp32p4"):
+        host = "P4-" + core
+    else:
+        host = "S3-" + core
     slave = read_define_string(defines_path, "FIRMWARE_VERSION_SLAVE")
     return host, slave
 
@@ -56,7 +73,13 @@ def main() -> int:
     parser.add_argument(
         "--host-version",
         default=None,
-        help="Host version string for host.version.txt (default: FIRMWARE_VERSION_HOST)",
+        help="Host version string for host.version.txt (default: S3-/P4- + FIRMWARE_VERSION_HOST_CORE)",
+    )
+    parser.add_argument(
+        "--host-board",
+        default="s3",
+        choices=("s3", "p4", "esp32-p4", "esp32p4"),
+        help="SoC prefix for default host version: S3- or P4- (default: s3)",
     )
     parser.add_argument(
         "--slave-version",
@@ -89,7 +112,9 @@ def main() -> int:
             raise SystemExit(f"host binary missing or empty: {args.host}")
         members.append("host.bin")
 
-    default_host, default_slave = read_firmware_versions(args.defines)
+    default_host, default_slave = read_firmware_versions(
+        args.defines, host_board=args.host_board
+    )
     if args.version:
         default_host = args.version.strip()
         default_slave = args.version.strip()
