@@ -50,8 +50,15 @@
 #define AUTOMATION_EMAIL_CAMERA_ATTACHES_MAX 8
 #define ACTION_COMMAND_QUEUE_MAX 1024
 
-#define FIRMWARE_VERSION_HOST "4.2.20"
+// One host version string per SoC: bump the shared MAJOR.MINOR.BUILD in both.
+// Prefix is only S3- or P4- (no separate CORE macro).
+#define FIRMWARE_VERSION_HOST "S3-4.2.43"
+#if defined(BOARD_HOST_P4)
+#undef FIRMWARE_VERSION_HOST
+#define FIRMWARE_VERSION_HOST "P4-4.2.43"
+#endif
 #define FIRMWARE_VERSION_SLAVE "4.2.04"
+
 #if defined(BOARD_ROLE_HOST)
 #define FIRMWARE_VERSION FIRMWARE_VERSION_HOST
 #else

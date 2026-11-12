@@ -4,7 +4,8 @@ PlatformIO / Arduino firmware for a **LAN Mini-HA router / hub** (Wi‑Fi AP/STA
 
 | Role | Chip | PlatformIO env | Responsibility |
 |------|------|----------------|----------------|
-| **Host** | ESP32-S3-N16R8 | `esp32-s3-host` | Wi‑Fi (AP/STA), web console, MQTT, device registry, SPI master, joined OTA |
+| **Host (default)** | ESP32-P4 (rev.300 generic) | `esp32-p4-host` | Wi‑Fi (AP/STA), web console, MQTT, device registry, SPI master, joined OTA |
+| **Host (legacy)** | ESP32-S3-N16R8 | `esp32-s3-host` | Same host application; S3 pin map |
 | **Slave** | ESP32-C6 | `esp32-c6-slave` | Zigbee ZCZR coordinator, SPI slave |
 
 ### What it does
@@ -18,7 +19,7 @@ PlatformIO / Arduino firmware for a **LAN Mini-HA router / hub** (Wi‑Fi AP/STA
 - Joined firmware update (slave + host in one package)
 - User-data cluster devices for custom attributes
 
-Role is fixed by **which image is flashed** to which chip (compile-time `BOARD_ROLE_HOST` / `BOARD_ROLE_SLAVE`). There is **no GPIO15 role strap** and **no shared binary** for both boards. Field updates use one **joined package** (ZIP with `slave.bin` + `host.bin`) from the web console **System → Update**.
+Role is fixed by **which image is flashed** to which chip (compile-time `BOARD_ROLE_HOST` / `BOARD_ROLE_SLAVE`). There is **no GPIO15 role strap** and **no shared binary** for both boards. Field updates use one **joined package** (ZIP with `slave.bin` + `host.bin`) from the web console **System → Update**. Each joined package is **one** host SoC + slave: label/build as S3 (`S3-…`) or P4 (`P4-…`); `host.version.txt` must match that host string.
 
 The host publishes device state to **per-device MQTT topics**. The slave runs the Zigbee coordinator after the host pushes settings.
 
@@ -27,21 +28,23 @@ This is not a port of the Node.js Zigbee2MQTT converter database. The default So
 ## Hardware / USB
 
 - Flash and monitor over each board’s **native USB-C** (USB Serial/JTAG CDC).
-- Hold **BOOT** LOW at reset on the **host** to force AP for that boot (does not change stored MODE). Host boot button is GPIO41; slave boot button is GPIO9.
+- Hold **BOOT** LOW at reset on the **host** to force AP for that boot (does not change stored MODE). Host boot button: S3 GPIO41, P4 GPIO21; slave boot button is GPIO9.
 - Slave onboard RGB is GPIO8 (status); do not use it as a boot-AP strap.
+- Product P4 schematic has **no** LAN, LCD, or touch. Future SD (if added) must use a **different** SPI than the slave link.
+- P4 host env uses board `esp32-p4` (ES / rev &lt; 3.0, ROM `eco2`). Do **not** use `esp32-p4_r3` on v1.3 silicon — bootloader dies with Illegal instruction. On-chip Wi‑Fi coexist is skipped for P4; field Wi‑Fi may still need ESP-Hosted depending on the kit.
 
-### Status LEDs (six reds)
+### Status LEDs (six)
 
-GPIO HIGH = on. Pin maps differ by chip (`include/pins.h`):
+GPIO HIGH / PWM = on (blue/green PWM; red digital). Pin maps in `include/pins.h`:
 
-| LED | Host (S3) | Slave (C6) |
-|-----|-----------|------------|
-| LED1 | GPIO4 | GPIO18 |
-| LED2 | GPIO5 | GPIO19 |
-| LED3 | GPIO6 | GPIO20 |
-| LED4 | GPIO7 | GPIO21 |
-| LED5 | GPIO15 | GPIO2 |
-| LED6 | GPIO16 | GPIO3 |
+| LED | Host (S3) | Host (P4) | Slave (C6) |
+|-----|-----------|-----------|------------|
+| LED1 | GPIO4 | GPIO2 | GPIO18 |
+| LED2 | GPIO5 | GPIO3 | GPIO19 |
+| LED3 | GPIO6 | GPIO4 | GPIO20 |
+| LED4 | GPIO7 | GPIO5 | GPIO21 |
+| LED5 | GPIO15 | GPIO6 | GPIO2 |
+| LED6 | GPIO16 | GPIO7 | GPIO3 |
 
 | Indicator | Host | Slave |
 |-----------|------|--------|
@@ -54,26 +57,30 @@ GPIO HIGH = on. Pin maps differ by chip (`include/pins.h`):
 
 ### Two-board wiring (3.3 V, common GND)
 
-| Signal | Host (S3) | Slave (C6) |
-|--------|-----------|------------|
-| RST | GPIO9 → slave **EN** (active LOW pulse) | EN |
-| SCK | GPIO12 | GPIO6 |
-| MOSI | GPIO11 | GPIO5 |
-| MISO | GPIO13 | GPIO4 |
-| CS | GPIO10 | GPIO7 |
-| IRQ | GPIO14 in | GPIO10 out (HIGH = slave has a frame) |
+| Signal | Host (S3) | Host (P4) | Slave (C6) |
+|--------|-----------|-----------|------------|
+| RST | GPIO9 → slave **EN** (active LOW pulse) | GPIO9 → EN | EN |
+| SCK | GPIO12 | GPIO12 | GPIO6 |
+| MOSI | GPIO11 | GPIO11 | GPIO5 |
+| MISO | GPIO13 | GPIO13 | GPIO4 |
+| CS | GPIO10 | GPIO10 | GPIO7 |
+| IRQ | GPIO14 in | GPIO22 in | GPIO10 out (HIGH = slave has a frame) |
 
-Host→slave uses CS + SCK + MOSI (no IRQ). Slave→host (Zigbee events and logs) uses the same SPI plus IRQ.
+Host→slave uses CS + SCK + MOSI (no IRQ). Slave→host (Zigbee events and logs) uses the same SPI plus IRQ. On P4, LEDs are GPIO2–7 (obligatory); boot button GPIO21; GPIO14–19 reserved for ESP-Hosted Wi‑Fi SDIO.
 
 ## Build and flash
 
+Default build is **P4 host + C6 slave**. Legacy S3 host remains selectable.
+
 ```bash
-pio run -e esp32-s3-host -e esp32-c6-slave
+pio run
+pio run -e esp32-p4-host -t upload
+pio run -e esp32-s3-host
 pio run -e esp32-s3-host -t upload
 pio run -e esp32-c6-slave -t upload
 ```
 
-Optional joined Update package (scripts in repo / CI): combine `host.bin` and `slave.bin` into the ZIP the console expects.
+Optional joined Update package (scripts in repo / CI): combine **one** host `.bin` (S3 or P4) and `slave.bin` into the ZIP the console expects. Use `scripts/firmware_join.py --host-board s3|p4` so `host.version.txt` matches `S3-…` or `P4-…`.
 
 A pre-build script gzips `data/index.html` and `data/css/all.css` into the host firmware image, so a separate filesystem flash is not required for the web console.
 
