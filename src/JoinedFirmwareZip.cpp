@@ -99,12 +99,20 @@ bool fillMemberFromLocalHeader(File &zipFile, uint32_t localHeaderOffset, Member
 
 }  // namespace
 
-bool findMembers(File &zipFile, MemberInfo *slaveOut, MemberInfo *hostOut) {
+bool findMembers(
+    File &zipFile,
+    MemberInfo *slaveOut,
+    MemberInfo *hostOut,
+    MemberInfo *hostedC6Out
+) {
     if (slaveOut == nullptr || hostOut == nullptr) {
         return false;
     }
     *slaveOut = MemberInfo{};
     *hostOut = MemberInfo{};
+    if (hostedC6Out != nullptr) {
+        *hostedC6Out = MemberInfo{};
+    }
     uint32_t centralOffset = 0;
     uint16_t entryCount = 0;
     if (!locateEndOfCentralDirectory(zipFile, &centralOffset, &entryCount) || entryCount == 0) {
@@ -137,6 +145,8 @@ bool findMembers(File &zipFile, MemberInfo *slaveOut, MemberInfo *hostOut) {
             target = slaveOut;
         } else if (nameEquals(name, nameLength, "host.bin")) {
             target = hostOut;
+        } else if (hostedC6Out != nullptr && nameEquals(name, nameLength, "hosted-c6.bin")) {
+            target = hostedC6Out;
         }
         if (target != nullptr) {
             if (!fillMemberFromLocalHeader(zipFile, localHeaderOffset, target)) {
@@ -241,6 +251,10 @@ bool readSlaveVersionText(File &zipFile, char *destination, size_t destinationSi
 
 bool readHostVersionText(File &zipFile, char *destination, size_t destinationSize) {
     return readNamedVersionText(zipFile, "host.version.txt", destination, destinationSize);
+}
+
+bool readHostedC6VersionText(File &zipFile, char *destination, size_t destinationSize) {
+    return readNamedVersionText(zipFile, "hosted-c6.version.txt", destination, destinationSize);
 }
 
 bool readVersionText(File &zipFile, char *destination, size_t destinationSize) {

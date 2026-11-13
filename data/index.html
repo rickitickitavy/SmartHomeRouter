@@ -2494,6 +2494,10 @@
                     sweepInput.value = String(hardwareSettings.historySweepIntervalMin != null ? hardwareSettings.historySweepIntervalMin : 10);
                 }
                 if (sizeInput) {
+                    var sizeMax = hardwareSettings.historyMaxSizeKiBMax != null
+                        ? hardwareSettings.historyMaxSizeKiBMax
+                        : 65534;
+                    sizeInput.max = String(sizeMax);
                     sizeInput.value = String(hardwareSettings.historyMaxSizeKiB != null ? hardwareSettings.historyMaxSizeKiB : 4096);
                 }
                 if (entrySelect) {
@@ -20438,7 +20442,7 @@
                         </div>
                         <div class="field">
                             <label for="historyMaxSizeKiB">Maximum history size (kB)</label>
-                            <input id="historyMaxSizeKiB" type="number" min="4" step="1" value="4096">
+                            <input id="historyMaxSizeKiB" type="number" min="4" max="65534" step="1" value="4096">
                         </div>
                         <div class="field">
                             <label for="historyEntrySize">Entry size</label>
