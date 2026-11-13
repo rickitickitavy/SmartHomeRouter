@@ -6244,12 +6244,26 @@
         function applyParameterDialogMode() {
             var deleteButton = document.getElementById("parameterDeleteBtn");
             var exportButton = document.getElementById("parameterExportBtn");
+            var rebindButton = document.getElementById("parameterRebindBtn");
+            var rebindStatus = document.getElementById("parameterRebindStatus");
             var commandTabButton = document.getElementById("parameterCommandTabBtn");
             if (deleteButton) {
                 deleteButton.hidden = !parameterDialogIsEdit || !(isAdminUser() || hasRole("removeDevices"));
             }
             if (exportButton) {
                 exportButton.hidden = !parameterDialogIsEdit || !isAdminUser();
+            }
+            if (rebindButton) {
+                var showRebind =
+                    parameterDialogIsEdit
+                    && parameterDialogTransport == "zigbee"
+                    && (isAdminUser() || hasRole("editDevices"));
+                rebindButton.hidden = !showRebind;
+                rebindButton.disabled = false;
+            }
+            if (rebindStatus) {
+                rebindStatus.hidden = true;
+                rebindStatus.textContent = "";
             }
             if (commandTabButton) {
                 if (parameterDialogIsEdit && canControlDevices()) {
@@ -6259,6 +6273,78 @@
                 }
             }
             showParameterTab("settings");
+        }
+
+        function rebindParameterDialogDevice() {
+            var rebindButton = document.getElementById("parameterRebindBtn");
+            var rebindStatus = document.getElementById("parameterRebindStatus");
+            var errorLine = document.getElementById("parameterDialogError");
+            if (errorLine) {
+                errorLine.hidden = true;
+            }
+            if (!parameterDialogIsEdit || parameterDialogTransport != "zigbee") {
+                return;
+            }
+            if (!(isAdminUser() || hasRole("editDevices"))) {
+                return;
+            }
+            var ieeeText = document.getElementById("deviceIeee")
+                ? document.getElementById("deviceIeee").value
+                : "";
+            if (!ieeeText) {
+                return;
+            }
+            if (rebindButton) {
+                rebindButton.disabled = true;
+            }
+            if (rebindStatus) {
+                rebindStatus.hidden = false;
+                rebindStatus.textContent = "Rebinding…";
+            }
+            fetch("/api/devices/rebind", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ieee: ieeeText })
+            }).then(function (response) {
+                return response.text().then(function (text) {
+                    var payload = {};
+                    try {
+                        payload = text ? JSON.parse(text) : {};
+                    } catch (parseError) {
+                        payload = {};
+                    }
+                    if (rebindButton) {
+                        rebindButton.disabled = false;
+                    }
+                    if (!rebindStatus) {
+                        return;
+                    }
+                    rebindStatus.hidden = false;
+                    if (response.ok && payload.outcome == "immediateOk") {
+                        rebindStatus.textContent = "Rebind succeeded.";
+                        return;
+                    }
+                    if (response.ok && payload.outcome == "pairingFallback") {
+                        rebindStatus.textContent =
+                            "Immediate bind failed. Pairing is open — wake or rejoin the device.";
+                        return;
+                    }
+                    rebindStatus.textContent =
+                        payload && payload.outcome == "failed"
+                            ? "Rebind failed."
+                            : (text || ("Rebind failed (HTTP " + response.status + ")"));
+                });
+            }).catch(function (error) {
+                if (rebindButton) {
+                    rebindButton.disabled = false;
+                }
+                if (rebindStatus) {
+                    rebindStatus.hidden = false;
+                    rebindStatus.textContent =
+                        error && error.message ? error.message : "Rebind failed (network error)";
+                }
+            });
         }
 
         function exportParameterDialogDevice() {
@@ -20771,9 +20857,11 @@
                         </div>
                     </div>
                 </div>
+                <p id="parameterRebindStatus" class="field-hint" hidden></p>
                 <div class="dialog-actions">
                     <button type="button" class="btn btn-primary" onclick="saveDeviceParameters()">Save</button>
                     <button type="button" class="btn btn-secondary" onclick="requestCloseParameterDialog()">Cancel</button>
+                    <button type="button" id="parameterRebindBtn" class="btn btn-secondary" hidden onclick="rebindParameterDialogDevice()">Rebind</button>
                     <button type="button" id="parameterExportBtn" class="btn btn-secondary" hidden onclick="exportParameterDialogDevice()">Export</button>
                     <button type="button" id="parameterDeleteBtn" class="btn btn-secondary" hidden onclick="openDeleteConfirmDialog()">Delete</button>
                 </div>

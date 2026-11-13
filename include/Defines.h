@@ -52,12 +52,12 @@
 
 // One host version string per SoC: bump the shared MAJOR.MINOR.BUILD in both.
 // Prefix is only S3- or P4- (no separate CORE macro).
-#define FIRMWARE_VERSION_HOST "S3-4.2.55"
+#define FIRMWARE_VERSION_HOST "S3-4.2.58"
 #if defined(BOARD_HOST_P4)
 #undef FIRMWARE_VERSION_HOST
-#define FIRMWARE_VERSION_HOST "P4-4.2.55"
+#define FIRMWARE_VERSION_HOST "P4-4.2.58"
 #endif
-#define FIRMWARE_VERSION_SLAVE "4.2.04"
+#define FIRMWARE_VERSION_SLAVE "4.2.06"
 
 #if defined(BOARD_ROLE_HOST)
 #define FIRMWARE_VERSION FIRMWARE_VERSION_HOST

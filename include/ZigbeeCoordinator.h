@@ -51,6 +51,7 @@ public:
     using DeviceBoundFn = void (*)(const BoundZigbeeDevice *device);
     using RegistryChangedFn = void (*)();
     using JoinClosedFn = void (*)();
+    using RebindResultFn = void (*)(const uint8_t ieee[8], uint8_t outcome);
 
     ZigbeeCoordinator();
 
@@ -61,6 +62,8 @@ public:
     void permitJoin(uint8_t seconds);
     void closeJoin();
     void refreshBoundDevices();
+    void startRebind(const uint8_t ieee[8]);
+    void setRebindResultHandler(RebindResultFn handler);
     void dispatch();
     String devicesJson(DeviceTopicMap *topicMap);
     bool controlOnOff(const uint8_t ieee[8], const char *command, uint8_t endpoint);
@@ -242,7 +245,16 @@ private:
     DeviceBoundFn deviceBoundHandler = nullptr;
     RegistryChangedFn registryChangedHandler = nullptr;
     JoinClosedFn joinClosedHandler = nullptr;
+    RebindResultFn rebindResultHandler = nullptr;
     bool registryReady = false;
+    bool rebindActive = false;
+    uint8_t rebindIeee[8]{};
+    uint16_t rebindShortAddr = 0;
+    uint8_t rebindEndpoint = 0;
+    uint8_t rebindBindsIssued = 0;
+    uint8_t rebindBindsSucceeded = 0;
+    uint8_t rebindBindsFailed = 0;
+    unsigned long rebindDeadlineMs = 0;
     unsigned long lastRefreshMs = 0;
     unsigned long pairingUntilMs = 0;
     unsigned long pairingLedToggleMs = 0;
@@ -263,6 +275,28 @@ private:
     void startPairingWindow(uint8_t seconds);
     void stopPairingWindow();
     void updatePairingLed();
+    void clearSwitchBoundCacheForIeee(const uint8_t ieee[8]);
+    void finishRebind(uint8_t outcome);
+    void openRebindPairingFallback(const uint8_t ieee[8]);
+    bool resolveRebindAddress(
+        const uint8_t ieee[8],
+        uint16_t *shortAddrOut,
+        uint8_t *endpointOut,
+        uint8_t *zigbeeTypeOut
+    );
+    void issueRebindZdoBinds(
+        const uint8_t ieee[8],
+        uint16_t shortAddr,
+        uint8_t endpoint,
+        uint8_t zigbeeType
+    );
+    void adoptRebindBoundIdentity(
+        const uint8_t ieee[8],
+        uint16_t shortAddr,
+        uint8_t endpoint
+    );
+    void servicePendingRebind();
+    static void onRebindZdoBind(esp_zb_zdp_status_t zdoStatus, void *userCtx);
     void storeBoundDevice(zb_device_params_t *device);
     void emitDeviceJoin(BoundZigbeeDevice *slot);
     void emitDeviceJoinIdentity(BoundZigbeeDevice *slot);

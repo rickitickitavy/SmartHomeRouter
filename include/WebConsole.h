@@ -245,6 +245,7 @@ private:
     void handleDevicesCommandPost(AsyncWebServerRequest *request);
     void handleDevicesConfigureGet(AsyncWebServerRequest *request);
     void handleDevicesConfigurePost(AsyncWebServerRequest *request);
+    void handleDevicesRebindPost(AsyncWebServerRequest *request);
     void handleGatewayStatusGet(AsyncWebServerRequest *request);
     static constexpr size_t kHttpBodyMaxSmall = 16 * 1024;
     static constexpr size_t kHttpBodyMaxRestore = 256 * 1024;

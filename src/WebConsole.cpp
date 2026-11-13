@@ -624,6 +624,21 @@ void WebConsole::begin() {
         }
     );
     server.on(
+        "/api/devices/rebind",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleDevicesRebindPost(request); },
+        nullptr,
+        [this](
+            AsyncWebServerRequest *request,
+            uint8_t *data,
+            size_t len,
+            size_t index,
+            size_t total
+        ) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
+    server.on(
         "/api/devices/command",
         HTTP_POST,
         [this](AsyncWebServerRequest *request) { handleDevicesCommandPost(request); },
@@ -4604,6 +4619,59 @@ void WebConsole::handleDevicesSearchStopPost(AsyncWebServerRequest *request) {
         stopSearch();
     }
     request->send(200, "text/plain", "Search stopped");
+}
+
+void WebConsole::handleDevicesRebindPost(AsyncWebServerRequest *request) {
+    String body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    const UserRecord *user = nullptr;
+    if (!requireUser(request, &user)) {
+        return;
+    }
+    if (!userCanEditDevices(user)) {
+        request->send(403, "text/plain", "Forbidden");
+        return;
+    }
+    String ieeeText;
+    if (!extractJsonString(body.c_str(), "ieee", ieeeText) || ieeeText.length() == 0) {
+        request->send(400, "text/plain", "Need ieee");
+        return;
+    }
+    DeviceTopicMap *deviceMap = settingsManager->deviceMap();
+    uint8_t ieee[8];
+    if (!deviceMap->parseIeee(ieeeText.c_str(), ieee)) {
+        request->send(400, "text/plain", "Bad IEEE");
+        return;
+    }
+    DeviceTopicEntry *entry = deviceMap->findByIeee(ieee);
+    if (entry == nullptr || !entry->used) {
+        request->send(404, "text/plain", "Device not found");
+        return;
+    }
+    if (clampDeviceTransport(entry->transport) == DeviceTransportMqtt) {
+        request->send(400, "text/plain", "MQTT devices cannot rebind");
+        return;
+    }
+    uint8_t outcome = SPI_REBIND_OUTCOME_FAILED;
+    const bool ok = ZIGBEE_SPI_PROXY.rebindDevice(ieee, &outcome, 4000UL);
+    String json = "{\"ieee\":\"";
+    json += ieeeText;
+    json += "\",\"outcome\":\"";
+    if (ok && outcome == SPI_REBIND_OUTCOME_IMMEDIATE_OK) {
+        json += "immediateOk";
+    } else if (ok && outcome == SPI_REBIND_OUTCOME_PAIRING_FALLBACK) {
+        json += "pairingFallback";
+    } else {
+        json += "failed";
+    }
+    json += "\"}";
+    if (!ok || outcome == SPI_REBIND_OUTCOME_FAILED) {
+        request->send(502, "application/json", json);
+        return;
+    }
+    request->send(200, "application/json", json);
 }
 
 void WebConsole::handleLogGet(AsyncWebServerRequest *request) {

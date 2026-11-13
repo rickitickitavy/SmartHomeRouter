@@ -19,6 +19,7 @@ public:
     void onSpiEvent(const SpiFrame &frame);
     bool permitJoin(uint8_t seconds);
     bool closeJoin();
+    bool rebindDevice(const uint8_t ieee[8], uint8_t *outcomeOut, unsigned long timeoutMs);
     bool controlOnOff(const uint8_t ieee[8], const char *command, uint8_t endpoint);
     bool writeAttribute(
         const uint8_t ieee[8],
@@ -238,6 +239,10 @@ private:
         uint32_t value;
     };
     ConfigReadSlot configReads[kConfigReadSlots]{};
+    bool rebindWaitActive = false;
+    bool rebindWaitDone = false;
+    uint8_t rebindWaitIeee[8]{};
+    uint8_t rebindWaitOutcome = SPI_REBIND_OUTCOME_FAILED;
 
     CachedDevice *findByIeee(const uint8_t ieee[8]);
     const CachedDevice *findByIeee(const uint8_t ieee[8]) const;
