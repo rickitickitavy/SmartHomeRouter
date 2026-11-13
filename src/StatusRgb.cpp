@@ -81,6 +81,16 @@ void StatusRgb::configureLedPin(int ledIndex) {
         pwmAttached[ledIndex] = false;
         return;
     }
+#if defined(BOARD_HOST_P4)
+    // P4 LED5/LED6 are on GPIO46/47: LEDC may attach but never toggle the pad.
+    // Drive those greens digitally (full on/off; brightness still applies to PWM LEDs).
+    if (gpioNumber >= 46) {
+        pinMode(gpioNumber, OUTPUT);
+        digitalWrite(gpioNumber, kLedOffLevel);
+        pwmAttached[ledIndex] = false;
+        return;
+    }
+#endif
     if (ledcAttach(gpioNumber, kPwmFrequencyHz, kPwmResolutionBits)) {
         ledcWrite(gpioNumber, 0);
         pwmAttached[ledIndex] = true;

@@ -30,7 +30,7 @@ This is not a port of the Node.js Zigbee2MQTT converter database. The default So
 - Flash and monitor over each board’s **native USB-C** (USB Serial/JTAG CDC).
 - Hold **BOOT** LOW at reset on the **host** to force AP for that boot (does not change stored MODE). Host boot button: S3 GPIO41, P4 GPIO21; slave boot button is GPIO9.
 - Slave onboard RGB is GPIO8 (status); do not use it as a boot-AP strap.
-- Product P4 schematic has **no** LAN, LCD, or touch. Future SD (if added) must use a **different** SPI than the slave link.
+- Product P4 map targets the headered Wi‑Fi6 kit (edge pins). On-module Hosted C6 keeps SDIO on GPIO14–19. Future SD (if added) must use a **different** SPI than the slave link (**28–31**).
 - P4 host env uses board `esp32-p4` (ES / rev &lt; 3.0, ROM `eco2`). Do **not** use `esp32-p4_r3` on v1.3 silicon — bootloader dies with Illegal instruction. On-chip Wi‑Fi coexist is skipped for P4; field Wi‑Fi may still need ESP-Hosted depending on the kit.
 
 ### Schematic: router panel LED cells
@@ -45,7 +45,7 @@ How LEDs are set on the router panel by LED cells:
 | 4 | HOST LED4 - GREEN |
 | 5 | HOST LED6 - RED |
 | 6 | SLAVE LED2/LED4 - GREEN/BLUE |
-| 7 | SLAVE LED2 - RED |
+| 7 | SLAVE LED1 - RED |
 | 8 | SLAVE LED5/LED6 - GREEN/BLUE |
 
 ### Status LEDs (six)
@@ -58,8 +58,8 @@ GPIO HIGH / PWM = on (blue/green PWM; red digital). Pin maps in `include/pins.h`
 | LED2 | GPIO5 | GPIO3 | GPIO19 |
 | LED3 | GPIO6 | GPIO4 | GPIO20 |
 | LED4 | GPIO7 | GPIO5 | GPIO21 |
-| LED5 | GPIO15 | GPIO6 | GPIO2 |
-| LED6 | GPIO16 | GPIO7 | GPIO3 |
+| LED5 | GPIO15 | GPIO46 | GPIO2 |
+| LED6 | GPIO16 | GPIO47 | GPIO3 |
 
 | Indicator | Host | Slave |
 |-----------|------|--------|
@@ -74,14 +74,14 @@ GPIO HIGH / PWM = on (blue/green PWM; red digital). Pin maps in `include/pins.h`
 
 | Signal | Host (S3) | Host (P4) | Slave (C6) |
 |--------|-----------|-----------|------------|
-| RST | GPIO9 → slave **EN** (active LOW pulse) | GPIO9 → EN | EN |
-| SCK | GPIO12 | GPIO12 | GPIO6 |
-| MOSI | GPIO11 | GPIO11 | GPIO5 |
-| MISO | GPIO13 | GPIO13 | GPIO4 |
-| CS | GPIO10 | GPIO10 | GPIO7 |
+| RST | GPIO9 → slave **EN** (active LOW pulse) | GPIO23 → EN | EN |
+| SCK | GPIO12 | GPIO30 | GPIO6 |
+| MOSI | GPIO11 | GPIO29 | GPIO5 |
+| MISO | GPIO13 | GPIO31 | GPIO4 |
+| CS | GPIO10 | GPIO28 | GPIO7 |
 | IRQ | GPIO14 in | GPIO22 in | GPIO10 out (HIGH = slave has a frame) |
 
-Host→slave uses CS + SCK + MOSI (no IRQ). Slave→host (Zigbee events and logs) uses the same SPI plus IRQ. On P4, LEDs are GPIO2–7 (obligatory); boot button GPIO21; GPIO14–19 reserved for ESP-Hosted Wi‑Fi SDIO.
+Host→slave uses CS + SCK + MOSI (no IRQ). Slave→host (Zigbee events and logs) uses the same SPI plus IRQ. P4 map uses only edge-header pins: LEDs **2–5 / 46–47**, boot **21**, RST **23**, SPI **28–31**, IRQ **22**. Leave **14–19** for on-module Hosted SDIO; do not use silk **7/8** (I2C) or **24/25** (USB) for these nets.
 
 ## Build and flash
 
@@ -169,5 +169,5 @@ The host never starts 802.15.4. Zigbee runs only on the slave and stays up in ho
 ## Build notes
 
 - pioarduino `espressif32` (Arduino 3.x)
-- Host: `partitions/host_s3_16MB.csv`, PSRAM (`BOARD_HAS_PSRAM`)
+- Host S3: `partitions/host_s3_16MB.csv`; host P4: `partitions/host_p4_32MB.csv`; PSRAM (`BOARD_HAS_PSRAM`)
 - Slave: `-DZIGBEE_MODE_ZCZR`, `partitions/zigbee_zczr_16MB.csv` (`zb_storage`, `zb_fct`, dual OTA app, LittleFS)

@@ -2481,9 +2481,13 @@ void loop() {
         webConsole->loop();
     }
     pumpHostDeferredStoreWork();
+    // Boot LED ends when the host network is up so LED5 can show MQTT.
+    // Critical (LED6) still waits for slave SPI Normal via hostPreparationLatched.
+    if (wifiController->hasUsableInterface()) {
+        STATUS_RGB.setBootHeld(false);
+    }
     if (!hostPreparationLatched && wifiController->hasUsableInterface() && INTER_CHIP_HOST.isNormal()) {
         hostPreparationLatched = true;
-        STATUS_RGB.setBootHeld(false);
         if (emailSender != nullptr) {
             emailSender->requestAccountCheck();
         }

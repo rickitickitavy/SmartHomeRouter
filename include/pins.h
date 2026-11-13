@@ -4,25 +4,25 @@
 
 #if defined(BOARD_HOST_P4)
 
-// ESP32-P4 host pin map (product schematic: no LAN / LCD / touch).
-// Leave GPIO14–19 free for ESP-Hosted Wi‑Fi SDIO (Function-EV-style defaults).
-// Slave link uses one SPI controller; future SD MUST use a different SPI (e.g. GPIO28–31).
-// Avoid straps GPIO34–38 and USB Serial/JTAG GPIO24–25.
+// ESP32-P4 host pin map for the headered Wi‑Fi6 kit (edge pins only).
+// Leave GPIO14–19 free for on-module ESP-Hosted Wi‑Fi SDIO.
+// Avoid I2C silk GPIO7/8, USB Serial/JTAG GPIO24–25, and straps GPIO34–38.
+// Slave SPI uses left-header cluster 28–31; future SD MUST use a different SPI.
 constexpr int PIN_BOOT_BUTTON = 21;
 constexpr int PIN_STATUS_RGB = -1;
 constexpr int PIN_LED1 = 2;
 constexpr int PIN_LED2 = 3;
 constexpr int PIN_LED3 = 4;
 constexpr int PIN_LED4 = 5;
-constexpr int PIN_LED5 = 6;
-constexpr int PIN_LED6 = 7;
+constexpr int PIN_LED5 = 46;
+constexpr int PIN_LED6 = 47;
 
-constexpr int PIN_SLAVE_RST = 9;
+constexpr int PIN_SLAVE_RST = 23;  // right edge header (next to IRQ 22)
 
-constexpr int PIN_SPI_SCK = 12;
-constexpr int PIN_SPI_MOSI = 11;
-constexpr int PIN_SPI_MISO = 13;
-constexpr int PIN_SPI_CS = 10;
+constexpr int PIN_SPI_SCK = 30;
+constexpr int PIN_SPI_MOSI = 29;
+constexpr int PIN_SPI_MISO = 31;
+constexpr int PIN_SPI_CS = 28;
 constexpr int PIN_SPI_IRQ = 22;
 
 #elif defined(BOARD_HOST_S3)
