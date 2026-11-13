@@ -22,6 +22,7 @@
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <memory>
 #include <stdlib.h>
 #include <string.h>
 
@@ -32,6 +33,74 @@ struct HttpRequestBody {
     bool overflow = false;
     size_t maxBytes = 0;
 };
+
+// LED3 hold until the HTTP response is finished (not TCP disconnect).
+constexpr size_t kWebLedHoldSlots = 32;
+struct WebLedHoldSlot {
+    std::weak_ptr<AsyncWebServerRequest> request;
+    bool armed = false;
+};
+WebLedHoldSlot webLedHolds[kWebLedHoldSlots];
+portMUX_TYPE webLedHoldMux = portMUX_INITIALIZER_UNLOCKED;
+
+void armWebRequestLed(AsyncWebServerRequest *request) {
+    if (request == nullptr) {
+        return;
+    }
+    STATUS_RGB.beginWebRequest();
+    std::weak_ptr<AsyncWebServerRequest> weak = request->shared_from_this();
+    portENTER_CRITICAL(&webLedHoldMux);
+    for (size_t i = 0; i < kWebLedHoldSlots; i++) {
+        if (!webLedHolds[i].armed) {
+            webLedHolds[i].request = weak;
+            webLedHolds[i].armed = true;
+            portEXIT_CRITICAL(&webLedHoldMux);
+            return;
+        }
+    }
+    portEXIT_CRITICAL(&webLedHoldMux);
+    // No free slot — drop the hold so LED3 cannot stick on.
+    STATUS_RGB.endWebRequest();
+}
+
+void serviceWebRequestLeds() {
+    for (size_t i = 0; i < kWebLedHoldSlots; i++) {
+        bool armed = false;
+        std::weak_ptr<AsyncWebServerRequest> weak;
+        portENTER_CRITICAL(&webLedHoldMux);
+        armed = webLedHolds[i].armed;
+        if (armed) {
+            weak = webLedHolds[i].request;
+        }
+        portEXIT_CRITICAL(&webLedHoldMux);
+        if (!armed) {
+            continue;
+        }
+
+        std::shared_ptr<AsyncWebServerRequest> req = weak.lock();
+        bool responseFinished = false;
+        if (req == nullptr) {
+            // Request destroyed (e.g. WebSocket clientRelease after handshake).
+            responseFinished = true;
+        } else {
+            AsyncWebServerResponse *response = req->getResponse();
+            responseFinished = response != nullptr && response->_finished();
+        }
+        if (!responseFinished) {
+            continue;
+        }
+
+        portENTER_CRITICAL(&webLedHoldMux);
+        if (webLedHolds[i].armed) {
+            webLedHolds[i].armed = false;
+            webLedHolds[i].request.reset();
+            portEXIT_CRITICAL(&webLedHoldMux);
+            STATUS_RGB.endWebRequest();
+        } else {
+            portEXIT_CRITICAL(&webLedHoldMux);
+        }
+    }
+}
 
 bool websocketPayloadIsPing(const uint8_t *data, size_t len) {
     if (data == nullptr || len < 13) {
@@ -643,10 +712,10 @@ void WebConsole::begin() {
         ) { handleOtaUpload(request, filename, index, data, len, final, U_FLASH); }
     );
 
-    // Host LED3 (blue): ON for any HTTP/WebSocket-upgrade request; OFF when response finishes.
+    // Host LED3 (blue): ON when a request is accepted; OFF when its response is finished
+    // (response->_finished), not when the TCP connection disconnects.
     server.addMiddleware([](AsyncWebServerRequest *request, ArMiddlewareNext next) {
-        STATUS_RGB.beginWebRequest();
-        request->onDisconnect([]() { STATUS_RGB.endWebRequest(); });
+        armWebRequestLed(request);
         next();
     });
 
@@ -796,6 +865,7 @@ void WebConsole::cameraHeavyWorkerTask(void *param) {
 }
 
 void WebConsole::loop() {
+    serviceWebRequestLeds();
     devicesSocket.cleanupClients();
     consolesSocket.cleanupClients();
     if (cameraStore != nullptr) {

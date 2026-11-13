@@ -8,3 +8,5 @@ cloud (websocket)
 5) new action: HTTP request
 
 
+  python3 scripts/firmware_join.py --host .pio/build/esp32-p4-host/firmware.bin --hosted-c6 tools/p4-hosted-c6-update/data/esp32c6-hosted.bin --hosted-c6-version 2.12.11 --host-board p4 -o firmware-joined.zip
+

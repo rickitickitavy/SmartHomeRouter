@@ -402,7 +402,7 @@ If the slave negatively acknowledges a firmware-OTA END frame, the host SHALL NO
 ### Requirement: P4 host slave-SPI pin map is board-specific
 The ESP32-P4 host image SHALL use a documented GPIO map for the inter-chip slave SPI link (`PIN_SPI_*`, `PIN_SPI_IRQ`, `PIN_SLAVE_RST`) and obligatory host status LEDs (`PIN_LED1`–`PIN_LED6`) plus `PIN_BOOT_BUTTON`. The product P4 schematic SHALL NOT require LAN, LCD, or touch. The ESP32-S3 host pin map already specified for the slave link SHALL remain valid for `esp32-s3-host`.
 
-Locked P4 host map (product schematic): SPI SCK **12**, MOSI **11**, MISO **13**, CS **10**, IRQ **22**, slave EN/reset **9**, LED1–LED6 **2–7**, boot button **21**. GPIO **14–19** are reserved for ESP-Hosted Wi‑Fi SDIO. Future SD (if any) SHOULD prefer a separate SPI on GPIOs such as **28–31** and MUST NOT share the slave SPI controller. Avoid straps **34–38** and USB Serial/JTAG **24–25** for these product nets.
+Locked P4 host map (headered Wi‑Fi6 kit edge pins only): SPI SCK **30**, MOSI **29**, MISO **31**, CS **28**, IRQ **22**, slave EN/reset **23**, LED1–LED4 **2–5**, LED5–LED6 **46–47**, boot button **21**. GPIO **14–19** are reserved for on-module ESP-Hosted Wi‑Fi SDIO. Future SD (if any) MUST use a separate SPI controller from the slave link (not **28–31**). Avoid I2C silk **7–8**, straps **34–38**, and USB Serial/JTAG **24–25** for these product nets.
 
 #### Scenario: S3 map unchanged
 - **WHEN** the S3 host image drives the slave SPI link
