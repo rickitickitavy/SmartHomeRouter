@@ -9,7 +9,7 @@ static const int kLedPins[6] = {PIN_LED1, PIN_LED2, PIN_LED3, PIN_LED4, PIN_LED5
 static const LedColor kLedColors[6] = {
     LedColorBlue,
     LedColorGreen,
-    LedColorGreen,
+    LedColorBlue,
     LedColorGreen,
     LedColorGreen,
     LedColorRed
@@ -226,6 +226,30 @@ void StatusRgb::pulsePacketToDevice() {
     startLedPulse(3);
 }
 
+void StatusRgb::beginWebRequest() {
+    if (!hostRole) {
+        return;
+    }
+    portENTER_CRITICAL(&webRequestMux);
+    if (webRequestCount < 0xFFFF) {
+        webRequestCount++;
+    }
+    portEXIT_CRITICAL(&webRequestMux);
+    apply();
+}
+
+void StatusRgb::endWebRequest() {
+    if (!hostRole) {
+        return;
+    }
+    portENTER_CRITICAL(&webRequestMux);
+    if (webRequestCount > 0) {
+        webRequestCount--;
+    }
+    portEXIT_CRITICAL(&webRequestMux);
+    apply();
+}
+
 void StatusRgb::writePairingPhase(bool ledOn) {
     pairingPhaseOn = ledOn;
     apply();
@@ -274,6 +298,9 @@ void StatusRgb::apply() {
         } else {
             for (int ledIndex = 0; ledIndex < kPulseLedCount; ledIndex++) {
                 levelOn[ledIndex] = pulseActive[ledIndex];
+            }
+            if (webRequestCount > 0) {
+                levelOn[kLed3Index] = true;
             }
             if (mqttBrokerListening) {
                 levelOn[3] = true;

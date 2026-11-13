@@ -10,6 +10,7 @@
 #include "ZigbeeSpiProxy.h"
 #include "FirmwareOta.h"
 #include "InterChipHost.h"
+#include "StatusRgb.h"
 #include "UserStore.h"
 #include "generated/EmbeddedWebAssets.h"
 
@@ -642,6 +643,13 @@ void WebConsole::begin() {
         ) { handleOtaUpload(request, filename, index, data, len, final, U_FLASH); }
     );
 
+    // Host LED3 (blue): ON for any HTTP/WebSocket-upgrade request; OFF when response finishes.
+    server.addMiddleware([](AsyncWebServerRequest *request, ArMiddlewareNext next) {
+        STATUS_RGB.beginWebRequest();
+        request->onDisconnect([]() { STATUS_RGB.endWebRequest(); });
+        next();
+    });
+
     server.begin();
     LOGGER.info("Web console on port 80");
 }
@@ -811,11 +819,19 @@ void WebConsole::handleLiveSocketEvent(
     if (client == nullptr) {
         return;
     }
+    // Frame-level activity after upgrade (handshake already uses HTTP middleware).
+    if (type == WS_EVT_CONNECT || type == WS_EVT_DATA) {
+        STATUS_RGB.beginWebRequest();
+    }
     if (type == WS_EVT_CONNECT) {
         client->keepAlivePeriod(20);
+        STATUS_RGB.endWebRequest();
         return;
     }
     if (type != WS_EVT_DATA || data == nullptr || len == 0 || arg == nullptr) {
+        if (type == WS_EVT_DATA) {
+            STATUS_RGB.endWebRequest();
+        }
         return;
     }
     const AwsFrameInfo *frameInfo = static_cast<const AwsFrameInfo *>(arg);
@@ -823,12 +839,15 @@ void WebConsole::handleLiveSocketEvent(
         || !frameInfo->final
         || frameInfo->index != 0
         || frameInfo->len != len) {
+        STATUS_RGB.endWebRequest();
         return;
     }
     if (!websocketPayloadIsPing(data, len)) {
+        STATUS_RGB.endWebRequest();
         return;
     }
     client->text("{\"op\":\"pong\"}");
+    STATUS_RGB.endWebRequest();
 }
 
 void WebConsole::bindDevicesSocket() {
@@ -2884,6 +2903,8 @@ void WebConsole::handleHardwareGet(AsyncWebServerRequest *request) {
     json += String((unsigned)settingsManager->historySweepIntervalMin());
     json += ",\"historyMaxSizeKiB\":";
     json += String((unsigned)settingsManager->historyMaxSizeKiB());
+    json += ",\"historyMaxSizeKiBMax\":";
+    json += String((unsigned)HISTORY_MAX_SIZE_KIB_MAX);
     json += ",\"historyEntrySize\":";
     json += String((unsigned)settingsManager->historyEntrySize());
     json += "}";
@@ -2950,8 +2971,17 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
         request->send(400, "text/plain", "historySweepIntervalMin must be 1-120");
         return;
     }
-    if (haveHistorySize && historyMaxSizeKiB <= 0) {
-        request->send(400, "text/plain", "historyMaxSizeKiB must be positive");
+    if (haveHistorySize
+        && (historyMaxSizeKiB < (int)HISTORY_MAX_SIZE_KIB_MIN
+            || historyMaxSizeKiB > (int)HISTORY_MAX_SIZE_KIB_MAX)) {
+        request->send(
+            400,
+            "text/plain",
+            "historyMaxSizeKiB must be "
+                + String((unsigned)HISTORY_MAX_SIZE_KIB_MIN)
+                + "-"
+                + String((unsigned)HISTORY_MAX_SIZE_KIB_MAX)
+        );
         return;
     }
     if (haveHistoryEntry && !SettingsManager::isValidHistoryEntrySize((uint16_t)historyEntrySize)) {
@@ -3433,9 +3463,10 @@ bool WebConsole::applyHardwareJson(const char *json, String *errorText) {
         settingsManager->setHistorySweepIntervalMin((uint8_t)historySweepIntervalMin);
     }
     if (extractJsonInt(json, "historyMaxSizeKiB", historyMaxSizeKiB)) {
-        if (historyMaxSizeKiB <= 0) {
+        if (historyMaxSizeKiB < (int)HISTORY_MAX_SIZE_KIB_MIN
+            || historyMaxSizeKiB > (int)HISTORY_MAX_SIZE_KIB_MAX) {
             if (errorText != nullptr) {
-                *errorText = "historyMaxSizeKiB must be positive";
+                *errorText = "historyMaxSizeKiB out of range";
             }
             return false;
         }

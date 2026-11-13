@@ -52,10 +52,10 @@
 
 // One host version string per SoC: bump the shared MAJOR.MINOR.BUILD in both.
 // Prefix is only S3- or P4- (no separate CORE macro).
-#define FIRMWARE_VERSION_HOST "S3-4.2.43"
+#define FIRMWARE_VERSION_HOST "S3-4.2.47"
 #if defined(BOARD_HOST_P4)
 #undef FIRMWARE_VERSION_HOST
-#define FIRMWARE_VERSION_HOST "P4-4.2.43"
+#define FIRMWARE_VERSION_HOST "P4-4.2.47"
 #endif
 #define FIRMWARE_VERSION_SLAVE "4.2.04"
 
@@ -89,6 +89,13 @@
 #define HISTORY_SWEEP_INTERVAL_MIN_MIN 1
 #define HISTORY_SWEEP_INTERVAL_MIN_MAX 120
 #define DEFAULT_HISTORY_MAX_SIZE_KIB 4096
+#define HISTORY_MAX_SIZE_KIB_MIN 4
+#if defined(BOARD_HOST_P4)
+#define HISTORY_MAX_SIZE_KIB_MAX (16384u + 8192u)
+#else
+// 0xFFFF is the EEPROM unset sentinel; keep S3 below that.
+#define HISTORY_MAX_SIZE_KIB_MAX 65534u
+#endif
 #define DEFAULT_HISTORY_ENTRY_SIZE 1024
 #define HISTORY_PAGE_BYTES 4096
 #define HISTORY_ENTRY_HEADER_BYTES 12

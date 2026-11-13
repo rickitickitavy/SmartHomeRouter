@@ -504,12 +504,24 @@ uint16_t SettingsManager::historyMaxSizeKiB() const {
     if (sizeKiB == 0 || sizeKiB == 0xFFFF) {
         return DEFAULT_HISTORY_MAX_SIZE_KIB;
     }
+    if (sizeKiB < HISTORY_MAX_SIZE_KIB_MIN) {
+        return HISTORY_MAX_SIZE_KIB_MIN;
+    }
+    if (sizeKiB > HISTORY_MAX_SIZE_KIB_MAX) {
+        return HISTORY_MAX_SIZE_KIB_MAX;
+    }
     return sizeKiB;
 }
 
 void SettingsManager::setHistoryMaxSizeKiB(uint16_t sizeKiB) {
     if (sizeKiB == 0) {
         sizeKiB = DEFAULT_HISTORY_MAX_SIZE_KIB;
+    }
+    if (sizeKiB < HISTORY_MAX_SIZE_KIB_MIN) {
+        sizeKiB = HISTORY_MAX_SIZE_KIB_MIN;
+    }
+    if (sizeKiB > HISTORY_MAX_SIZE_KIB_MAX) {
+        sizeKiB = HISTORY_MAX_SIZE_KIB_MAX;
     }
     memcpy(settings.reserved + HISTORY_MAX_SIZE_KIB_RESERVED_OFFSET, &sizeKiB, sizeof(sizeKiB));
 }

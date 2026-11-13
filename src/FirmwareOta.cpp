@@ -8,10 +8,15 @@
 
 #include <Update.h>
 #include <esp_heap_caps.h>
+#include <stdio.h>
 #include <string.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/portmacro.h>
 #include <freertos/semphr.h>
+
+#if defined(BOARD_HOST_P4)
+#include "esp32-hal-hosted.h"
+#endif
 
 FirmwareOta FIRMWARE_OTA;
 
@@ -41,8 +46,9 @@ static void givePackageFs() {
 
 bool FirmwareOta::busy() const {
     return currentPhase == Phase::Receiving || currentPhase == Phase::Preparing
-        || currentPhase == Phase::Slave || currentPhase == Phase::VerifyingSlave
-        || currentPhase == Phase::Host || currentPhase == Phase::Rebooting;
+        || currentPhase == Phase::HostedC6 || currentPhase == Phase::Slave
+        || currentPhase == Phase::VerifyingSlave || currentPhase == Phase::Host
+        || currentPhase == Phase::Rebooting;
 }
 
 bool FirmwareOta::isUpdatingSlave() const {
@@ -79,6 +85,8 @@ const char *FirmwareOta::phaseId() const {
             return "receiving";
         case Phase::Preparing:
             return "preparing";
+        case Phase::HostedC6:
+            return "hosted_c6";
         case Phase::Slave:
             return "slave";
         case Phase::VerifyingSlave:
@@ -319,6 +327,7 @@ bool FirmwareOta::beginStaging(size_t contentLength) {
     packageSize = (uint32_t)contentLength;
     slaveImageSize = 0;
     hostImageSize = 0;
+    hostedC6ImageSize = 0;
     imageSize = 0;
     imageOffset = 0;
     streamPos = 0;
@@ -332,12 +341,16 @@ bool FirmwareOta::beginStaging(size_t contentLength) {
     rebootReadyMs = 0;
     hasSlaveImage = false;
     hasHostImage = false;
+    hasHostedC6Image = false;
     slaveUpdateRequired = false;
     hostUpdateRequired = false;
+    hostedC6UpdateRequired = false;
     expectedSlaveVersion[0] = '\0';
     expectedHostVersion[0] = '\0';
+    expectedHostedC6Version[0] = '\0';
     slaveMember = JoinedFirmwareZip::MemberInfo{};
     hostMember = JoinedFirmwareZip::MemberInfo{};
+    hostedC6Member = JoinedFirmwareZip::MemberInfo{};
     LittleFS.mkdir("/ota");
     if (contentLength > 0) {
         const size_t freeBytes = LittleFS.totalBytes() - LittleFS.usedBytes();
@@ -376,6 +389,36 @@ bool FirmwareOta::writeStaging(const uint8_t *data, size_t length) {
     return true;
 }
 
+#if defined(BOARD_HOST_P4)
+bool FirmwareOta::readRunningHostedC6Version(char *destination, size_t destinationSize) {
+    if (destination == nullptr || destinationSize == 0) {
+        return false;
+    }
+    destination[0] = '\0';
+    if (!hostedIsInitialized()) {
+        return false;
+    }
+    // One-shot refresh of the Hosted version cache (not used on ordinary Status polls).
+    (void)hostedHasUpdate();
+    uint32_t major = 0;
+    uint32_t minor = 0;
+    uint32_t patch = 0;
+    hostedGetSlaveVersion(&major, &minor, &patch);
+    if (major == 0 && minor == 0 && patch == 0) {
+        return false;
+    }
+    snprintf(
+        destination,
+        destinationSize,
+        "%lu.%lu.%lu",
+        (unsigned long)major,
+        (unsigned long)minor,
+        (unsigned long)patch
+    );
+    return destination[0] != '\0';
+}
+#endif
+
 bool FirmwareOta::prepareJoinedPackage() {
     ensurePackageFsMutex();
     closePackageStream();
@@ -386,7 +429,11 @@ bool FirmwareOta::prepareJoinedPackage() {
         fail("Joined package missing");
         return false;
     }
+#if defined(BOARD_HOST_P4)
+    if (!JoinedFirmwareZip::findMembers(packageFile, &slaveMember, &hostMember, &hostedC6Member)) {
+#else
     if (!JoinedFirmwareZip::findMembers(packageFile, &slaveMember, &hostMember)) {
+#endif
         givePackageFs();
         closePackageStream();
         fail("Joined package needs slave.bin and/or host.bin");
@@ -394,12 +441,21 @@ bool FirmwareOta::prepareJoinedPackage() {
     }
     hasSlaveImage = slaveMember.found;
     hasHostImage = hostMember.found;
+#if defined(BOARD_HOST_P4)
+    hasHostedC6Image = hostedC6Member.found;
+#else
+    hasHostedC6Image = false;
+    hostedC6Member = JoinedFirmwareZip::MemberInfo{};
+#endif
     expectedSlaveVersion[0] = '\0';
     expectedHostVersion[0] = '\0';
+    expectedHostedC6Version[0] = '\0';
     slaveUpdateRequired = hasSlaveImage;
     hostUpdateRequired = hasHostImage;
+    hostedC6UpdateRequired = false;
     slaveImageSize = hasSlaveImage ? slaveMember.uncompressedSize : 0;
     hostImageSize = hasHostImage ? hostMember.uncompressedSize : 0;
+    hostedC6ImageSize = hasHostedC6Image ? hostedC6Member.uncompressedSize : 0;
     imageOffset = 0;
     streamPos = 0;
     if (hasSlaveImage) {
@@ -422,6 +478,41 @@ bool FirmwareOta::prepareJoinedPackage() {
             LOGGER.warning("Joined package has no host.version.txt");
         }
     }
+#if defined(BOARD_HOST_P4)
+    if (hasHostedC6Image) {
+        if (!JoinedFirmwareZip::readHostedC6VersionText(
+                packageFile,
+                expectedHostedC6Version,
+                sizeof(expectedHostedC6Version)
+            )
+            || expectedHostedC6Version[0] == '\0') {
+            givePackageFs();
+            closePackageStream();
+            fail("hosted-c6.bin present but hosted-c6.version.txt missing");
+            return false;
+        }
+        char runningHosted[SPI_STATUS_VERSION_MAX + 1]{};
+        if (!readRunningHostedC6Version(runningHosted, sizeof(runningHosted))) {
+            givePackageFs();
+            closePackageStream();
+            fail("Hosted C6 version unreadable");
+            return false;
+        }
+        if (strcmp(runningHosted, expectedHostedC6Version) == 0) {
+            hostedC6UpdateRequired = false;
+            LOGGER.info(
+                "Hosted C6 already at package version "
+                + String(expectedHostedC6Version) + "; skipping SDIO update"
+            );
+        } else {
+            hostedC6UpdateRequired = true;
+            LOGGER.info(
+                "Hosted C6 update required running="
+                + String(runningHosted) + " package=" + String(expectedHostedC6Version)
+            );
+        }
+    }
+#endif
     if (hasSlaveImage && slaveVersionAlreadyCurrent()) {
         slaveUpdateRequired = false;
         LOGGER.info(
@@ -436,7 +527,8 @@ bool FirmwareOta::prepareJoinedPackage() {
             + String(expectedHostVersion) + "; skipping host apply"
         );
     }
-    if (slaveUpdateRequired) {
+    // Prefetch slave only when Hosted C6 will not run first (memberReader reused).
+    if (slaveUpdateRequired && !hostedC6UpdateRequired) {
         if (!memberReader.open(packageFile, slaveMember)) {
             givePackageFs();
             closePackageStream();
@@ -444,22 +536,27 @@ bool FirmwareOta::prepareJoinedPackage() {
             return false;
         }
         imageSize = slaveImageSize;
-        // Prefetch slave image into PSRAM so hostSpi can pack without LittleFS.
         if (!loadSlaveImageToRam()) {
             givePackageFs();
             closePackageStream();
             fail("Failed to load slave.bin into RAM");
             return false;
         }
-    } else {
+    } else if (!hostedC6UpdateRequired) {
         imageSize = hostUpdateRequired ? hostImageSize : 0;
+    } else {
+        imageSize = hostedC6ImageSize;
     }
     givePackageFs();
     LOGGER.info(
-        "Joined package OK slave="
+        "Joined package OK hostedC6="
+        + (hostedC6UpdateRequired ? String((unsigned long)hostedC6ImageSize) : String("skip"))
+        + " slave="
         + (slaveUpdateRequired ? String((unsigned long)slaveImageSize) : String("skip"))
         + " host="
         + (hostUpdateRequired ? String((unsigned long)hostImageSize) : String("skip"))
+        + " expectHostedC6="
+        + (expectedHostedC6Version[0] != '\0' ? expectedHostedC6Version : "(none)")
         + " expectSlave="
         + (expectedSlaveVersion[0] != '\0' ? expectedSlaveVersion : "(any-new)")
         + " expectHost="
@@ -1173,12 +1270,179 @@ void FirmwareOta::pumpSlaveBegin() {
     INTER_CHIP_SLAVE.completeCommandResult(slaveBeginSeq, true);
 }
 
+void FirmwareOta::continueAfterHostedC6() {
+    if (!slaveUpdateRequired && !hostUpdateRequired) {
+        finishNoOpSuccess(
+            hasHostedC6Image ? "Hosted C6 done; host and slave already match package versions"
+                             : "host and slave already match package versions"
+        );
+        return;
+    }
+    if (slaveUpdateRequired) {
+        ensurePackageFsMutex();
+        takePackageFs();
+        if (!packageFile) {
+            packageFile = LittleFS.open(kPackagePath, "r");
+        }
+        if (!packageFile
+            || !JoinedFirmwareZip::findMembers(
+                   packageFile, &slaveMember, &hostMember, &hostedC6Member
+               )
+            || !slaveMember.found) {
+            givePackageFs();
+            fail("Joined package lost slave.bin after Hosted C6");
+            return;
+        }
+        hasSlaveImage = slaveMember.found;
+        hasHostImage = hostMember.found;
+        memberReader.close();
+        if (!memberReader.open(packageFile, slaveMember)) {
+            givePackageFs();
+            fail("Failed to open slave.bin stream after Hosted C6");
+            return;
+        }
+        imageSize = slaveImageSize;
+        imageOffset = 0;
+        streamPos = 0;
+        if (!loadSlaveImageToRam()) {
+            givePackageFs();
+            fail("Failed to load slave.bin into RAM after Hosted C6");
+            return;
+        }
+        givePackageFs();
+        strncpy(
+            preOtaSlaveVersion,
+            INTER_CHIP_HOST.slaveFirmwareVersion(),
+            sizeof(preOtaSlaveVersion) - 1
+        );
+        preOtaSlaveVersion[sizeof(preOtaSlaveVersion) - 1] = '\0';
+        slaveSpiCycleCount = 0;
+        startSlaveUploadCycle();
+        LOGGER.info(
+            hostUpdateRequired ? "Hosted C6 done; updating slave then host"
+                               : "Hosted C6 done; updating slave only"
+        );
+        return;
+    }
+    LOGGER.info(
+        hasSlaveImage ? "Hosted C6 done; slave skipped; updating host"
+                      : "Hosted C6 done; updating host only"
+    );
+    startHostApply();
+}
+
+bool FirmwareOta::startHostedC6Apply() {
+#if !defined(BOARD_HOST_P4)
+    fail("Hosted C6 update not supported on this host");
+    return false;
+#else
+    if (!hostedIsInitialized()) {
+        fail("Hosted C6 not initialized");
+        return false;
+    }
+    ensurePackageFsMutex();
+    takePackageFs();
+    if (!packageFile) {
+        packageFile = LittleFS.open(kPackagePath, "r");
+    }
+    if (!packageFile
+        || !JoinedFirmwareZip::findMembers(
+               packageFile, &slaveMember, &hostMember, &hostedC6Member
+           )
+        || !hostedC6Member.found) {
+        givePackageFs();
+        fail("Joined package has no hosted-c6.bin");
+        return false;
+    }
+    memberReader.close();
+    if (!memberReader.open(packageFile, hostedC6Member)) {
+        givePackageFs();
+        fail("Failed to open hosted-c6.bin stream");
+        return false;
+    }
+    if (!hostedBeginUpdate()) {
+        memberReader.close();
+        givePackageFs();
+        fail("hostedBeginUpdate failed");
+        return false;
+    }
+    hostedC6ImageSize = hostedC6Member.uncompressedSize;
+    imageSize = hostedC6ImageSize;
+    imageOffset = 0;
+    streamPos = 0;
+    currentPhase = Phase::HostedC6;
+    givePackageFs();
+    LOGGER.info(
+        "Hosted C6 SDIO update start size=" + String((unsigned long)hostedC6ImageSize)
+    );
+    return true;
+#endif
+}
+
+void FirmwareOta::pumpHostedC6Apply() {
+#if !defined(BOARD_HOST_P4)
+    fail("Hosted C6 update not supported on this host");
+#else
+    if (currentPhase != Phase::HostedC6 || !memberReader.isOpen()) {
+        return;
+    }
+    uint8_t buffer[2048];
+    takePackageFs();
+    const size_t got = memberReader.read(buffer, sizeof(buffer));
+    if (got == 0 && memberReader.failed()) {
+        givePackageFs();
+        fail("Hosted C6 image read failed");
+        return;
+    }
+    if (got > 0) {
+        if (!hostedWriteUpdate(buffer, (uint32_t)got)) {
+            givePackageFs();
+            fail("hostedWriteUpdate failed");
+            return;
+        }
+        imageOffset += (uint32_t)got;
+        givePackageFs();
+        return;
+    }
+    givePackageFs();
+    memberReader.close();
+    if (!hostedEndUpdate()) {
+        fail("hostedEndUpdate failed");
+        return;
+    }
+    if (!hostedActivateUpdate()) {
+        fail("hostedActivateUpdate failed");
+        return;
+    }
+    delay(500);
+    char runningHosted[SPI_STATUS_VERSION_MAX + 1]{};
+    if (!readRunningHostedC6Version(runningHosted, sizeof(runningHosted))) {
+        fail("Hosted C6 version unreadable after apply");
+        return;
+    }
+    if (expectedHostedC6Version[0] != '\0'
+        && strcmp(runningHosted, expectedHostedC6Version) != 0) {
+        fail("Hosted C6 version mismatch after apply");
+        return;
+    }
+    hostedC6UpdateRequired = false;
+    LOGGER.info("Hosted C6 updated to " + String(runningHosted));
+    continueAfterHostedC6();
+#endif
+}
+
 void FirmwareOta::pumpPackagePrepare() {
     if (!packagePreparePending || currentPhase != Phase::Preparing) {
         return;
     }
     packagePreparePending = false;
     if (!prepareJoinedPackage()) {
+        return;
+    }
+    if (hostedC6UpdateRequired) {
+        if (!startHostedC6Apply()) {
+            return;
+        }
         return;
     }
     if (!slaveUpdateRequired && !hostUpdateRequired) {
@@ -1207,6 +1471,10 @@ void FirmwareOta::pump() {
     pumpSlaveBegin();
     pumpSlaveApply();
     pumpPackagePrepare();
+    if (currentPhase == Phase::HostedC6) {
+        pumpHostedC6Apply();
+        return;
+    }
     if (currentPhase == Phase::Slave) {
         enqueueNextSlaveChunk();
         return;

@@ -26,7 +26,13 @@ struct MemberInfo {
 };
 
 // Fills slave/host members when present. Returns true if at least one image is found.
-bool findMembers(File &zipFile, MemberInfo *slaveOut, MemberInfo *hostOut);
+// When hostedC6Out is non-null, also fills optional hosted-c6.bin.
+bool findMembers(
+    File &zipFile,
+    MemberInfo *slaveOut,
+    MemberInfo *hostOut,
+    MemberInfo *hostedC6Out = nullptr
+);
 // Reads a named version member (STORE or DEFLATE). Returns false if missing/invalid.
 bool readNamedVersionText(
     File &zipFile,
@@ -38,6 +44,8 @@ bool readNamedVersionText(
 bool readSlaveVersionText(File &zipFile, char *destination, size_t destinationSize);
 // Reads host.version.txt.
 bool readHostVersionText(File &zipFile, char *destination, size_t destinationSize);
+// Reads hosted-c6.version.txt.
+bool readHostedC6VersionText(File &zipFile, char *destination, size_t destinationSize);
 // Legacy alias for readSlaveVersionText.
 bool readVersionText(File &zipFile, char *destination, size_t destinationSize);
 

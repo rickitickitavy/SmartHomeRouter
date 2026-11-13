@@ -33,6 +33,21 @@ This is not a port of the Node.js Zigbee2MQTT converter database. The default So
 - Product P4 schematic has **no** LAN, LCD, or touch. Future SD (if added) must use a **different** SPI than the slave link.
 - P4 host env uses board `esp32-p4` (ES / rev &lt; 3.0, ROM `eco2`). Do **not** use `esp32-p4_r3` on v1.3 silicon — bootloader dies with Illegal instruction. On-chip Wi‑Fi coexist is skipped for P4; field Wi‑Fi may still need ESP-Hosted depending on the kit.
 
+### Schematic: router panel LED cells
+
+How LEDs are set on the router panel by LED cells:
+
+| Cell | Assignment |
+|------|------------|
+| 1 | HOST LED5 - GREEN |
+| 2 | HOST LED1/LED2 - BLUE/GREEN |
+| 3 | HOST LED3 BLUE |
+| 4 | HOST LED4 - GREEN |
+| 5 | HOST LED6 - RED |
+| 6 | SLAVE LED2/LED4 - GREEN/BLUE |
+| 7 | SLAVE LED2 - RED |
+| 8 | SLAVE LED5/LED6 - GREEN/BLUE |
+
 ### Status LEDs (six)
 
 GPIO HIGH / PWM = on (blue/green PWM; red digital). Pin maps in `include/pins.h`:
@@ -50,7 +65,7 @@ GPIO HIGH / PWM = on (blue/green PWM; red digital). Pin maps in `include/pins.h`
 |-----------|------|--------|
 | LED1 | 0.1 s: MQTT device command received | 0.1 s: packet from an **unknown** device |
 | LED2 | 0.1 s: MQTT device state published | 0.1 s: packet from a **known** device |
-| LED3 | Unused | 0.1 s: radio ACK that our command was delivered |
+| LED3 | On (blue) while any web HTTP/WebSocket request is in progress | 0.1 s: radio ACK that our command was delivered |
 | LED4 | On while the local MQTT broker is listening | 0.1 s: **only** command actually sent on the radio |
 | LED5 | Solid while MQTT is connected; blinks (0.25 s) for boot only (not errors) | Solid when ready; blinks (0.25 s) for boot/critical |
 | LED6 | Solid for critical (e.g. lost slave); 10 Hz blink while firmware update is busy | Blinks while pairing/join is open |
@@ -80,7 +95,7 @@ pio run -e esp32-s3-host -t upload
 pio run -e esp32-c6-slave -t upload
 ```
 
-Optional joined Update package (scripts in repo / CI): combine **one** host `.bin` (S3 or P4) and `slave.bin` into the ZIP the console expects. Use `scripts/firmware_join.py --host-board s3|p4` so `host.version.txt` matches `S3-…` or `P4-…`.
+Optional joined Update package (scripts in repo / CI): combine **one** host `.bin` (S3 or P4) and `slave.bin` into the ZIP the console expects. Use `scripts/firmware_join.py --host-board s3|p4` so `host.version.txt` matches `S3-…` or `P4-…`. For P4, optional `--hosted-c6` + `--hosted-c6-version` add `hosted-c6.bin` / `hosted-c6.version.txt`; the host applies that image over SDIO only when present and the running Hosted C6 version differs.
 
 A pre-build script gzips `data/index.html` and `data/css/all.css` into the host firmware image, so a separate filesystem flash is not required for the web console.
 

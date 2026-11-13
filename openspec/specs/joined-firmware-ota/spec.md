@@ -7,7 +7,7 @@ Defines the joined ZIP firmware package (`slave.bin` + `host.bin`) and how join/
 ## Requirements
 
 ### Requirement: Joined firmware package format
-The product SHALL define a single **joined firmware package** file that contains both the slave application image and the host application image. The package SHALL be a **ZIP** archive whose members are named exactly `slave.bin` and `host.bin`. Member order in the archive SHALL NOT matter. The package MAY use ZIP DEFLATE or ZIP STORE; tools and the host MUST accept both. The package SHALL also carry **two** version members: `host.version.txt` and `slave.version.txt` (each a single trimmed version line). For backward compatibility, if `slave.version.txt` is absent but `version.txt` is present, the host SHALL treat `version.txt` as the slave package version.
+The product SHALL define a single **joined firmware package** file that contains both the slave application image and the host application image. The package SHALL be a **ZIP** archive whose members are named exactly `slave.bin` and `host.bin`. Member order in the archive SHALL NOT matter. The package MAY use ZIP DEFLATE or ZIP STORE; tools and the host MUST accept both. The package SHALL also carry **two** version members: `host.version.txt` and `slave.version.txt` (each a single trimmed version line). For backward compatibility, if `slave.version.txt` is absent but `version.txt` is present, the host SHALL treat `version.txt` as the slave package version. The joined ZIP MAY include optional `hosted-c6.bin` and `hosted-c6.version.txt`. Absence of those members SHALL NOT invalidate an otherwise valid package. Host and/or slave image rules remain as today.
 
 #### Scenario: Valid joined package with two versions
 - **WHEN** a ZIP contains non-empty `slave.bin` and `host.bin` plus `host.version.txt` and `slave.version.txt`
@@ -20,6 +20,14 @@ The product SHALL define a single **joined firmware package** file that contains
 #### Scenario: Legacy version.txt maps to slave
 - **WHEN** a ZIP has `version.txt` but no `slave.version.txt`
 - **THEN** the host uses `version.txt` as the expected slave package version
+
+#### Scenario: Optional Hosted members
+- **WHEN** a ZIP includes `hosted-c6.bin` and `hosted-c6.version.txt` plus host and/or slave images
+- **THEN** the package is accepted
+
+#### Scenario: Missing Hosted members still valid
+- **WHEN** a ZIP has no `hosted-c6.bin`
+- **THEN** Update does not require a Hosted C6 step
 
 ### Requirement: Join and split tools
 The repository SHALL provide scripts (or documented commands) to **join** a host `.bin` and a slave `.bin` into the joined ZIP and to **split** a joined ZIP back into `host.bin` and `slave.bin`. Those tools SHALL be usable offline without the device. Join SHALL embed `host.version.txt` from `FIRMWARE_VERSION_HOST` and `slave.version.txt` from `FIRMWARE_VERSION_SLAVE` (defaults read from `Defines.h` when not overridden).
@@ -78,7 +86,7 @@ The firmware SHALL define distinct host and slave version strings. The host SHAL
 - **THEN** Status shows master `P4-4.2.22`
 
 ### Requirement: Skip chip update when package version already matches
-Before starting slave SPI programming, if the package includes a slave image and the slave’s running version equals the package slave version, the host SHALL skip slave transfer and verify for that update. Before applying `host.bin`, if the package includes a host image and the host’s running version equals the package host version, the host SHALL skip host apply (and SHALL NOT force a host restart solely for that skipped apply). Equality is after trim of both strings. When a chip is skipped, the other chip MAY still update.
+Before starting slave SPI programming, if the package includes a slave image and the slave’s running version equals the package slave version, the host SHALL skip slave transfer and verify for that update. Before applying `host.bin`, if the package includes a host image and the host’s running version equals the package host version, the host SHALL skip host apply (and SHALL NOT force a host restart solely for that skipped apply). Equality is after trim of both strings. When a chip is skipped, the other chip MAY still update. On P4, before Hosted C6 SDIO programming: absent `hosted-c6.bin` → skip; present with matching running version → skip; present with different version → apply; present but version text missing/empty or running version unreadable → fail Hosted step (do not program).
 
 #### Scenario: Slave already current
 - **WHEN** the joined package slave version equals the running slave version and the host package version differs from the running host version
@@ -91,6 +99,18 @@ Before starting slave SPI programming, if the package includes a slave image and
 #### Scenario: Both already current
 - **WHEN** both package versions equal the corresponding running versions
 - **THEN** the host programs neither chip and reports a successful no-op update
+
+#### Scenario: Hosted absent → skip
+- **WHEN** the staged ZIP has no `hosted-c6.bin`
+- **THEN** the P4 host does not run Hosted C6 SDIO update
+
+#### Scenario: Hosted match → skip
+- **WHEN** `hosted-c6.bin` is present and running version equals `hosted-c6.version.txt`
+- **THEN** the P4 host skips Hosted C6 programming
+
+#### Scenario: Hosted mismatch → apply
+- **WHEN** `hosted-c6.bin` is present and running version differs from `hosted-c6.version.txt`
+- **THEN** the P4 host programs Hosted C6 from that member over SDIO after the ZIP is fully staged
 
 ### Requirement: Failed version verify reboots then full SPI resend
 

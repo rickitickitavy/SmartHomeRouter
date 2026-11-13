@@ -1,6 +1,8 @@
 #pragma once
 
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/portmacro.h>
 
 enum LedColor : uint8_t {
     LedColorRed = 0,
@@ -27,6 +29,9 @@ public:
     void pulseKnownDevicePacket();
     void pulseAckSent();
     void pulsePacketToDevice();
+    /** Host LED3: ON while any web HTTP/WebSocket request is in flight. */
+    void beginWebRequest();
+    void endWebRequest();
     bool allowsPairingBlink() const;
     void writePairingPhase(bool ledOn);
     void service();
@@ -68,6 +73,9 @@ private:
     bool updateBlinkManual = false;
     bool manualUpdateLed6On = false;
     unsigned long manualUpdateLed6ToggleMs = 0;
+    volatile uint16_t webRequestCount = 0;
+    portMUX_TYPE webRequestMux = portMUX_INITIALIZER_UNLOCKED;
+    static constexpr int kLed3Index = 2;
 
     bool allowsActivityPulse() const;
     bool slaveFaultBlinkHeld() const;

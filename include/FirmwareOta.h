@@ -11,12 +11,13 @@ public:
         Idle = 0,
         Receiving = 1,
         Preparing = 2,
-        Slave = 3,
-        VerifyingSlave = 4,
-        Host = 5,
-        Failed = 6,
-        Done = 7,
-        Rebooting = 8
+        HostedC6 = 3,
+        Slave = 4,
+        VerifyingSlave = 5,
+        Host = 6,
+        Failed = 7,
+        Done = 8,
+        Rebooting = 9
     };
 
     static constexpr const char *kPackagePath = "/ota/package.zip";
@@ -62,14 +63,17 @@ private:
     File packageFile;
     JoinedFirmwareZip::MemberInfo slaveMember{};
     JoinedFirmwareZip::MemberInfo hostMember{};
+    JoinedFirmwareZip::MemberInfo hostedC6Member{};
     JoinedFirmwareZip::MemberReader memberReader{};
     uint8_t *slaveImageRam = nullptr;
     uint32_t slaveImageRamSize = 0;
     bool hasSlaveImage = false;
     bool hasHostImage = false;
+    bool hasHostedC6Image = false;
     uint32_t packageSize = 0;
     uint32_t slaveImageSize = 0;
     uint32_t hostImageSize = 0;
+    uint32_t hostedC6ImageSize = 0;
     uint32_t imageSize = 0;
     uint32_t imageOffset = 0;
     uint32_t streamPos = 0;
@@ -102,9 +106,11 @@ private:
     bool spiClockOverrideActive = false;
     char expectedSlaveVersion[SPI_STATUS_VERSION_MAX + 1]{};
     char expectedHostVersion[SPI_STATUS_VERSION_MAX + 1]{};
+    char expectedHostedC6Version[SPI_STATUS_VERSION_MAX + 1]{};
     char preOtaSlaveVersion[SPI_STATUS_VERSION_MAX + 1]{};
     bool slaveUpdateRequired = false;
     bool hostUpdateRequired = false;
+    bool hostedC6UpdateRequired = false;
     uint8_t slaveSpiCycleCount = 0;
     unsigned long slaveVerifyDeadlineMs = 0;
     bool slaveVerifyResetPending = false;
@@ -139,10 +145,16 @@ private:
     void pumpSlaveApply();
     void armSlaveApplyAfterAckDrain();
     void pumpPackagePrepare();
+    bool startHostedC6Apply();
+    void pumpHostedC6Apply();
+    void continueAfterHostedC6();
     void beginSlaveSpiClockOverride();
     void endSlaveSpiClockOverride();
     const char *phaseId() const;
     uint8_t percentOf(uint32_t done, uint32_t total) const;
+#if defined(BOARD_HOST_P4)
+    static bool readRunningHostedC6Version(char *destination, size_t destinationSize);
+#endif
 };
 
 extern FirmwareOta FIRMWARE_OTA;

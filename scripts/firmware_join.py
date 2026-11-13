@@ -27,19 +27,16 @@ def read_define_string(defines_path: Path, macro_name: str) -> str:
 def read_firmware_versions(
     defines_path: Path, *, host_board: str = "s3"
 ) -> tuple[str, str]:
-    """Resolve host version with SoC prefix (S3- / P4-) from FIRMWARE_VERSION_HOST_CORE."""
-    try:
-        core = read_define_string(defines_path, "FIRMWARE_VERSION_HOST_CORE")
-    except SystemExit:
-        # Older Defines.h without CORE: use FIRMWARE_VERSION_HOST as-is.
-        host = read_define_string(defines_path, "FIRMWARE_VERSION_HOST")
-        slave = read_define_string(defines_path, "FIRMWARE_VERSION_SLAVE")
-        return host, slave
-    board = (host_board or "s3").strip().lower()
-    if board in ("p4", "esp32-p4", "esp32p4"):
-        host = "P4-" + core
+    """Resolve host identity as S3-/P4- + FIRMWARE_VERSION_HOST."""
+    host_num = read_define_string(defines_path, "FIRMWARE_VERSION_HOST")
+    if host_num.startswith("S3-") or host_num.startswith("P4-"):
+        host = host_num
     else:
-        host = "S3-" + core
+        board = (host_board or "s3").strip().lower()
+        if board in ("p4", "esp32-p4", "esp32p4"):
+            host = "P4-" + host_num
+        else:
+            host = "S3-" + host_num
     slave = read_define_string(defines_path, "FIRMWARE_VERSION_SLAVE")
     return host, slave
 
@@ -59,6 +56,17 @@ def main() -> int:
         help="Slave application .bin (optional if --host is set)",
     )
     parser.add_argument(
+        "--hosted-c6",
+        type=Path,
+        default=None,
+        help="Optional ESP-Hosted Wi-Fi C6 .bin (P4: apply only if present and needed)",
+    )
+    parser.add_argument(
+        "--hosted-c6-version",
+        default=None,
+        help="Hosted C6 version for hosted-c6.version.txt (required with --hosted-c6)",
+    )
+    parser.add_argument(
         "-o",
         "--output",
         type=Path,
@@ -73,7 +81,7 @@ def main() -> int:
     parser.add_argument(
         "--host-version",
         default=None,
-        help="Host version string for host.version.txt (default: S3-/P4- + FIRMWARE_VERSION_HOST_CORE)",
+        help="Host version string for host.version.txt (default: S3-/P4- + FIRMWARE_VERSION_HOST)",
     )
     parser.add_argument(
         "--host-board",
@@ -111,6 +119,16 @@ def main() -> int:
         if not args.host.is_file() or args.host.stat().st_size == 0:
             raise SystemExit(f"host binary missing or empty: {args.host}")
         members.append("host.bin")
+    hosted_version = ""
+    if args.hosted_c6 is not None:
+        if not args.hosted_c6.is_file() or args.hosted_c6.stat().st_size == 0:
+            raise SystemExit(f"hosted-c6 binary missing or empty: {args.hosted_c6}")
+        hosted_version = (args.hosted_c6_version or "").strip()
+        if not hosted_version or len(hosted_version) > 15:
+            raise SystemExit(
+                f"hosted-c6 version must be 1-15 chars, got {hosted_version!r}"
+            )
+        members.append("hosted-c6.bin")
 
     default_host, default_slave = read_firmware_versions(
         args.defines, host_board=args.host_board
@@ -131,15 +149,20 @@ def main() -> int:
             archive.write(args.slave, arcname="slave.bin")
         if args.host is not None:
             archive.write(args.host, arcname="host.bin")
+        if args.hosted_c6 is not None:
+            archive.write(args.hosted_c6, arcname="hosted-c6.bin")
+            archive.writestr("hosted-c6.version.txt", hosted_version + "\n")
         archive.writestr("host.version.txt", host_version + "\n")
         archive.writestr("slave.version.txt", slave_version + "\n")
-        # Legacy single version.txt (slave) for older host firmwares.
         archive.writestr("version.txt", slave_version + "\n")
 
+    extras = (
+        f" + hosted-c6.version.txt={hosted_version}" if args.hosted_c6 is not None else ""
+    )
     print(
         f"Wrote {args.output} ({' + '.join(members)}"
         f" + host.version.txt={host_version}"
-        f" + slave.version.txt={slave_version})"
+        f" + slave.version.txt={slave_version}{extras})"
     )
     return 0
 
