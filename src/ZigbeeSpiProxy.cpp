@@ -714,6 +714,45 @@ bool ZigbeeSpiProxy::closeJoin() {
     return queued;
 }
 
+bool ZigbeeSpiProxy::rebindDevice(const uint8_t ieee[8], uint8_t *outcomeOut, unsigned long timeoutMs) {
+    if (ieee == nullptr || outcomeOut == nullptr) {
+        return false;
+    }
+    if (!commandsAllowed()) {
+        *outcomeOut = SPI_REBIND_OUTCOME_FAILED;
+        return false;
+    }
+    uint8_t payload[SPI_REBIND_CMD_LEN];
+    if (!spiPackRebindDevice(payload, sizeof(payload), ieee)) {
+        *outcomeOut = SPI_REBIND_OUTCOME_FAILED;
+        return false;
+    }
+    rebindWaitActive = true;
+    rebindWaitDone = false;
+    memcpy(rebindWaitIeee, ieee, 8);
+    rebindWaitOutcome = SPI_REBIND_OUTCOME_FAILED;
+    if (!INTER_CHIP_HOST.tryEnqueue(SpiCmdRebindDevice, payload, SPI_REBIND_CMD_LEN)) {
+        rebindWaitActive = false;
+        *outcomeOut = SPI_REBIND_OUTCOME_FAILED;
+        return false;
+    }
+    const unsigned long startedMs = millis();
+    while (!rebindWaitDone && (millis() - startedMs) < timeoutMs) {
+        INTER_CHIP_HOST.pump();
+        delay(10);
+    }
+    rebindWaitActive = false;
+    if (!rebindWaitDone) {
+        *outcomeOut = SPI_REBIND_OUTCOME_FAILED;
+        return false;
+    }
+    *outcomeOut = rebindWaitOutcome;
+    if (rebindWaitOutcome == SPI_REBIND_OUTCOME_PAIRING_FALLBACK) {
+        pairingOpen = true;
+    }
+    return true;
+}
+
 bool ZigbeeSpiProxy::controlOnOff(const uint8_t ieee[8], const char *command, uint8_t endpoint) {
     const char *body = command != nullptr ? command : "";
     uint8_t payload[9 + SPI_DEVICE_MESSAGE_MAX];
@@ -1644,6 +1683,20 @@ void ZigbeeSpiProxy::pumpRegistrySync() {
 }
 
 void ZigbeeSpiProxy::onSpiEvent(const SpiFrame &frame) {
+    if (frame.cmd == SpiEvtRebindResult) {
+        uint8_t ieee[8];
+        uint8_t outcome = SPI_REBIND_OUTCOME_FAILED;
+        if (spiUnpackRebindResult(frame.payload, frame.length, ieee, &outcome)) {
+            if (rebindWaitActive && memcmp(rebindWaitIeee, ieee, 8) == 0) {
+                rebindWaitOutcome = outcome;
+                rebindWaitDone = true;
+            }
+            if (outcome == SPI_REBIND_OUTCOME_PAIRING_FALLBACK) {
+                pairingOpen = true;
+            }
+        }
+        return;
+    }
     if (frame.cmd == SpiEvtJoinClosed) {
         pairingOpen = false;
         return;

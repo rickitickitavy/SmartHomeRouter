@@ -1748,6 +1748,9 @@ static void maybeStartNtp() {
 }
 
 #if defined(BOARD_ROLE_SLAVE)
+static void onSlaveRebindResult(const uint8_t ieee[8], uint8_t outcome);
+static void onSlaveRebindDevice(const uint8_t ieee[8]);
+
 static void startZigbeeOnOwnTask(uint8_t channel, uint8_t permitJoinSec) {
     struct StartArgs {
         uint8_t channel;
@@ -1800,6 +1803,7 @@ static void createSlaveCoordinator() {
     zigbeeCoordinator->setJoinClosedHandler(
         []() { INTER_CHIP_SLAVE.enqueueJoinClosed(); }
     );
+    zigbeeCoordinator->setRebindResultHandler(onSlaveRebindResult);
     zigbeeCoordinator->setDeviceBoundHandler(
         [](const BoundZigbeeDevice *device) {
             if (device == nullptr) {
@@ -1852,6 +1856,18 @@ static bool onSlavePermitJoin(uint8_t seconds) {
     }
     zigbeeCoordinator->permitJoin(seconds);
     return true;
+}
+
+static void onSlaveRebindDevice(const uint8_t ieee[8]) {
+    if (zigbeeCoordinator == nullptr) {
+        INTER_CHIP_SLAVE.enqueueRebindResult(ieee, SPI_REBIND_OUTCOME_FAILED);
+        return;
+    }
+    zigbeeCoordinator->startRebind(ieee);
+}
+
+static void onSlaveRebindResult(const uint8_t ieee[8], uint8_t outcome) {
+    INTER_CHIP_SLAVE.enqueueRebindResult(ieee, outcome);
 }
 
 static void onSlaveDeviceSync(uint8_t flags, const DeviceTopicEntry *entry) {
@@ -2404,6 +2420,7 @@ static void setupSlave() {
     LOGGER.setStoreRing(false);
     INTER_CHIP_SLAVE.setSettingsHandler(onSlaveSettings);
     INTER_CHIP_SLAVE.setPermitJoinHandler(onSlavePermitJoin);
+    INTER_CHIP_SLAVE.setRebindDeviceHandler(onSlaveRebindDevice);
     INTER_CHIP_SLAVE.setZigbeeHealthChecker([]() {
         return zigbeeCoordinator != nullptr && zigbeeCoordinator->checkResponsive();
     });

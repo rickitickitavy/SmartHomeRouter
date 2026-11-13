@@ -125,6 +125,21 @@ void InterChipSlave::setPermitJoinHandler(PermitJoinFn handler) {
     permitJoinHandler = handler;
 }
 
+void InterChipSlave::setRebindDeviceHandler(RebindDeviceFn handler) {
+    rebindDeviceHandler = handler;
+}
+
+void InterChipSlave::enqueueRebindResult(const uint8_t ieee[8], uint8_t outcome) {
+    if (ieee == nullptr) {
+        return;
+    }
+    uint8_t payload[SPI_REBIND_RESULT_LEN];
+    if (!spiPackRebindResult(payload, sizeof(payload), ieee, outcome)) {
+        return;
+    }
+    enqueueEvent(SpiEvtRebindResult, payload, SPI_REBIND_RESULT_LEN);
+}
+
 void InterChipSlave::setOnOffHandler(OnOffFn handler) {
     onOffHandler = handler;
 }
@@ -372,6 +387,8 @@ void InterChipSlave::clearDeferredRadioCommands() {
     deferredDeviceCommandCount = 0;
     permitJoinPending = false;
     deferredPermitSeconds = 0;
+    rebindPending = false;
+    memset(deferredRebindIeee, 0, sizeof(deferredRebindIeee));
 }
 
 bool InterChipSlave::tryEnqueue(uint8_t cmd, uint8_t seq, const uint8_t *payload, uint16_t length) {
@@ -764,6 +781,17 @@ void InterChipSlave::handleHostFrame(const SpiFrame &frame) {
         enqueueEvent(SpiEvtCmdResult, &ok, 1);
         return;
     }
+    if (frame.cmd == SpiCmdRebindDevice) {
+        uint8_t ieee[8];
+        memset(ieee, 0, sizeof(ieee));
+        if (!spiUnpackRebindDevice(frame.payload, frame.length, ieee)) {
+            enqueueRebindResult(ieee, SPI_REBIND_OUTCOME_FAILED);
+            return;
+        }
+        memcpy(deferredRebindIeee, ieee, 8);
+        rebindPending = true;
+        return;
+    }
     if (frame.cmd == SpiCmdZclOnOff && frame.length >= 10) {
         uint8_t ieee[8];
         memcpy(ieee, frame.payload, 8);
@@ -924,6 +952,14 @@ void InterChipSlave::applyDeferredRadioCommands() {
     if (permitJoinPending && permitJoinHandler != nullptr) {
         if (permitJoinHandler(deferredPermitSeconds)) {
             permitJoinPending = false;
+        }
+    }
+    if (rebindPending) {
+        rebindPending = false;
+        if (rebindDeviceHandler != nullptr) {
+            rebindDeviceHandler(deferredRebindIeee);
+        } else {
+            enqueueRebindResult(deferredRebindIeee, SPI_REBIND_OUTCOME_FAILED);
         }
     }
     DeferredDeviceCommand *slot = deferredDeviceCommandHead;

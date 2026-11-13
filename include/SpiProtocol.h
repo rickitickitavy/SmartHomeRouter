@@ -32,7 +32,8 @@ enum SpiCommand : uint8_t {
     SpiCmdZclCommand = 0x11,
     SpiCmdSetUser = 0x12,
     SpiCmdGetUsers = 0x13,
-    SpiCmdSetLedBrightness = 0x14
+    SpiCmdSetLedBrightness = 0x14,
+    SpiCmdRebindDevice = 0x15
 };
 
 constexpr uint8_t SPI_DEVICE_SYNC_RESET = 0x01;
@@ -147,8 +148,61 @@ enum SpiEvent : uint8_t {
     SpiEvtJoinClosed = 0x8C,
     SpiEvtErr = 0x8E,
     SpiEvtTimeout = 0x8F,
-    SpiEvtUserMap = 0x90
+    SpiEvtUserMap = 0x90,
+    SpiEvtRebindResult = 0x91
 };
+
+constexpr uint8_t SPI_REBIND_OUTCOME_FAILED = 0;
+constexpr uint8_t SPI_REBIND_OUTCOME_IMMEDIATE_OK = 1;
+constexpr uint8_t SPI_REBIND_OUTCOME_PAIRING_FALLBACK = 2;
+constexpr size_t SPI_REBIND_CMD_LEN = 8;
+constexpr size_t SPI_REBIND_RESULT_LEN = 9;
+static_assert(SPI_REBIND_CMD_LEN <= SPI_MAX_PAYLOAD, "rebind command must fit SPI payload");
+static_assert(SPI_REBIND_RESULT_LEN <= SPI_MAX_PAYLOAD, "rebind result must fit SPI payload");
+
+inline bool spiPackRebindDevice(uint8_t *out, size_t outMax, const uint8_t ieee[8]) {
+    if (out == nullptr || ieee == nullptr || outMax < SPI_REBIND_CMD_LEN) {
+        return false;
+    }
+    memcpy(out, ieee, 8);
+    return true;
+}
+
+inline bool spiUnpackRebindDevice(const uint8_t *in, uint16_t length, uint8_t ieee[8]) {
+    if (in == nullptr || length < SPI_REBIND_CMD_LEN || ieee == nullptr) {
+        return false;
+    }
+    memcpy(ieee, in, 8);
+    return true;
+}
+
+inline bool spiPackRebindResult(
+    uint8_t *out,
+    size_t outMax,
+    const uint8_t ieee[8],
+    uint8_t outcome
+) {
+    if (out == nullptr || ieee == nullptr || outMax < SPI_REBIND_RESULT_LEN) {
+        return false;
+    }
+    memcpy(out, ieee, 8);
+    out[8] = outcome;
+    return true;
+}
+
+inline bool spiUnpackRebindResult(
+    const uint8_t *in,
+    uint16_t length,
+    uint8_t ieee[8],
+    uint8_t *outcome
+) {
+    if (in == nullptr || length < SPI_REBIND_RESULT_LEN || ieee == nullptr || outcome == nullptr) {
+        return false;
+    }
+    memcpy(ieee, in, 8);
+    *outcome = in[8];
+    return true;
+}
 
 enum HostBringupState : uint8_t {
     HostBringupReset = 0,

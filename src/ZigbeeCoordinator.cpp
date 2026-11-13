@@ -461,6 +461,279 @@ void ZigbeeCoordinator::setJoinClosedHandler(JoinClosedFn handler) {
     joinClosedHandler = handler;
 }
 
+void ZigbeeCoordinator::setRebindResultHandler(RebindResultFn handler) {
+    rebindResultHandler = handler;
+}
+
+void ZigbeeCoordinator::clearSwitchBoundCacheForIeee(const uint8_t ieee[8]) {
+    if (ieee == nullptr) {
+        return;
+    }
+    std::list<zb_device_params_t *> cached = zigbeeSwitch.getBoundDevices();
+    for (zb_device_params_t *cachedDevice : cached) {
+        if (cachedDevice == nullptr) {
+            continue;
+        }
+        if (memcmp(cachedDevice->ieee_addr, ieee, 8) != 0) {
+            continue;
+        }
+        zigbeeSwitch.removeBoundDevice(cachedDevice);
+        free(cachedDevice);
+    }
+}
+
+void ZigbeeCoordinator::finishRebind(uint8_t outcome) {
+    if (!rebindActive) {
+        return;
+    }
+    uint8_t ieee[8];
+    memcpy(ieee, rebindIeee, 8);
+    rebindActive = false;
+    rebindShortAddr = 0;
+    rebindEndpoint = 0;
+    rebindBindsIssued = 0;
+    rebindBindsSucceeded = 0;
+    rebindBindsFailed = 0;
+    rebindDeadlineMs = 0;
+    if (rebindResultHandler != nullptr) {
+        rebindResultHandler(ieee, outcome);
+    }
+}
+
+void ZigbeeCoordinator::openRebindPairingFallback(const uint8_t ieee[8]) {
+    if (ieee != nullptr) {
+        clearSwitchBoundCacheForIeee(ieee);
+    }
+    uint8_t seconds = DEFAULT_PERMIT_JOIN_SEC;
+    if (seconds == 0) {
+        seconds = 180;
+    }
+    permitJoin(seconds);
+    finishRebind(SPI_REBIND_OUTCOME_PAIRING_FALLBACK);
+}
+
+bool ZigbeeCoordinator::resolveRebindAddress(
+    const uint8_t ieee[8],
+    uint16_t *shortAddrOut,
+    uint8_t *endpointOut,
+    uint8_t *zigbeeTypeOut
+) {
+    if (ieee == nullptr || shortAddrOut == nullptr || endpointOut == nullptr || zigbeeTypeOut == nullptr) {
+        return false;
+    }
+    *shortAddrOut = 0;
+    *endpointOut = 0;
+    *zigbeeTypeOut = ZigbeeDeviceTypeUnknown;
+
+    BoundZigbeeDevice *slot = findByIeee(ieee);
+    if (slot != nullptr && slot->occupied) {
+        if (DeviceTopicMap::isUsableShortAddr(slot->shortAddr)) {
+            *shortAddrOut = slot->shortAddr;
+        }
+        if (DeviceTopicMap::isUsableEndpoint(slot->endpoint)) {
+            *endpointOut = slot->endpoint;
+        } else if (slot->knownEndpointCount > 0) {
+            *endpointOut = slot->knownEndpoints[0];
+        }
+        *zigbeeTypeOut = slot->zigbeeType;
+    }
+
+    if (!DeviceTopicMap::isUsableShortAddr(*shortAddrOut)) {
+        const uint16_t resolved = esp_zb_address_short_by_ieee(const_cast<uint8_t *>(ieee));
+        if (DeviceTopicMap::isUsableShortAddr(resolved)) {
+            *shortAddrOut = resolved;
+        }
+    }
+
+    if (registeredMap != nullptr) {
+        const DeviceTopicEntry *entry = registeredMap->findByIeee(ieee);
+        if (entry != nullptr && entry->used) {
+            if (*zigbeeTypeOut == ZigbeeDeviceTypeUnknown) {
+                *zigbeeTypeOut = entry->zigbeeType;
+            }
+            if (!DeviceTopicMap::isUsableShortAddr(*shortAddrOut)
+                && DeviceTopicMap::isUsableShortAddr(entry->shortAddr)) {
+                *shortAddrOut = entry->shortAddr;
+            }
+            if (!DeviceTopicMap::isUsableEndpoint(*endpointOut)) {
+                if (entry->channelCount >= 1 && entry->channelCount <= DEVICE_CHANNEL_COUNT_MAX) {
+                    *endpointOut = 1;
+                }
+            }
+        }
+    }
+
+    return DeviceTopicMap::isUsableShortAddr(*shortAddrOut)
+        && DeviceTopicMap::isUsableEndpoint(*endpointOut);
+}
+
+void ZigbeeCoordinator::adoptRebindBoundIdentity(
+    const uint8_t ieee[8],
+    uint16_t shortAddr,
+    uint8_t endpoint
+) {
+    if (ieee == nullptr || !DeviceTopicMap::isUsableShortAddr(shortAddr)
+        || !DeviceTopicMap::isUsableEndpoint(endpoint)) {
+        return;
+    }
+    clearSwitchBoundCacheForIeee(ieee);
+    zb_device_params_t *device = (zb_device_params_t *)malloc(sizeof(zb_device_params_t));
+    if (device == nullptr) {
+        return;
+    }
+    memset(device, 0, sizeof(zb_device_params_t));
+    memcpy(device->ieee_addr, ieee, 8);
+    device->short_addr = shortAddr;
+    device->endpoint = endpoint;
+    zigbeeSwitch.addBoundDevice(device);
+    storeBoundDevice(device);
+}
+
+void ZigbeeCoordinator::onRebindZdoBind(esp_zb_zdp_status_t zdoStatus, void *userCtx) {
+    ZigbeeCoordinator *coordinator = static_cast<ZigbeeCoordinator *>(userCtx);
+    if (coordinator == nullptr || !coordinator->rebindActive) {
+        return;
+    }
+    if (zdoStatus == ESP_ZB_ZDP_STATUS_SUCCESS) {
+        coordinator->rebindBindsSucceeded++;
+    } else {
+        coordinator->rebindBindsFailed++;
+    }
+    const uint8_t finished =
+        (uint8_t)(coordinator->rebindBindsSucceeded + coordinator->rebindBindsFailed);
+    if (finished < coordinator->rebindBindsIssued) {
+        return;
+    }
+    if (coordinator->rebindBindsSucceeded > 0) {
+        coordinator->adoptRebindBoundIdentity(
+            coordinator->rebindIeee,
+            coordinator->rebindShortAddr,
+            coordinator->rebindEndpoint
+        );
+        coordinator->finishRebind(SPI_REBIND_OUTCOME_IMMEDIATE_OK);
+        return;
+    }
+    coordinator->openRebindPairingFallback(coordinator->rebindIeee);
+}
+
+void ZigbeeCoordinator::issueRebindZdoBinds(
+    const uint8_t ieee[8],
+    uint16_t shortAddr,
+    uint8_t endpoint,
+    uint8_t zigbeeType
+) {
+    uint16_t clusters[4];
+    uint8_t clusterCount = 0;
+    const uint16_t typeCluster = zigbeeDeviceTypeInfo(zigbeeType)->clusterId;
+    if (typeCluster != kZigbeeDeviceTypeNoCluster && typeCluster != 0x0000 && typeCluster != 0xFC00) {
+        clusters[clusterCount++] = typeCluster;
+    } else {
+        clusters[clusterCount++] = ESP_ZB_ZCL_CLUSTER_ID_ON_OFF;
+    }
+    if (zigbeeType == ZigbeeDeviceTypeOnOff || zigbeeType == ZigbeeDeviceTypeUnknown) {
+        bool haveOnOff = false;
+        for (uint8_t index = 0; index < clusterCount; index++) {
+            if (clusters[index] == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) {
+                haveOnOff = true;
+                break;
+            }
+        }
+        if (!haveOnOff && clusterCount < 4) {
+            clusters[clusterCount++] = ESP_ZB_ZCL_CLUSTER_ID_ON_OFF;
+        }
+    }
+    if (clusterCount < 4) {
+        clusters[clusterCount++] = ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG;
+    }
+
+    const uint8_t coordinatorEndpoint =
+        (zigbeeType == ZigbeeDeviceTypeIasZone) ? iasCie.getEndpoint() : zigbeeSwitch.getEndpoint();
+    esp_zb_ieee_addr_t coordinatorIeee;
+    memset(coordinatorIeee, 0, sizeof(coordinatorIeee));
+    esp_zb_get_long_address(coordinatorIeee);
+
+    rebindBindsIssued = 0;
+    rebindBindsSucceeded = 0;
+    rebindBindsFailed = 0;
+    for (uint8_t index = 0; index < clusterCount; index++) {
+        esp_zb_zdo_bind_req_param_t bindReq;
+        memset(&bindReq, 0, sizeof(bindReq));
+        memcpy(bindReq.src_address, ieee, 8);
+        bindReq.src_endp = endpoint;
+        bindReq.cluster_id = clusters[index];
+        bindReq.dst_addr_mode = ESP_ZB_ZDO_BIND_DST_ADDR_MODE_64_BIT_EXTENDED;
+        memcpy(bindReq.dst_address_u.addr_long, coordinatorIeee, sizeof(esp_zb_ieee_addr_t));
+        bindReq.dst_endp = coordinatorEndpoint;
+        bindReq.req_dst_addr = shortAddr;
+        esp_zb_zdo_device_bind_req(&bindReq, onRebindZdoBind, this);
+        rebindBindsIssued++;
+    }
+}
+
+void ZigbeeCoordinator::servicePendingRebind() {
+    if (!rebindActive) {
+        return;
+    }
+    if ((long)(millis() - rebindDeadlineMs) < 0) {
+        return;
+    }
+    if (rebindBindsSucceeded > 0) {
+        adoptRebindBoundIdentity(rebindIeee, rebindShortAddr, rebindEndpoint);
+        finishRebind(SPI_REBIND_OUTCOME_IMMEDIATE_OK);
+        return;
+    }
+    openRebindPairingFallback(rebindIeee);
+}
+
+void ZigbeeCoordinator::startRebind(const uint8_t ieee[8]) {
+    if (ieee == nullptr || isZeroIeee(ieee)) {
+        return;
+    }
+    if (rebindActive) {
+        finishRebind(SPI_REBIND_OUTCOME_FAILED);
+    }
+    memcpy(rebindIeee, ieee, 8);
+    rebindActive = true;
+    rebindShortAddr = 0;
+    rebindEndpoint = 0;
+    rebindBindsIssued = 0;
+    rebindBindsSucceeded = 0;
+    rebindBindsFailed = 0;
+    rebindDeadlineMs = millis() + 2500UL;
+
+    if (!started) {
+        LOGGER.warning("Rebind failed: Zigbee is not started");
+        finishRebind(SPI_REBIND_OUTCOME_FAILED);
+        return;
+    }
+
+    uint16_t shortAddr = 0;
+    uint8_t endpoint = 0;
+    uint8_t zigbeeType = ZigbeeDeviceTypeUnknown;
+    if (!resolveRebindAddress(ieee, &shortAddr, &endpoint, &zigbeeType)) {
+        LOGGER.info(
+            "Rebind immediate unavailable ieee=" + formatIeeeText(ieee)
+            + "; opening pairing fallback"
+        );
+        openRebindPairingFallback(ieee);
+        return;
+    }
+
+    rebindShortAddr = shortAddr;
+    rebindEndpoint = endpoint;
+    LOGGER.info(
+        "Rebind immediate ieee=" + formatIeeeText(ieee)
+        + " nwk=0x" + String(shortAddr, HEX)
+        + " ep=" + String(endpoint)
+    );
+    // Seed local bound identity so control/status paths see the device while ZDO runs.
+    adoptRebindBoundIdentity(ieee, shortAddr, endpoint);
+    issueRebindZdoBinds(ieee, shortAddr, endpoint, zigbeeType);
+    if (rebindBindsIssued == 0) {
+        openRebindPairingFallback(ieee);
+    }
+}
+
 void ZigbeeCoordinator::attachLibraryCallbacks(void (*withSource)(bool, uint8_t, esp_zb_zcl_addr_t)) {
     zigbeeSwitch.onLightStateChangeWithSource(withSource);
 }
@@ -1162,6 +1435,7 @@ void ZigbeeCoordinator::dispatch() {
     serviceCommandFlights();
     serviceTypeProbes();
     syncPairingNeighborShorts();
+    servicePendingRebind();
     if (!started) {
         return;
     }

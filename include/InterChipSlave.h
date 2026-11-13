@@ -10,6 +10,7 @@ public:
     using ZigbeeHealthFn = bool (*)();
     using SettingsFn = void (*)(uint8_t channel, uint8_t permitJoinSec, uint32_t unixSec);
     using PermitJoinFn = bool (*)(uint8_t seconds);
+    using RebindDeviceFn = void (*)(const uint8_t ieee[8]);
     using OnOffFn = void (*)(const uint8_t ieee[8], const char *command, uint8_t endpoint);
     using WriteAttrFn = void (*)(
         const uint8_t ieee[8],
@@ -58,6 +59,8 @@ public:
     );
     void setSettingsHandler(SettingsFn handler);
     void setPermitJoinHandler(PermitJoinFn handler);
+    void setRebindDeviceHandler(RebindDeviceFn handler);
+    void enqueueRebindResult(const uint8_t ieee[8], uint8_t outcome);
     void setOnOffHandler(OnOffFn handler);
     void setWriteAttrHandler(WriteAttrFn handler);
     void setReadAttrHandler(ReadAttrFn handler);
@@ -120,6 +123,9 @@ private:
     SettingsFn settingsHandler = nullptr;
     ZigbeeHealthFn zigbeeHealthChecker = nullptr;
     PermitJoinFn permitJoinHandler = nullptr;
+    RebindDeviceFn rebindDeviceHandler = nullptr;
+    bool rebindPending = false;
+    uint8_t deferredRebindIeee[8]{};
     OnOffFn onOffHandler = nullptr;
     WriteAttrFn writeAttrHandler = nullptr;
     ReadAttrFn readAttrHandler = nullptr;
