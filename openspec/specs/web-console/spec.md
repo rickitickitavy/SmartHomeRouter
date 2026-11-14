@@ -602,18 +602,29 @@ The Status section SHALL show host online time, master and slave firmware versio
 - **THEN** Status shows Zigbee device count 3, Zigbee online 1, MQTT device count 1, MQTT online as reported, master firmware version from the running image, slave firmware version from the last slave report, and Zigbee and MQTT packet counters in Network
 
 ### Requirement: Status groups use compact name-value rows
-Status SHALL render live attributes as groups on a two-column Status stack (one column when the viewport is narrow). Column 1 SHALL place online time, then **Version**, then **Network**, then **Connections**. Column 2 SHALL place **Free memory** at the top, then **Devices** immediately after Free memory, then **Historical storage**, then **MQTT**, then **WiFi** at the end. Each group SHALL have a heading. Each attribute SHALL keep its name and value on a single row. Values in a group SHALL align to the right. Groups SHALL use a mindful width (content plus padding) and SHALL NOT stretch to the full main-panel width. Status SHALL NOT contain settings forms that write configuration.
+Status SHALL render live attributes as groups on a two-column Status stack (one column when the viewport is narrow). Column 1 SHALL place **General**, then **Free memory**, then **CPU** (host busy percents), then **Historical storage** (and related storage groups). Column 2 SHALL place **Devices** at the top, then **MQTT**, then **Network**, then **Connections**, then remaining groups such as **WiFi**. Each group SHALL have a heading. Each attribute SHALL keep its name and value on a single row. Values in a group SHALL align to the right. Groups SHALL use a mindful width (content plus padding) and SHALL NOT stretch to the full main-panel width. Status SHALL NOT contain settings forms that write configuration.
 
 #### Scenario: Grouped Status layout
 - **WHEN** the operator opens Status on a wide viewport
-- **THEN** column 1 shows online time, Version, Network, and Connections, and column 2 shows Free memory, Devices, Historical storage, MQTT, then WiFi, each group narrower than the main panel, with names on the left and values on the right of the same row
+- **THEN** column 1 shows Free memory then CPU (among its groups), and column 2 starts with Devices, each group narrower than the main panel, with names on the left and values on the right of the same row
 
-### Requirement: Status Devices group follows Free memory
-On Status (operator and simple-user), the **Devices** group SHALL appear immediately after the **Free memory** group for all users.
+### Requirement: Status Devices group leads column 2
+On Status (operator and simple-user), the **Devices** group SHALL appear at the top of column 2. On a single-column Status layout it SHALL follow the column-1 groups (after Free memory / CPU / storage groups) and precede MQTT and later groups.
 
-#### Scenario: Devices after Free memory
-- **WHEN** Status is open for an admin or a simple user
-- **THEN** Devices is listed directly below Free memory
+#### Scenario: Devices at top of column 2
+- **WHEN** Status is open for an admin or a simple user on a wide viewport
+- **THEN** Devices is the first group in column 2
+
+### Requirement: Status shows host CPU usage
+Status SHALL show host CPU busy percent(s) from the gateway status API. On dual-core hosts Status SHALL show CPU0 and CPU1. Unavailable samples SHALL display as an em dash (or equivalent), not as 0%. Operator Status and simple-user Status MUST both show these values when the viewer can open Status. Status SHALL NOT offer settings forms that write CPU configuration. This change does **not** require a Slave CPU row.
+
+#### Scenario: Host dual-core values
+- **WHEN** Status is open and the host reports CPU0 12% and CPU1 40%
+- **THEN** both operator and simple-user Status show those host percents
+
+#### Scenario: Host sample unavailable
+- **WHEN** Status is open and a host CPU sample is not ready
+- **THEN** that host CPU row shows as unavailable (em dash), not 0%
 
 ### Requirement: Status online time includes days
 Status SHALL show host online time as one value on one row. The value SHALL include days, hours, minutes, and seconds derived from host uptime seconds.

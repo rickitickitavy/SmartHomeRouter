@@ -1422,6 +1422,18 @@
                 payload && payload.actionQueue != null ? String(payload.actionQueue) : "—"
             );
             setStatusText(
+                "statusHostCpu0",
+                payload && payload.hostCpu0Percent != null
+                    ? String(payload.hostCpu0Percent) + "%"
+                    : "—"
+            );
+            setStatusText(
+                "statusHostCpu1",
+                payload && payload.hostCpu1Percent != null
+                    ? String(payload.hostCpu1Percent) + "%"
+                    : "—"
+            );
+            setStatusText(
                 "statusHistoryEntries",
                 payload && payload.historyEntries != null ? String(payload.historyEntries) : "—"
             );
@@ -1604,11 +1616,9 @@
                 ["Free PSRAM", "statusPsramUsage"],
                 ["Action queue", "statusActionQueue"]
             ]);
-            appendStatusGroup(stack, "Devices", [
-                ["Zigbee devices", "statusZigbeeDevices"],
-                ["Zigbee online", "statusZigbeeOnline"],
-                ["MQTT devices", "statusMqttDevices"],
-                ["MQTT online", "statusMqttOnline"]
+            appendStatusGroup(stack, "CPU", [
+                ["Host CPU0", "statusHostCpu0"],
+                ["Host CPU1", "statusHostCpu1"]
             ]);
             appendStatusGroup(stack, "Historical storage", [
                 ["Entries", "statusHistoryEntries"],
@@ -1628,6 +1638,12 @@
                 ["Free space", "statusFsFree"],
                 ["Config size", "statusFsConfig"],
                 ["Scene size", "statusFsScene"]
+            ]);
+            appendStatusGroup(stack, "Devices", [
+                ["Zigbee devices", "statusZigbeeDevices"],
+                ["Zigbee online", "statusZigbeeOnline"],
+                ["MQTT devices", "statusMqttDevices"],
+                ["MQTT online", "statusMqttOnline"]
             ]);
             appendStatusGroup(stack, "MQTT", [
                 ["Current mode", "statusMqttMode"],

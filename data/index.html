@@ -348,6 +348,18 @@
                 payload && payload.actionQueue != null ? String(payload.actionQueue) : "—"
             );
             setStatusText(
+                "statusHostCpu0",
+                payload && payload.hostCpu0Percent != null
+                    ? String(payload.hostCpu0Percent) + "%"
+                    : "—"
+            );
+            setStatusText(
+                "statusHostCpu1",
+                payload && payload.hostCpu1Percent != null
+                    ? String(payload.hostCpu1Percent) + "%"
+                    : "—"
+            );
+            setStatusText(
                 "statusHistoryEntries",
                 payload && payload.historyEntries != null ? String(payload.historyEntries) : "—"
             );
@@ -19993,22 +20005,14 @@
                             </div>
                         </div>
                         <div class="status-group">
-                            <h3 class="group-title">Devices</h3>
+                            <h3 class="group-title">CPU</h3>
                             <div class="status-row">
-                                <span class="status-row-label">Zigbee devices</span>
-                                <p id="statusZigbeeDevices" class="status-value">—</p>
+                                <span class="status-row-label">Host CPU0</span>
+                                <p id="statusHostCpu0" class="status-value">—</p>
                             </div>
                             <div class="status-row">
-                                <span class="status-row-label">Zigbee online</span>
-                                <p id="statusZigbeeOnline" class="status-value">—</p>
-                            </div>
-                            <div class="status-row">
-                                <span class="status-row-label">MQTT devices</span>
-                                <p id="statusMqttDevices" class="status-value">—</p>
-                            </div>
-                            <div class="status-row">
-                                <span class="status-row-label">MQTT online</span>
-                                <p id="statusMqttOnline" class="status-value">—</p>
+                                <span class="status-row-label">Host CPU1</span>
+                                <p id="statusHostCpu1" class="status-value">—</p>
                             </div>
                         </div>
                         <div class="status-group">
@@ -20074,6 +20078,25 @@
                         </div>
                     </div>
                     <div class="status-column">
+                        <div class="status-group">
+                            <h3 class="group-title">Devices</h3>
+                            <div class="status-row">
+                                <span class="status-row-label">Zigbee devices</span>
+                                <p id="statusZigbeeDevices" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Zigbee online</span>
+                                <p id="statusZigbeeOnline" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">MQTT devices</span>
+                                <p id="statusMqttDevices" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">MQTT online</span>
+                                <p id="statusMqttOnline" class="status-value">—</p>
+                            </div>
+                        </div>
                         <div class="status-group">
                             <h3 class="group-title">MQTT</h3>
                             <div class="status-row">
