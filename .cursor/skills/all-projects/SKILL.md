@@ -12,7 +12,7 @@ Applies to **all** projects. Read and follow before acting.
 
 ## Hard rules
 
-- NEVER use git to restore any changes.
+- NEVER use git for rollback (`restore`, `reset`, `revert`, `clean`, path `checkout`/`switch -f`). Edit forward and commit instead. A Cursor shell hook (`.cursor/hooks/block-git-rollback.py`) also denies these commands; do not bypass it.
 - NEVER restore a whole file without asking me first.
 - NEVER EVER do an action as a reaction to any question.
 - If I ask any question, you MUST only answer — no edits, no tool side effects, no restores, no git mutations.

@@ -30,8 +30,24 @@ This is not a port of the Node.js Zigbee2MQTT converter database. The default So
 - Flash and monitor over each board’s **native USB-C** (USB Serial/JTAG CDC).
 - Hold **BOOT** LOW at reset on the **host** to force AP for that boot (does not change stored MODE). Host boot button: S3 GPIO41, P4 GPIO21; slave boot button is GPIO9.
 - Slave onboard RGB is GPIO8 (status); do not use it as a boot-AP strap.
-- Product P4 map targets the headered Wi‑Fi6 kit (edge pins). On-module Hosted C6 keeps SDIO on GPIO14–19. Future SD (if added) must use a **different** SPI than the slave link (**28–31**).
+- Product P4 map targets the headered Wi‑Fi6 kit (edge pins). On-module Hosted C6 keeps SDIO on GPIO14–19. Onboard MicroSD uses **SDMMC** (not the slave SPI bus **28–31**).
 - P4 host env uses board `esp32-p4` (ES / rev &lt; 3.0, ROM `eco2`). Do **not** use `esp32-p4_r3` on v1.3 silicon — bootloader dies with Illegal instruction. On-chip Wi‑Fi coexist is skipped for P4; field Wi‑Fi may still need ESP-Hosted depending on the kit.
+
+### Schematic: P4 MicroSD (SDMMC)
+
+Waveshare ESP32-P4-WIFI6 class boards: 4-bit SDMMC slot, power enable active LOW.
+
+| Signal | GPIO |
+|--------|------|
+| CLK | 43 |
+| CMD | 44 |
+| D0 | 39 |
+| D1 | 40 |
+| D2 | 41 |
+| D3 | 42 |
+| Card power enable (active LOW) | 45 |
+
+These pins do not overlap slave SPI (**28–31**) or Hosted SDIO (**14–19**). History snapshots use the card when present (FatFs/FAT32 path; cards up to 64 GB). Blank cards are formatted on first probe; prefer FAT32 media (ESP-IDF FatFs has no stock exFAT menuconfig). `-DDISABLE_SD` remains for ESP Mail Client only — history uses `SD_MMC` directly.
 
 ### Schematic: router panel LED cells
 

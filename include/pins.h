@@ -7,7 +7,9 @@
 // ESP32-P4 host pin map for the headered Wi‑Fi6 kit (edge pins only).
 // Leave GPIO14–19 free for on-module ESP-Hosted Wi‑Fi SDIO.
 // Avoid I2C silk GPIO7/8, USB Serial/JTAG GPIO24–25, and straps GPIO34–38.
-// Slave SPI uses left-header cluster 28–31; future SD MUST use a different SPI.
+// Slave SPI uses left-header cluster 28–31.
+// Onboard MicroSD is 4-bit SDMMC (not SPI): CLK/CMD/D0–D3 + active-low power.
+// Do not overlap Hosted SDIO 14–19 or slave SPI 28–31.
 constexpr int PIN_BOOT_BUTTON = 21;
 constexpr int PIN_STATUS_RGB = -1;
 constexpr int PIN_LED1 = 2;
@@ -24,6 +26,14 @@ constexpr int PIN_SPI_MOSI = 29;
 constexpr int PIN_SPI_MISO = 31;
 constexpr int PIN_SPI_CS = 28;
 constexpr int PIN_SPI_IRQ = 22;
+
+constexpr int PIN_SD_CLK = 43;
+constexpr int PIN_SD_CMD = 44;
+constexpr int PIN_SD_D0 = 39;
+constexpr int PIN_SD_D1 = 40;
+constexpr int PIN_SD_D2 = 41;
+constexpr int PIN_SD_D3 = 42;
+constexpr int PIN_SD_POWER = 45;  // active LOW to enable card power
 
 #elif defined(BOARD_HOST_S3)
 

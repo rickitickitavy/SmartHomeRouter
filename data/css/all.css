@@ -262,6 +262,11 @@ html, body {
     padding: 0.75rem 0.85rem;
 }
 
+.status-group[hidden],
+.status-row[hidden] {
+    display: none !important;
+}
+
 .status-group .group-title {
     margin: 0 0 0.5rem;
 }

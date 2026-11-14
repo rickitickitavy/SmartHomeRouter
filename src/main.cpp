@@ -26,6 +26,7 @@
 #include "AutomationEngine.h"
 #include "EmailSender.h"
 #include "HistoryStore.h"
+#include "SdCardStorage.h"
 #include "InterChipHost.h"
 #endif
 #include "JsonField.h"
@@ -86,6 +87,7 @@ static SceneStore *sceneStore = nullptr;
 static AutomationEngine *automationEngine = nullptr;
 static EmailSender *emailSender = nullptr;
 static HistoryStore historyStore;
+static SdCardStorage sdCardStorage;
 ActionCommandQueue actionCommandQueue;
 #endif
 static FoundDeviceList *foundDevices = nullptr;
@@ -1230,7 +1232,32 @@ static String hostGatewayStatusJson() {
         json += String((unsigned long)historyStats.slabUsedKiB);
         json += ",\"historyValuesStored\":";
         json += String((unsigned long)historyStats.valuesStored);
+        if (historyStore.persistOnSd()) {
+            json += ",\"historySdSecondsToSave\":";
+            json += String((unsigned long)historyStore.sdSecondsToSave());
+            json += ",\"historySdSizeKiB\":";
+            json += String((unsigned long)sdCardStorage.historySnapshotKiB());
+        } else {
+            json += ",\"historySdSecondsToSave\":null";
+            json += ",\"historySdSizeKiB\":null";
+        }
     }
+#if defined(BOARD_HOST_P4)
+    json += ",\"sdStatus\":\"";
+    json += sdCardStorage.statusText();
+    json += "\",\"sdCapacityMb\":";
+    if (sdCardStorage.status() == SdCardStatusReady) {
+        json += String((unsigned long)sdCardStorage.capacityMb());
+    } else {
+        json += "null";
+    }
+    json += ",\"sdFreeMb\":";
+    if (sdCardStorage.status() == SdCardStatusReady) {
+        json += String((unsigned long)sdCardStorage.freeMb());
+    } else {
+        json += "null";
+    }
+#endif
     {
         const size_t fsTotal = LittleFS.totalBytes();
         const size_t fsUsed = LittleFS.usedBytes();
@@ -2214,6 +2241,7 @@ static void setupHost() {
 
     settingsManager = new SettingsManager();
     settingsManager->loadDeviceFile();
+    sdCardStorage.beginBootProbe();
     if (!historyStore.begin(
             settingsManager->historyMaxSizeKiB(),
             settingsManager->historyEntrySize()
@@ -2224,9 +2252,15 @@ static void setupHost() {
             settingsManager->historyMaxStoreDays(),
             settingsManager->historySweepIntervalMin()
         );
+        historyStore.setSdBackend(&sdCardStorage);
+        historyStore.setSdBackupIntervalMin(settingsManager->historySdBackupIntervalMin());
         if (historyStore.snapshotFilePresent()) {
             if (historyStore.restoreSnapshot()) {
-                LOGGER.info("History snapshot restored from LittleFS");
+                LOGGER.info(
+                    historyStore.persistOnSd()
+                        ? "History snapshot restored from SD"
+                        : "History snapshot restored from LittleFS"
+                );
             } else {
                 LOGGER.warning("History snapshot restore failed; discarding");
                 historyStore.discardSnapshotFile();
@@ -2238,13 +2272,18 @@ static void setupHost() {
             + String((unsigned)historyStore.stats().pagesTotal)
             + " entrySize="
             + String((unsigned)settingsManager->historyEntrySize())
+            + (historyStore.persistOnSd() ? " persist=SD" : " persist=LittleFS")
         );
     }
     settingsManager->setPreRestartHandler([]() {
         if (!historyStore.persistSnapshot()) {
             LOGGER.warning("History snapshot flush skipped or failed");
         } else {
-            LOGGER.info("History snapshot saved before restart");
+            LOGGER.info(
+                historyStore.persistOnSd()
+                    ? "History snapshot saved to SD before restart"
+                    : "History snapshot saved to LittleFS before restart"
+            );
         }
     });
     userStore = new UserStore();

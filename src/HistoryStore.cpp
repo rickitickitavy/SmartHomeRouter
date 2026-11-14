@@ -5,11 +5,16 @@
 // Match ReportableData.h without pulling host Arduino headers.
 constexpr size_t kReportableValueTextMaxChars = kHistoryValueTextMaxChars;
 #else
+#include "Logger.h"
+#include "SdCardStorage.h"
 #include "SettingsManager.h"
 #include "UserDataPayload.h"
 #include "ZigbeeDeviceType.h"
 #include <FS.h>
 #include <LittleFS.h>
+#if defined(BOARD_HOST_P4)
+#include <SD_MMC.h>
+#endif
 #include <esp_heap_caps.h>
 #endif
 
@@ -28,6 +33,7 @@ constexpr size_t kSnapshotConfigHeadroomBytes = 96u * 1024u;
 constexpr const char *kSnapshotPath = "/history/snapshot.bin";
 constexpr const char *kSnapshotTempPath = "/history/snapshot.tmp";
 constexpr const char *kSnapshotDir = "/history";
+// SD_MMC FS paths are relative to the mount root (/sdcard).
 
 #pragma pack(push, 1)
 struct SnapshotFileHeader {
@@ -1027,16 +1033,73 @@ void HistoryStore::syncSeriesFromDevices(DeviceTopicMap *deviceMap) {
 #endif
 }
 
+void HistoryStore::setSdBackend(SdCardStorage *sdStorage) {
+    sdBackend = sdStorage;
+    if (persistOnSd()) {
+        lastSdBackupMs = millis();
+    }
+}
+
+bool HistoryStore::persistOnSd() const {
+#if defined(HISTORY_STORE_UNIT_TEST) || !defined(BOARD_HOST_P4)
+    (void)sdBackend;
+    return false;
+#else
+    return sdBackend != nullptr && sdBackend->usable();
+#endif
+}
+
+void HistoryStore::setSdBackupIntervalMin(uint16_t minutes) {
+    if (minutes < HISTORY_SD_BACKUP_INTERVAL_MIN_MIN) {
+        minutes = HISTORY_SD_BACKUP_INTERVAL_MIN_MIN;
+    }
+    if (minutes > HISTORY_SD_BACKUP_INTERVAL_MIN_MAX) {
+        minutes = HISTORY_SD_BACKUP_INTERVAL_MIN_MAX;
+    }
+    sdBackupIntervalMinutes = minutes;
+    if (persistOnSd()) {
+        lastSdBackupMs = millis();
+    }
+}
+
+uint32_t HistoryStore::sdSecondsToSave() const {
+    if (!persistOnSd()) {
+        return 0;
+    }
+    const unsigned long intervalMs =
+        (unsigned long)sdBackupIntervalMinutes * 60000UL;
+    const unsigned long elapsed = millis() - lastSdBackupMs;
+    if (elapsed >= intervalMs) {
+        return 0;
+    }
+    return (uint32_t)((intervalMs - elapsed + 999UL) / 1000UL);
+}
+
 void HistoryStore::loop() {
     if (!available()) {
         return;
     }
     const unsigned long intervalMs = (unsigned long)sweepIntervalMin * 60000UL;
-    if (millis() - lastSweepMs < intervalMs) {
-        return;
+    if (millis() - lastSweepMs >= intervalMs) {
+        lastSweepMs = millis();
+        sweepAll();
     }
-    lastSweepMs = millis();
-    sweepAll();
+#if !defined(HISTORY_STORE_UNIT_TEST) && defined(BOARD_HOST_P4)
+    if (persistOnSd()) {
+        const unsigned long backupIntervalMs =
+            (unsigned long)sdBackupIntervalMinutes * 60000UL;
+        if (millis() - lastSdBackupMs >= backupIntervalMs) {
+            LOGGER.info("History SD periodic backup start");
+            if (persistSnapshot()) {
+                lastSdBackupMs = millis();
+                LOGGER.info("History SD periodic backup ok");
+            } else {
+                lastSdBackupMs = millis();
+                LOGGER.warning("History SD periodic backup failed");
+            }
+        }
+    }
+#endif
 }
 
 void HistoryStore::sweepAll() {
@@ -1238,12 +1301,52 @@ bool HistoryStore::snapshotFilePresent() const {
 #if defined(HISTORY_STORE_UNIT_TEST)
     return false;
 #else
+#if defined(BOARD_HOST_P4)
+    if (persistOnSd()) {
+        if (sdBackend == nullptr) {
+            return false;
+        }
+        if (!sdBackend->remount()) {
+            return false;
+        }
+        const bool present = SD_MMC.exists(kSnapshotPath);
+        if (present) {
+            File snap = SD_MMC.open(kSnapshotPath, "r");
+            if (snap) {
+                sdBackend->setHistorySnapshotBytes(snap.size());
+                snap.close();
+            }
+        } else {
+            sdBackend->clearHistorySnapshotSize();
+        }
+        sdBackend->refreshSizeCache();
+        sdBackend->unmount();
+        return present;
+    }
+#endif
     return LittleFS.exists(kSnapshotPath);
 #endif
 }
 
 void HistoryStore::discardSnapshotFile() {
 #if !defined(HISTORY_STORE_UNIT_TEST)
+#if defined(BOARD_HOST_P4)
+    if (persistOnSd()) {
+        if (sdBackend == nullptr || !sdBackend->remount()) {
+            return;
+        }
+        if (SD_MMC.exists(kSnapshotTempPath)) {
+            SD_MMC.remove(kSnapshotTempPath);
+        }
+        if (SD_MMC.exists(kSnapshotPath)) {
+            SD_MMC.remove(kSnapshotPath);
+        }
+        sdBackend->clearHistorySnapshotSize();
+        sdBackend->refreshSizeCache();
+        sdBackend->unmount();
+        return;
+    }
+#endif
     if (LittleFS.exists(kSnapshotTempPath)) {
         LittleFS.remove(kSnapshotTempPath);
     }
@@ -1262,6 +1365,71 @@ bool HistoryStore::writeSnapshotFile(const uint8_t *bytes, size_t len) const {
     if (bytes == nullptr || len == 0) {
         return false;
     }
+#if defined(BOARD_HOST_P4)
+    if (persistOnSd()) {
+        if (sdBackend == nullptr) {
+            return false;
+        }
+        LOGGER.info("History SD save: mount then 3-step commit");
+        if (!sdBackend->remount()) {
+            return false;
+        }
+        SD_MMC.mkdir(kSnapshotDir);
+
+        // Step 1: write all temp files. On any failure, leave old files intact.
+        File out = SD_MMC.open(kSnapshotTempPath, "w");
+        if (!out) {
+            LOGGER.warning("History SD step1 open temp failed; old files kept");
+            sdBackend->unmount();
+            return false;
+        }
+        const size_t written = out.write(bytes, len);
+        out.flush();
+        out.close();
+        if (written != len) {
+            SD_MMC.remove(kSnapshotTempPath);
+            LOGGER.warning("History SD step1 write incomplete; old files kept");
+            sdBackend->unmount();
+            return false;
+        }
+        {
+            File verify = SD_MMC.open(kSnapshotTempPath, "r");
+            const size_t tempSize = verify ? verify.size() : 0;
+            if (verify) {
+                verify.close();
+            }
+            if (tempSize != len) {
+                SD_MMC.remove(kSnapshotTempPath);
+                LOGGER.warning("History SD step1 size check failed; old files kept");
+                sdBackend->unmount();
+                return false;
+            }
+        }
+        LOGGER.info("History SD step1 temp write ok");
+
+        // Step 2: only after all temps succeeded — remove old normal files.
+        if (SD_MMC.exists(kSnapshotPath)) {
+            if (!SD_MMC.remove(kSnapshotPath)) {
+                LOGGER.warning("History SD step2 remove old failed; keeping temp");
+                sdBackend->unmount();
+                return false;
+            }
+        }
+        LOGGER.info("History SD step2 old files removed");
+
+        // Step 3: rename temp → normal. Keep temp on failure so data is not lost.
+        if (!SD_MMC.rename(kSnapshotTempPath, kSnapshotPath)) {
+            LOGGER.error("History SD step3 rename failed; temp left on card");
+            sdBackend->unmount();
+            return false;
+        }
+        LOGGER.info("History SD step3 rename ok; unmount");
+        sdBackend->setHistorySnapshotBytes(len);
+        sdBackend->refreshSizeCache();
+        sdBackend->unmount();
+        return true;
+    }
+#endif
     if (!littleFsHasConfigSafeSpace(len)) {
         return false;
     }
@@ -1299,6 +1467,50 @@ bool HistoryStore::readSnapshotFile(uint8_t **outBytes, size_t *outLen) const {
     }
     *outBytes = nullptr;
     *outLen = 0;
+#if defined(BOARD_HOST_P4)
+    if (persistOnSd()) {
+        if (sdBackend == nullptr || !sdBackend->remount()) {
+            return false;
+        }
+        File in = SD_MMC.open(kSnapshotPath, "r");
+        if (!in) {
+            sdBackend->clearHistorySnapshotSize();
+            sdBackend->refreshSizeCache();
+            sdBackend->unmount();
+            return false;
+        }
+        const size_t len = in.size();
+        if (len < sizeof(SnapshotFileHeader)) {
+            in.close();
+            sdBackend->clearHistorySnapshotSize();
+            sdBackend->refreshSizeCache();
+            sdBackend->unmount();
+            return false;
+        }
+        uint8_t *bytes = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (bytes == nullptr) {
+            bytes = (uint8_t *)malloc(len);
+        }
+        if (bytes == nullptr) {
+            in.close();
+            sdBackend->unmount();
+            return false;
+        }
+        const size_t got = in.read(bytes, len);
+        in.close();
+        if (got != len) {
+            free(bytes);
+            sdBackend->unmount();
+            return false;
+        }
+        sdBackend->setHistorySnapshotBytes(len);
+        sdBackend->refreshSizeCache();
+        sdBackend->unmount();
+        *outBytes = bytes;
+        *outLen = len;
+        return true;
+    }
+#endif
     File in = LittleFS.open(kSnapshotPath, "r");
     if (!in) {
         return false;
@@ -1695,7 +1907,14 @@ bool HistoryStore::restoreSnapshot() {
     const bool ok = applySnapshot(bytes, len);
     free(bytes);
     if (ok) {
-        discardSnapshotFile();
+        // LittleFS: delete after restore. SD: keep the durable snapshot file.
+        if (!persistOnSd()) {
+            discardSnapshotFile();
+        } else {
+#if !defined(HISTORY_STORE_UNIT_TEST)
+            LOGGER.info("History SD restore keep-file (no delete-after-restore)");
+#endif
+        }
     }
     return ok;
 }

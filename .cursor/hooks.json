@@ -6,6 +6,11 @@
         "command": ".cursor/hooks/block-master-develop-git.py",
         "matcher": "git\\s+(commit|push)",
         "failClosed": true
+      },
+      {
+        "command": ".cursor/hooks/block-git-rollback.py",
+        "matcher": "git\\s+(restore|reset|revert|clean|checkout|switch)",
+        "failClosed": true
       }
     ],
     "beforeSubmitPrompt": [

@@ -7,6 +7,13 @@ cloud (websocket)
 1) hardware brownout
 5) new action: HTTP request
 
+change for P4 and S3. enable optional title for gauges on scenes. Also with specifying its place (left, top, right, bottom)
 
-  python3 scripts/firmware_join.py --host .pio/build/esp32-p4-host/firmware.bin --hosted-c6 tools/p4-hosted-c6-update/data/esp32c6-hosted.bin --hosted-c6-version 2.12.11 --host-board p4 -o firmware-joined.zip
+ change for P4 and S3. For all type users (Simple and normal).
+
+
+
+python3 scripts/firmware_join.py --host .pio/build/esp32-p4-host/firmware.bin --hosted-c6 tools/p4-hosted-c6-update/data/esp32c6-hosted.bin --hosted-c6-version 2.12.11 --host-board p4 -o firmware-joined.zip
+python3 scripts/firmware_join.py --host .pio/build/esp32-p4-host/firmware.bin --slave .pio/build/esp32-c6-slave/firmware.bin  --hosted-c6 tools/p4-hosted-c6-update/data/esp32c6-hosted.bin --hosted-c6-version 2.12.11 --host-board p4 -o firmware-joined.zip
+
 
