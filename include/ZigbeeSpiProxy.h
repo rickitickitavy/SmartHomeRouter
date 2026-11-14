@@ -61,6 +61,18 @@ public:
     bool lastRssiDbm(const uint8_t ieee[8], int8_t *rssiDbm) const;
     void appendListTelemetry(const uint8_t ieee[8], PsramJsonBuffer &json) const;
     void noteMqttState(const uint8_t ieee[8], uint8_t endpoint, const char *message);
+#if defined(BOARD_ROLE_HOST)
+    // Display-only cache fill from history; no history append, no status/automation hooks.
+    void seedReportableValue(
+        const uint8_t ieee[8],
+        uint8_t endpoint,
+        uint16_t cluster,
+        uint16_t attribute,
+        const char *valueText
+    );
+    void seedEndpointState(const uint8_t ieee[8], uint8_t endpoint, const char *stateText);
+    void seedLiveCacheFromHistory(HistoryStore *store);
+#endif
     void retainRegisteredTelemetry(DeviceTopicMap *topicMap);
     void noteSeen(const uint8_t ieee[8]);
     void noteMqttOffline(const uint8_t ieee[8]);
@@ -257,6 +269,13 @@ private:
     static void assignBoundedField(char *&destination, const char *source, size_t maxLen);
     void noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, const char *message);
     void noteReportableValue(
+        CachedDevice *slot,
+        uint8_t endpoint,
+        uint16_t cluster,
+        uint16_t attribute,
+        const char *valueText
+    );
+    void upsertReportableValueSlot(
         CachedDevice *slot,
         uint8_t endpoint,
         uint16_t cluster,
