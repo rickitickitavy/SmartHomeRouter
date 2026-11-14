@@ -1147,6 +1147,34 @@ void HistoryStore::sweepAll() {
     }
 }
 
+void HistoryStore::forEachSeriesWithLastSample(
+    void (*visitor)(
+        const HistorySeriesKey &key,
+        HistoryValueType valueType,
+        const HistorySample &sample,
+        void *context
+    ),
+    void *context
+) const {
+    if (visitor == nullptr || series == nullptr || !available()) {
+        return;
+    }
+    for (uint16_t index = 0; index < seriesCapacity; index++) {
+        const SeriesRuntime &runtime = series[index];
+        if (!runtime.used || !runtime.hasLast) {
+            continue;
+        }
+        HistorySample sample{};
+        sample.valueType = runtime.valueType;
+        sample.floatValue = runtime.lastFloat;
+        sample.intValue = runtime.lastInt;
+        sample.boolValue = runtime.lastBool;
+        memcpy(sample.stringValue, runtime.lastString, kHistoryValueTextMaxLen);
+        sample.stringValue[kHistoryValueTextMaxChars] = '\0';
+        visitor(runtime.key, runtime.valueType, sample, context);
+    }
+}
+
 bool HistoryStore::query(
     const HistorySeriesKey &key,
     uint32_t fromEpoch2010,

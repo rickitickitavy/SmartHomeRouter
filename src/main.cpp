@@ -2270,6 +2270,15 @@ static void setupHost() {
             }
         }
         historyStore.syncSeriesFromDevices(settingsManager->deviceMap());
+        // Bind registry before seed so multi-channel capacity matches device map.
+        ZIGBEE_SPI_PROXY.retainRegisteredTelemetry(settingsManager->deviceMap());
+        const uint32_t valuesBeforeSeed = historyStore.stats().valuesStored;
+        ZIGBEE_SPI_PROXY.seedLiveCacheFromHistory(&historyStore);
+        if (historyStore.stats().valuesStored != valuesBeforeSeed) {
+            LOGGER.warning("History seed unexpectedly changed valuesStored");
+        } else {
+            LOGGER.info("History live-cache seed complete");
+        }
         LOGGER.info(
             "History store ready pages="
             + String((unsigned)historyStore.stats().pagesTotal)

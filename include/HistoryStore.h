@@ -97,6 +97,17 @@ public:
         HistoryValueType *outType
     ) const;
 
+    // Walk series that already have a last sample in RAM (after restore / notes).
+    void forEachSeriesWithLastSample(
+        void (*visitor)(
+            const HistorySeriesKey &key,
+            HistoryValueType valueType,
+            const HistorySample &sample,
+            void *context
+        ),
+        void *context
+    ) const;
+
     HistoryStoreStats stats() const;
     static uint32_t unixToEpoch2010(time_t unixSec);
     static time_t epoch2010ToUnix(uint32_t epoch2010);

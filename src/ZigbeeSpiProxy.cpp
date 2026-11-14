@@ -217,7 +217,7 @@ void ZigbeeSpiProxy::clearReportableValues(CachedDevice *slot) {
     slot->reportableValueCount = 0;
 }
 
-void ZigbeeSpiProxy::noteReportableValue(
+void ZigbeeSpiProxy::upsertReportableValueSlot(
     CachedDevice *slot,
     uint8_t endpoint,
     uint16_t cluster,
@@ -227,11 +227,6 @@ void ZigbeeSpiProxy::noteReportableValue(
     if (slot == nullptr || valueText == nullptr || !DeviceTopicMap::isUsableEndpoint(endpoint)) {
         return;
     }
-#if defined(BOARD_ROLE_HOST)
-    if (historyStore != nullptr && registryMap != nullptr) {
-        historyNoteReportableValue(historyStore, registryMap, slot->ieee, cluster, attribute, valueText);
-    }
-#endif
     if (slot->reportableValues != nullptr) {
         for (uint8_t index = 0; index < slot->reportableValueCount; index++) {
             ReportableValueSlot &existing = slot->reportableValues[index];
@@ -264,6 +259,24 @@ void ZigbeeSpiProxy::noteReportableValue(
     created.attribute = attribute;
     created.value = DeviceTopicMap::duplicateBoundedString(valueText, kReportableValueTextMaxLen);
     slot->reportableValueCount++;
+}
+
+void ZigbeeSpiProxy::noteReportableValue(
+    CachedDevice *slot,
+    uint8_t endpoint,
+    uint16_t cluster,
+    uint16_t attribute,
+    const char *valueText
+) {
+    if (slot == nullptr || valueText == nullptr || !DeviceTopicMap::isUsableEndpoint(endpoint)) {
+        return;
+    }
+#if defined(BOARD_ROLE_HOST)
+    if (historyStore != nullptr && registryMap != nullptr) {
+        historyNoteReportableValue(historyStore, registryMap, slot->ieee, cluster, attribute, valueText);
+    }
+#endif
+    upsertReportableValueSlot(slot, endpoint, cluster, attribute, valueText);
 }
 
 void ZigbeeSpiProxy::noteReportTelemetry(CachedDevice *slot, uint8_t endpoint, const char *message) {
@@ -1000,6 +1013,200 @@ void ZigbeeSpiProxy::setStatusValueChangedHandler(StatusValueChangedFn handler) 
 #if defined(BOARD_ROLE_HOST)
 void ZigbeeSpiProxy::setHistoryStore(HistoryStore *store) {
     historyStore = store;
+}
+
+void ZigbeeSpiProxy::seedReportableValue(
+    const uint8_t ieee[8],
+    uint8_t endpoint,
+    uint16_t cluster,
+    uint16_t attribute,
+    const char *valueText
+) {
+    if (ieee == nullptr || valueText == nullptr || valueText[0] == '\0') {
+        return;
+    }
+    if (!DeviceTopicMap::isUsableEndpoint(endpoint)) {
+        return;
+    }
+    CachedDevice *slot = allocSlot(ieee);
+    if (slot == nullptr) {
+        return;
+    }
+    upsertReportableValueSlot(slot, endpoint, cluster, attribute, valueText);
+    if (cluster == kZigbeeClusterPowerConfig
+        && attribute == kZigbeeAttrBatteryPercentageRemaining) {
+        unsigned batteryPercent = 0;
+        if (sscanf(valueText, "%u", &batteryPercent) == 1) {
+            slot->hasBattery = true;
+            slot->batteryPercent = batteryPercent;
+        }
+    }
+}
+
+void ZigbeeSpiProxy::seedEndpointState(
+    const uint8_t ieee[8],
+    uint8_t endpoint,
+    const char *stateText
+) {
+    if (ieee == nullptr || stateText == nullptr || stateText[0] == '\0') {
+        return;
+    }
+    if (!DeviceTopicMap::isUsableEndpoint(endpoint)) {
+        return;
+    }
+    CachedDevice *slot = allocSlot(ieee);
+    if (slot == nullptr) {
+        return;
+    }
+    uint8_t neededCapacity = channelCapacityForIeee(ieee);
+    if (endpoint > neededCapacity && neededCapacity < DEVICE_CHANNEL_COUNT_MAX) {
+        neededCapacity = endpoint;
+    }
+    if (!ensureChannelCapacity(slot, neededCapacity)) {
+        return;
+    }
+    EndpointStatus *statusSlot = nullptr;
+    for (uint8_t index = 0; index < slot->channelCapacity; index++) {
+        if (slot->channels[index].endpoint == endpoint
+            && endpointStatusOccupied(&slot->channels[index])) {
+            statusSlot = &slot->channels[index];
+            break;
+        }
+    }
+    if (statusSlot == nullptr) {
+        for (uint8_t index = 0; index < slot->channelCapacity; index++) {
+            if (!endpointStatusOccupied(&slot->channels[index])) {
+                statusSlot = &slot->channels[index];
+                statusSlot->endpoint = endpoint;
+                break;
+            }
+        }
+    }
+    if (statusSlot == nullptr) {
+        return;
+    }
+    if (!setEndpointState(statusSlot, stateText)) {
+        return;
+    }
+    const bool isMove = strcmp(stateText, "UP") == 0
+        || strcmp(stateText, "DOWN") == 0
+        || strcmp(stateText, "STOPPED") == 0;
+    const bool isOnOffOrZone = strcmp(stateText, "ON") == 0
+        || strcmp(stateText, "OFF") == 0
+        || strcmp(stateText, "LEAK") == 0
+        || strcmp(stateText, "DRY") == 0;
+    bool isWindowCoveringDevice = false;
+    if (registryMap != nullptr) {
+        const DeviceTopicEntry *entry = registryMap->findByIeee(slot->ieee);
+        if (entry != nullptr && entry->zigbeeType == ZigbeeDeviceTypeWindowCovering) {
+            isWindowCoveringDevice = true;
+        }
+    }
+    char *positionEnd = nullptr;
+    const unsigned long positionParsed = strtoul(stateText, &positionEnd, 10);
+    const bool legacyPositionPercent =
+        positionEnd != stateText && *positionEnd == '%' && positionEnd[1] == '\0';
+    const bool plainPosition =
+        isWindowCoveringDevice
+        && positionEnd != stateText
+        && *positionEnd == '\0'
+        && positionParsed <= 100UL;
+    const bool isPosition = legacyPositionPercent || plainPosition;
+    if (isMove) {
+        CoveringStatus *covering = ensureCoveringStatus(statusSlot);
+        if (covering != nullptr) {
+            strncpy(covering->move, stateText, sizeof(covering->move) - 1);
+            covering->move[sizeof(covering->move) - 1] = '\0';
+        }
+    } else if (isOnOffOrZone) {
+        CoveringStatus *covering = ensureCoveringStatus(statusSlot);
+        if (covering != nullptr) {
+            strncpy(covering->discrete, stateText, sizeof(covering->discrete) - 1);
+            covering->discrete[sizeof(covering->discrete) - 1] = '\0';
+        }
+    } else if (isPosition) {
+        CoveringStatus *covering = ensureCoveringStatus(statusSlot);
+        char positionText[8];
+        snprintf(positionText, sizeof(positionText), "%lu", positionParsed);
+        if (covering != nullptr) {
+            strncpy(covering->position, positionText, sizeof(covering->position) - 1);
+            covering->position[sizeof(covering->position) - 1] = '\0';
+        }
+        setEndpointState(statusSlot, positionText);
+    }
+}
+
+namespace {
+
+void formatHistorySampleForLiveCache(
+    HistoryValueType valueType,
+    const HistorySample &sample,
+    HistorySeriesKind kind,
+    char *outText,
+    size_t outLen
+) {
+    if (outText == nullptr || outLen == 0) {
+        return;
+    }
+    outText[0] = '\0';
+    if (valueType == HistoryValueFloat) {
+        snprintf(outText, outLen, "%.6g", (double)sample.floatValue);
+        return;
+    }
+    if (valueType == HistoryValueInt) {
+        snprintf(outText, outLen, "%ld", (long)sample.intValue);
+        return;
+    }
+    if (valueType == HistoryValueBool) {
+        if (kind == HistorySeriesMainState) {
+            strncpy(outText, sample.boolValue ? "ON" : "OFF", outLen - 1);
+        } else {
+            strncpy(outText, sample.boolValue ? "true" : "false", outLen - 1);
+        }
+        outText[outLen - 1] = '\0';
+        return;
+    }
+    strncpy(outText, sample.stringValue, outLen - 1);
+    outText[outLen - 1] = '\0';
+}
+
+struct SeedLiveCacheContext {
+    ZigbeeSpiProxy *proxy;
+};
+
+void seedLiveCacheVisitor(
+    const HistorySeriesKey &key,
+    HistoryValueType valueType,
+    const HistorySample &sample,
+    void *context
+) {
+    SeedLiveCacheContext *seedContext = (SeedLiveCacheContext *)context;
+    if (seedContext == nullptr || seedContext->proxy == nullptr) {
+        return;
+    }
+    char valueText[kHistoryValueTextMaxLen];
+    formatHistorySampleForLiveCache(valueType, sample, key.kind, valueText, sizeof(valueText));
+    if (valueText[0] == '\0') {
+        return;
+    }
+    if (key.kind == HistorySeriesMainState) {
+        const uint8_t endpoint = key.channel == 0 ? 1 : key.channel;
+        seedContext->proxy->seedEndpointState(key.ieee, endpoint, valueText);
+        return;
+    }
+    // Reportable history has no endpoint; ep 1 matches typical single-endpoint sensors.
+    seedContext->proxy->seedReportableValue(key.ieee, 1, key.cluster, key.attribute, valueText);
+}
+
+}  // namespace
+
+void ZigbeeSpiProxy::seedLiveCacheFromHistory(HistoryStore *store) {
+    if (store == nullptr || !store->available()) {
+        return;
+    }
+    SeedLiveCacheContext context{};
+    context.proxy = this;
+    store->forEachSeriesWithLastSample(seedLiveCacheVisitor, &context);
 }
 #endif
 
