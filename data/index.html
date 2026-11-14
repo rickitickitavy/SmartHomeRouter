@@ -315,6 +315,12 @@
                 "statusMqttTopics",
                 payload && payload.mqttTopicCount != null ? String(payload.mqttTopicCount) : "—"
             );
+            setStatusText(
+                "statusMqttConnections",
+                payload && payload.mqttConnectionCount != null
+                    ? String(payload.mqttConnectionCount)
+                    : "—"
+            );
             setStatusText("statusWifiMode", payload && payload.wifiMode ? payload.wifiMode : "—");
             setStatusText("statusWifiBssid", payload && payload.wifiBssid ? payload.wifiBssid : "—");
             setStatusText("statusWifiStaMac", payload && payload.wifiStaMac ? payload.wifiStaMac : "—");
@@ -357,9 +363,10 @@
                 "statusHistoryValues",
                 payload && payload.historyValuesStored != null ? String(payload.historyValuesStored) : "—"
             );
+            var sdHistoryPersistActive = payload && payload.historySdSecondsToSave != null;
             var historySaveRow = document.getElementById("statusHistorySaveRow");
             if (historySaveRow) {
-                if (payload && payload.historySdSecondsToSave != null) {
+                if (sdHistoryPersistActive) {
                     historySaveRow.hidden = false;
                     setStatusText(
                         "statusHistoryTimeBeforeSave",
@@ -372,11 +379,14 @@
             }
             var historySdSizeRow = document.getElementById("statusHistorySdSizeRow");
             if (historySdSizeRow) {
-                if (payload && payload.historySdSizeKiB != null) {
+                // Same gate as time-before-save so operator and simple-user Status stay identical.
+                if (sdHistoryPersistActive) {
                     historySdSizeRow.hidden = false;
+                    var historySdSizeKiB =
+                        payload.historySdSizeKiB != null ? payload.historySdSizeKiB : 0;
                     setStatusText(
                         "statusHistorySdSize",
-                        String(payload.historySdSizeKiB) + " kB"
+                        String(historySdSizeKiB) + " kB"
                     );
                 } else {
                     historySdSizeRow.hidden = true;
@@ -19925,11 +19935,11 @@
                                 <p id="statusOnlineTime" class="status-value">—</p>
                             </div>
                             <div class="status-row">
-                                <span class="status-row-label">Version</span>
+                                <span class="status-row-label">Master</span>
                                 <p id="statusMasterFirmwareVersion" class="status-value">—</p>
                             </div>
                             <div class="status-row">
-                                <span class="status-row-label">RF f/w version</span>
+                                <span class="status-row-label">Slave</span>
                                 <p id="statusSlaveFirmwareVersion" class="status-value">—</p>
                             </div>
                         </div>
@@ -20043,6 +20053,10 @@
                             <div class="status-row">
                                 <span class="status-row-label">Active topics</span>
                                 <p id="statusMqttTopics" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Connections</span>
+                                <p id="statusMqttConnections" class="status-value">—</p>
                             </div>
                         </div>
                         <div class="status-group">

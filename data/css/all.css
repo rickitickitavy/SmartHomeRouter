@@ -1902,12 +1902,34 @@ html, body {
     flex-shrink: 0;
 }
 
-.user-console-tabs {
+.user-console-tab-chrome {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: flex-end;
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 0.35rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.user-console-fullscreen-btn {
     flex: 0 0 auto;
+    align-self: flex-end;
+    margin: 0 0 -1px;
+    min-width: 44px;
+    min-height: 44px;
+    position: relative;
+    z-index: 2;
+}
+
+.user-console-tabs {
+    flex: 1 1 auto;
     align-self: stretch;
     min-width: 0;
     margin: 0;
-    border-bottom: 1px solid var(--border);
+    border-bottom: none;
+    overflow-x: auto;
+    flex-wrap: nowrap;
 }
 
 .user-console-toolbar .user-console-tabs {

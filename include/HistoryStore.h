@@ -172,6 +172,8 @@ private:
     int16_t acquirePage();
     void releasePage(uint16_t slot);
     uint8_t *pagePtr(uint16_t slot) const;
+    uint32_t countValuesInPages() const;
+    void refreshValuesStored();
     EntryHeader *entryHeader(SeriesRuntime *runtime) const;
     PageRecord *entryPageRecords(SeriesRuntime *runtime) const;
     uint16_t entryPageCount(const SeriesRuntime *runtime) const;

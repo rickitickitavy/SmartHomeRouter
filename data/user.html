@@ -1437,9 +1437,10 @@
                 "statusHistoryValues",
                 payload && payload.historyValuesStored != null ? String(payload.historyValuesStored) : "—"
             );
+            var sdHistoryPersistActive = payload && payload.historySdSecondsToSave != null;
             var historySaveRow = document.getElementById("statusHistorySaveRow");
             if (historySaveRow) {
-                if (payload && payload.historySdSecondsToSave != null) {
+                if (sdHistoryPersistActive) {
                     historySaveRow.hidden = false;
                     setStatusText(
                         "statusHistoryTimeBeforeSave",
@@ -1452,11 +1453,14 @@
             }
             var historySdSizeRow = document.getElementById("statusHistorySdSizeRow");
             if (historySdSizeRow) {
-                if (payload && payload.historySdSizeKiB != null) {
+                // Same gate as time-before-save so operator and simple-user Status stay identical.
+                if (sdHistoryPersistActive) {
                     historySdSizeRow.hidden = false;
+                    var historySdSizeKiB =
+                        payload.historySdSizeKiB != null ? payload.historySdSizeKiB : 0;
                     setStatusText(
                         "statusHistorySdSize",
-                        String(payload.historySdSizeKiB) + " kB"
+                        String(historySdSizeKiB) + " kB"
                     );
                 } else {
                     historySdSizeRow.hidden = true;
@@ -1717,18 +1721,8 @@
                     err.textContent = "Could not save theme";
                 });
             };
-            var fullscreenBtn = document.createElement("button");
-            fullscreenBtn.type = "button";
-            fullscreenBtn.id = "accountFullscreenBtn";
-            fullscreenBtn.className = "btn btn-secondary btn-icon";
-            fullscreenBtn.title = "Full screen";
-            fullscreenBtn.setAttribute("aria-label", "Full screen");
-            fullscreenBtn.setAttribute("aria-pressed", "false");
-            fullscreenBtn.textContent = "⛶";
-            fullscreenBtn.onclick = toggleAccountFullscreen;
             row.appendChild(select);
             row.appendChild(saveBtn);
-            row.appendChild(fullscreenBtn);
             field.appendChild(row);
             panel.appendChild(field);
             var signOutWrap = document.createElement("div");
@@ -1761,6 +1755,7 @@
         }
 
         function renderConsoleTabs() {
+            var tabChrome = document.getElementById("consoleTabChrome");
             var tabsHost = document.getElementById("consoleTabs");
             var panelsHost = document.getElementById("consolePanels");
             var emptyState = document.getElementById("emptyState");
@@ -1773,7 +1768,11 @@
             }
             tabsHost.innerHTML = "";
             panelsHost.innerHTML = "";
+            if (tabChrome) {
+                tabChrome.hidden = false;
+            }
             tabsHost.hidden = false;
+            syncAccountFullscreenButton();
             var tabIndex;
             for (tabIndex = 0; tabIndex < assignedConsoles.length; tabIndex++) {
                 var tabButton = document.createElement("button");
@@ -4995,7 +4994,13 @@
 </div>
 <div id="userShell" class="user-console-shell" hidden>
     <div class="user-console-toolbar">
-        <div id="consoleTabs" class="tabs user-console-tabs" hidden></div>
+        <div id="consoleTabChrome" class="user-console-tab-chrome" hidden>
+            <button type="button" id="accountFullscreenBtn"
+                    class="btn btn-secondary btn-icon user-console-fullscreen-btn"
+                    title="Full screen" aria-label="Full screen" aria-pressed="false"
+                    onclick="toggleAccountFullscreen()">⛶</button>
+            <div id="consoleTabs" class="tabs user-console-tabs"></div>
+        </div>
     </div>
     <div id="consolePanels" class="user-console-panels" hidden></div>
     <p id="emptyState" class="field-hint user-console-empty" hidden>No consoles are assigned to your account.</p>
