@@ -142,11 +142,21 @@ static void onZclSendStatus(zb_uint8_t param) {
     if (sendStatus->status == RET_OK) {
         STATUS_RGB.pulseAckSent();
     } else if (coordinatorForDefaultResponse != nullptr) {
-        LOGGER.warning(
-            "ZCL APS delivery failed status=" + String((int)sendStatus->status)
-            + " ep=" + String((int)sendStatus->dst_endpoint)
+        uint8_t dstIeee[8];
+        memset(dstIeee, 0, sizeof(dstIeee));
+        uint16_t dstShortAddr = 0;
+        const zb_zcl_addr_t *dstAddr = &sendStatus->dst_addr;
+        if (dstAddr->addr_type == ZB_ZCL_ADDR_TYPE_IEEE) {
+            memcpy(dstIeee, dstAddr->u.ieee_addr, 8);
+        } else if (dstAddr->addr_type == ZB_ZCL_ADDR_TYPE_SHORT) {
+            dstShortAddr = dstAddr->u.short_addr;
+        }
+        coordinatorForDefaultResponse->noteApsSendFailed(
+            sendStatus->dst_endpoint,
+            (int)sendStatus->status,
+            isZeroIeee(dstIeee) ? nullptr : dstIeee,
+            dstShortAddr
         );
-        coordinatorForDefaultResponse->noteApsSendFailed(sendStatus->dst_endpoint);
     }
     zb_buf_free(param);
 }
@@ -2293,7 +2303,21 @@ void ZigbeeCoordinator::pumpStatusReads() {
             continue;
         }
         if (item->inFlight && (long)(nowMs - item->deadlineMs) >= 0) {
-            LOGGER.warning("Status read timeout ep=" + String(item->endpoint));
+            const DeviceTopicEntry *entry =
+                registeredMap != nullptr ? registeredMap->findByIeee(item->ieee) : nullptr;
+            if (entry != nullptr && entry->debug != 0) {
+                String line = "Status read timeout ep=" + String((unsigned)item->endpoint);
+                if (entry->friendlyName != nullptr && entry->friendlyName[0] != '\0') {
+                    line += " name=";
+                    line += entry->friendlyName;
+                }
+                line += " ieee=" + formatIeeeText(item->ieee);
+                BoundZigbeeDevice *bound = findByIeee(item->ieee);
+                if (bound != nullptr && bound->shortAddr != 0 && bound->shortAddr != 0xFFFF) {
+                    line += " nwk=0x" + String(bound->shortAddr, HEX);
+                }
+                LOGGER.warning(line);
+            }
             // Keep BoundZigbeeDevice::pendingBasicAttributeId so a late Basic reply can still apply.
             // Leave basicIdentityQueued set so dispatch can detect an empty queue and retry.
             releaseStatusRead(item);
@@ -3196,7 +3220,12 @@ void ZigbeeCoordinator::noteDefaultResponse(uint8_t endpoint, uint16_t cluster) 
     }
 }
 
-void ZigbeeCoordinator::noteApsSendFailed(uint8_t dstEndpoint) {
+void ZigbeeCoordinator::noteApsSendFailed(
+    uint8_t dstEndpoint,
+    int sendStatus,
+    const uint8_t *dstIeeeOrNull,
+    uint16_t dstShortAddr
+) {
     DestCommandSlot *bestSlot = nullptr;
     for (DestCommandSlot *slot = destFlightHead; slot != nullptr; slot = slot->next) {
         if (!slot->occupied || !slot->inFlight) {
@@ -3210,6 +3239,44 @@ void ZigbeeCoordinator::noteApsSendFailed(uint8_t dstEndpoint) {
             bestSlot = slot;
         }
     }
+
+    uint8_t ieee[8];
+    memset(ieee, 0, sizeof(ieee));
+    uint16_t shortAddr = dstShortAddr;
+    if (bestSlot != nullptr && !isZeroIeee(bestSlot->ieee)) {
+        memcpy(ieee, bestSlot->ieee, 8);
+    } else if (dstIeeeOrNull != nullptr && !isZeroIeee(dstIeeeOrNull)) {
+        memcpy(ieee, dstIeeeOrNull, 8);
+    } else if (shortAddr != 0 && shortAddr != 0xFFFF) {
+        BoundZigbeeDevice *boundByShort = findByShortAddr(shortAddr);
+        if (boundByShort != nullptr && !isZeroIeee(boundByShort->ieee)) {
+            memcpy(ieee, boundByShort->ieee, 8);
+        }
+    }
+    if (!isZeroIeee(ieee)) {
+        BoundZigbeeDevice *bound = findByIeee(ieee);
+        if (bound != nullptr && (shortAddr == 0 || shortAddr == 0xFFFF)) {
+            shortAddr = bound->shortAddr;
+        }
+    }
+
+    const DeviceTopicEntry *entry =
+        (!isZeroIeee(ieee) && registeredMap != nullptr) ? registeredMap->findByIeee(ieee) : nullptr;
+    // Only log for registered devices with Debug on (same gate as other device events).
+    if (entry != nullptr && entry->debug != 0) {
+        String line = "ZCL APS delivery failed status=" + String(sendStatus);
+        line += " ep=" + String((unsigned)dstEndpoint);
+        if (entry->friendlyName != nullptr && entry->friendlyName[0] != '\0') {
+            line += " name=";
+            line += entry->friendlyName;
+        }
+        line += " ieee=" + formatIeeeText(ieee);
+        if (shortAddr != 0 && shortAddr != 0xFFFF) {
+            line += " nwk=0x" + String(shortAddr, HEX);
+        }
+        LOGGER.warning(line);
+    }
+
     if (bestSlot != nullptr) {
         retryOrAdvanceAfterDeliveryFailure(bestSlot);
     }

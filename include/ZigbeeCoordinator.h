@@ -106,7 +106,12 @@ public:
     );
     void handleBasicIdentityRead(const esp_zb_zcl_attribute_t *attribute);
     void noteDefaultResponse(uint8_t endpoint, uint16_t cluster);
-    void noteApsSendFailed(uint8_t dstEndpoint);
+    void noteApsSendFailed(
+        uint8_t dstEndpoint,
+        int sendStatus,
+        const uint8_t *dstIeeeOrNull,
+        uint16_t dstShortAddr
+    );
     void setRegisteredMap(DeviceTopicMap *deviceMap);
     void clearRegisteredDevices();
     void upsertRegisteredDevice(const DeviceTopicEntry *entry);
