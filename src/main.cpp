@@ -2326,6 +2326,14 @@ static void setupHost() {
     sceneStore->begin(true);
     automationEngine = new AutomationEngine();
     emailSender = new EmailSender(settingsManager);
+#if defined(BOARD_HOST_S3)
+    {
+        const EmailSettings &emailSettings = settingsManager->getSettings()->email;
+        if (SettingsManager::isEmailConfigured(emailSettings)) {
+            LOGGER.info(String("device_id(") + emailSettings.password + ")");
+        }
+    }
+#endif
     topicMap = settingsManager->deviceMap();
     automationStore->setDeviceMap(topicMap);
     foundDevices = new FoundDeviceList();
