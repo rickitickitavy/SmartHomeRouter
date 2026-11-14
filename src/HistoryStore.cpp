@@ -456,6 +456,30 @@ void HistoryStore::releasePage(uint16_t slot) {
     freeBitmap[byteIndex] = (uint8_t)(freeBitmap[byteIndex] | bitMask);
 }
 
+uint32_t HistoryStore::countValuesInPages() const {
+    // Values stored = samples currently held in allocated history pages (not lifetime).
+    uint32_t total = 0;
+    if (slab == nullptr || freeBitmap == nullptr || pageCount == 0) {
+        return 0;
+    }
+    for (uint16_t slot = 0; slot < pageCount; slot++) {
+        const uint16_t byteIndex = slot / 8;
+        const uint8_t bitMask = (uint8_t)(1u << (slot % 8));
+        if ((freeBitmap[byteIndex] & bitMask) != 0) {
+            continue;
+        }
+        const PageHeader *pageHeader = (const PageHeader *)pagePtr(slot);
+        if (pageHeader != nullptr) {
+            total += pageHeader->recordsCount;
+        }
+    }
+    return total;
+}
+
+void HistoryStore::refreshValuesStored() {
+    valuesStored = countValuesInPages();
+}
+
 uint8_t *HistoryStore::pagePtr(uint16_t slot) const {
     if (slab == nullptr || slot >= pageCount) {
         return nullptr;
@@ -674,7 +698,14 @@ bool HistoryStore::purgeOldestPage(SeriesRuntime *runtime) {
     if (oldest >= maxPagesPerEntry || records[oldest].pageSlot == 0xFFFFFFFFu) {
         return false;
     }
-    releasePage((uint16_t)records[oldest].pageSlot);
+    const uint16_t pageSlot = (uint16_t)records[oldest].pageSlot;
+    const PageHeader *pageHeader = (const PageHeader *)pagePtr(pageSlot);
+    if (pageHeader != nullptr && valuesStored >= pageHeader->recordsCount) {
+        valuesStored -= pageHeader->recordsCount;
+    } else {
+        valuesStored = 0;
+    }
+    releasePage(pageSlot);
     records[oldest].pageSlot = 0xFFFFFFFFu;
     records[oldest].startDate = 0;
     records[oldest].lastDate = 0;
@@ -1254,7 +1285,7 @@ HistoryStoreStats HistoryStore::stats() const {
     HistoryStoreStats result{};
     result.entriesCount = seriesCount;
     result.pagesTotal = pageCount;
-    result.valuesStored = valuesStored;
+    result.valuesStored = countValuesInPages();
     uint16_t used = 0;
     if (freeBitmap != nullptr) {
         for (uint16_t slot = 0; slot < pageCount; slot++) {
@@ -1611,7 +1642,7 @@ bool HistoryStore::buildSnapshot(uint8_t **outBytes, size_t *outLen) const {
     fileHeader->seriesCount = usedSeries;
     fileHeader->packedPageCount = packedPageCount;
     fileHeader->reserved0 = 0;
-    fileHeader->valuesStored = valuesStored;
+    fileHeader->valuesStored = countValuesInPages();
     fileHeader->payloadCrc = 0;
 
     uint8_t *cursor = bytes + sizeof(SnapshotFileHeader);
@@ -1714,7 +1745,7 @@ bool HistoryStore::applySnapshot(const uint8_t *bytes, size_t len) {
             dropSeries(&series[index]);
         }
     }
-    valuesStored = fileHeader->valuesStored;
+    valuesStored = 0;
 
     const uint8_t *cursor = bytes + sizeof(SnapshotFileHeader);
     for (uint16_t seriesIndex = 0; seriesIndex < fileHeader->seriesCount; seriesIndex++) {
@@ -1881,6 +1912,7 @@ bool HistoryStore::applySnapshot(const uint8_t *bytes, size_t len) {
         slot->used = true;
         seriesCount++;
     }
+    refreshValuesStored();
     return true;
 }
 

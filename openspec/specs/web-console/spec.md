@@ -2232,19 +2232,41 @@ Place view-mode and the simple-user control page MUST both render composite scen
 - **THEN** bake, pin positions, and click behavior match between those surfaces
 
 ### Requirement: Account tab full-screen toggle beside Theme
-On the signed-in user’s user-named account tab, the Theme row MUST include a full-screen mode toggle on the same line as Theme (and Theme save where present). The control MUST be available to every signed-in user on both the gateway operator console and the simple-user control page. Activating it MUST enter or exit browser full-screen for the console page. Full-screen state MUST NOT be persisted on the user record or restored after reload or later login.
+On the **operator** gateway console, the signed-in user’s user-named account tab Theme row MUST include a full-screen mode toggle on the same line as Theme (and Theme save where present). Activating it MUST enter or exit browser full-screen for the console page. Full-screen state MUST NOT be persisted on the user record or restored after reload or later login. Simple-user Full screen placement is defined by the simple-user tab-chrome requirements (not this Account theme-row control).
 
 #### Scenario: Operator account tab row
 - **WHEN** a signed-in operator opens their user-named account tab
 - **THEN** a full-screen toggle appears on the same line as Theme
 
-#### Scenario: Simple user account tab row
-- **WHEN** a simple user opens their user-named account tab
-- **THEN** a full-screen toggle appears on the same line as Theme
-
 #### Scenario: Full-screen not persisted
 - **WHEN** the user enters full-screen then reloads the page
 - **THEN** the page is not full-screen and no user theme/API field was written for full-screen
+
+### Requirement: Simple-user Full screen control lives in main tab chrome
+After login, the **simple-user** control page SHALL show a **Full screen** control in the main tab strip chrome at the leading (left) end of the same row that holds the console/account tabs. The control SHALL remain visible while any console or Account tab is selected, including when the Account / user-name tab is not selected. The simple-user Account / user-name panel SHALL NOT be the only place that offers Full screen, and SHALL NOT keep a second Full screen button in the theme row. The **operator** gateway console NEED NOT change Full screen placement for this requirement.
+
+#### Scenario: Simple user always sees Full screen
+- **WHEN** a simple user is on the control-console page with console tabs visible
+- **THEN** the Full screen control is visible at the leading end of the tab strip without opening the Account tab
+
+#### Scenario: Single control on simple-user page
+- **WHEN** a simple user opens the Account / user-name tab
+- **THEN** theme and Sign out remain, and there is no second Full screen button in that theme row
+
+#### Scenario: Operator Full screen unchanged by this requirement
+- **WHEN** an operator uses the gateway console
+- **THEN** Full screen placement remains as before this change (Account theme row), not relocated by this requirement
+
+### Requirement: Simple-user Full screen control does not hide tab names
+On the simple-user control page, the Full screen control SHALL occupy its own non-overlapping slot in the tab strip so console or account tab labels remain fully readable. It MUST NOT paint over, clip, or replace visible tab names.
+
+#### Scenario: Tab labels remain readable
+- **WHEN** the simple-user tab strip is shown with the Full screen control present
+- **THEN** each visible tab’s name text is fully readable and not covered by the Full screen control
+
+#### Scenario: Narrow strip scrolls tabs not under the button
+- **WHEN** the viewport is narrow and simple-user tab labels require horizontal overflow
+- **THEN** tab labels can still be read (via scroll or wrap of the tab area) without the Full screen control covering those names
 
 ### Requirement: History chart smooth defaults without EMA
 On both the operator and simple-user history chart UIs, numeric smooth MUST offer average-window smoothing only. EMA MUST NOT be offered or applied. When the history chart opens, Smooth MUST be unchecked by default and the samples window MUST default to **5**. The same defaults and EMA removal MUST ship on both pages.
