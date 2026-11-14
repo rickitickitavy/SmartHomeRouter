@@ -28,6 +28,7 @@
 #include "HistoryStore.h"
 #include "SdCardStorage.h"
 #include "InterChipHost.h"
+#include "CpuUsageSampler.h"
 #endif
 #include "JsonField.h"
 #if defined(BOARD_ROLE_SLAVE)
@@ -88,6 +89,7 @@ static AutomationEngine *automationEngine = nullptr;
 static EmailSender *emailSender = nullptr;
 static HistoryStore historyStore;
 static SdCardStorage sdCardStorage;
+static CpuUsageSampler hostCpuUsageSampler;
 ActionCommandQueue actionCommandQueue;
 #endif
 static FoundDeviceList *foundDevices = nullptr;
@@ -1209,6 +1211,18 @@ static String hostGatewayStatusJson() {
     json += String((unsigned long)((psramFree + 512) / 1024));
     json += ",\"psramFreePercent\":";
     json += psramTotal > 0 ? String((unsigned long)((psramFree * 100UL) / psramTotal)) : String("0");
+    json += ",\"hostCpu0Percent\":";
+    if (hostCpuUsageSampler.cpu0Ready()) {
+        json += String((unsigned)hostCpuUsageSampler.cpu0Percent());
+    } else {
+        json += "null";
+    }
+    json += ",\"hostCpu1Percent\":";
+    if (hostCpuUsageSampler.cpu1Ready()) {
+        json += String((unsigned)hostCpuUsageSampler.cpu1Percent());
+    } else {
+        json += "null";
+    }
     json += ",\"emailStatus\":\"";
     json += emailSender != nullptr ? emailSender->accountStatusText() : "not configured";
     json += "\",\"emailLastCheckAgeSec\":";
@@ -2229,6 +2243,7 @@ static void setupHost() {
     LOGGER.info("z2m-gateway host " FIRMWARE_VERSION);
     LOGGER.info("USB CDC on native ESP32-C6 port (not USB-OTG host)");
     LOGGER.info("Reset " + String((int)esp_reset_reason()));
+    hostCpuUsageSampler.begin();
     WiFi.onEvent(onWiFiArduinoEvent);
 
     pinMode(PIN_BOOT_BUTTON, INPUT_PULLUP);
@@ -2591,6 +2606,7 @@ void loop() {
     }
     actionCommandQueue.tick();
     historyStore.loop();
+    hostCpuUsageSampler.sample();
     if (emailSender != nullptr) {
         emailSender->tick();
     }
