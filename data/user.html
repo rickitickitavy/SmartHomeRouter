@@ -3792,13 +3792,27 @@
                                     pinEl.classList.add("scene-cell-pin-live");
                                     pinEl.innerHTML = "";
                                     var pinBinding = Object.assign({}, pin);
-                                    pinBinding.title = "";
-                                    pinBinding.showTitle = false;
-                                    if (pin.kind === "automation" || pin.automation) {
-                                        pinBinding.automation = pin.automation || pin.automationId || "";
-                                    }
                                     if (!pinBinding.viewStyle || pinBinding.viewStyle === "default") {
                                         pinBinding.viewStyle = "icon";
+                                    }
+                                    if (pinBinding.viewStyle === "gauge") {
+                                        // Scene gauges: missing showTitle stays untitled.
+                                        pinBinding.showTitle = pin.showTitle === true;
+                                        pinBinding.title = pin.title || "";
+                                        if (pinBinding.showTitle) {
+                                            pinBinding.titlePosition = normalizeTitlePosition(
+                                                pin.titlePosition
+                                            );
+                                        } else {
+                                            delete pinBinding.titlePosition;
+                                        }
+                                    } else {
+                                        pinBinding.title = "";
+                                        pinBinding.showTitle = false;
+                                        delete pinBinding.titlePosition;
+                                    }
+                                    if (pin.kind === "automation" || pin.automation) {
+                                        pinBinding.automation = pin.automation || pin.automationId || "";
                                     }
                                     if (typeof placeBuildDeviceRow === "function") {
                                         pinEl.appendChild(placeBuildDeviceRow(pinBinding));

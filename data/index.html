@@ -12710,13 +12710,25 @@
 
         function scenePinBindingForPreview(pin) {
             var binding = Object.assign({}, pin);
-            binding.title = "";
-            binding.showTitle = false;
-            if (pin.kind === "automation" || pin.automation) {
-                binding.automation = pin.automation || pin.automationId || "";
-            }
             if (!binding.viewStyle || binding.viewStyle === "default") {
                 binding.viewStyle = "icon";
+            }
+            if (binding.viewStyle === "gauge") {
+                // Scene gauges: missing showTitle stays untitled (unlike cell binds).
+                binding.showTitle = pin.showTitle === true;
+                binding.title = pin.title || "";
+                if (binding.showTitle) {
+                    binding.titlePosition = normalizeTitlePosition(pin.titlePosition);
+                } else {
+                    delete binding.titlePosition;
+                }
+            } else {
+                binding.title = "";
+                binding.showTitle = false;
+                delete binding.titlePosition;
+            }
+            if (pin.kind === "automation" || pin.automation) {
+                binding.automation = pin.automation || pin.automationId || "";
             }
             return binding;
         }
@@ -13141,6 +13153,9 @@
         }
 
         function scenePinToBinding(pin) {
+            var viewStyle = pin.viewStyle === "gauge"
+                ? "gauge"
+                : (pin.viewStyle === "default" ? "default" : "icon");
             var binding = {
                 ieee: pin.ieee || "",
                 channel: pin.channel || 1,
@@ -13149,10 +13164,15 @@
                 unit: pin.unit || "",
                 decimals: pin.decimals != null ? pin.decimals : -1,
                 param: pin.param || "",
-                viewStyle: pin.viewStyle === "gauge"
-                    ? "gauge"
-                    : (pin.viewStyle === "default" ? "default" : "icon")
+                viewStyle: viewStyle
             };
+            if (viewStyle === "gauge") {
+                binding.showTitle = pin.showTitle === true;
+                binding.title = pin.title || "";
+                if (binding.showTitle) {
+                    binding.titlePosition = normalizeTitlePosition(pin.titlePosition);
+                }
+            }
             if (pin.kind === "automation" || pin.automation) {
                 binding.automation = pin.automation || pin.automationId || "";
                 binding.automationControl = pin.automationControl || "enableDisable";
@@ -13196,9 +13216,6 @@
                     pin[key] = body[key];
                 }
             }
-            pin.title = "";
-            pin.showTitle = false;
-            delete pin.titlePosition;
             if (body.automation) {
                 pin.kind = "automation";
                 pin.automationId = body.automation;
@@ -13210,6 +13227,19 @@
             // Scene pins never use Default text presentation.
             if (!pin.viewStyle || pin.viewStyle === "default") {
                 pin.viewStyle = "icon";
+            }
+            if (pin.viewStyle === "gauge") {
+                pin.showTitle = body.showTitle === true;
+                pin.title = body.title || "";
+                if (pin.showTitle) {
+                    pin.titlePosition = normalizeTitlePosition(body.titlePosition);
+                } else {
+                    delete pin.titlePosition;
+                }
+            } else {
+                pin.title = "";
+                pin.showTitle = false;
+                delete pin.titlePosition;
             }
             // Size is edited via outline handles, not the binding dialog.
             delete pin.scale;
@@ -18361,8 +18391,12 @@
             var titlePositionField = document.getElementById("consoleDeviceTitlePositionField");
             var alignHField = document.getElementById("consoleDeviceAlignHField");
             var alignVField = document.getElementById("consoleDeviceAlignVField");
-            // Scene pin = Binding dialog with Title + Title position removed.
-            if (consoleDeviceDialogScenePin) {
+            var viewStyleSelect = document.getElementById("consoleDeviceViewStyle");
+            var scenePinAllowsTitle = consoleDeviceDialogScenePin
+                && viewStyleSelect
+                && viewStyleSelect.value === "gauge";
+            // Scene Icon pins stay untitled; scene Gauge pins use the same title controls as cells.
+            if (consoleDeviceDialogScenePin && !scenePinAllowsTitle) {
                 if (showTitleCheck) {
                     showTitleCheck.checked = false;
                 }
@@ -18371,13 +18405,13 @@
             } else {
                 setHidden(titleField, false);
             }
-            var showTitle = !consoleDeviceDialogScenePin
+            var showTitle = (!consoleDeviceDialogScenePin || scenePinAllowsTitle)
                 && (!showTitleCheck || showTitleCheck.checked);
             var isCompositeCell = !!consoleCompositeEditTarget;
             var dialogWidget = consoleEditorDraft && consoleEditorDraft.widgets
                 && consoleEditorDraft.widgets[consoleDeviceDialogWidgetIndex];
             var isGridWidget = !!(dialogWidget && dialogWidget.viewport === "grid");
-            if (!consoleDeviceDialogScenePin) {
+            if (!consoleDeviceDialogScenePin || scenePinAllowsTitle) {
                 setHidden(titlePositionField, !showTitle);
             }
             // Composite cells own Align H/V in cell chrome — hide binding dialog duplicates.
