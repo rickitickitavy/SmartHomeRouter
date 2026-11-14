@@ -45,6 +45,8 @@ public:
 
     void begin();
     void rebind();
+    void tearDown();
+    bool isTornDown() const;
     void loop();
     int activeWebSocketCount() const;
     void notifyDeviceLiveChanged(const uint8_t ieee[8]);
@@ -108,6 +110,7 @@ private:
     AsyncWebSocket consolesSocket;
     bool otaStarted = false;
     bool otaFailed = false;
+    bool tornDown = false;
     int otaCommand = 0;
 
     void bindDevicesSocket();

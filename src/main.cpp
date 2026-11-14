@@ -106,6 +106,9 @@ static void onHostUserChanged(UserChangeKind kind, const UserRecord *user);
 static void onSlaveUserSync(uint8_t flags, const UserRecord *user);
 #endif
 static bool hostPreparationLatched = false;
+#if defined(BOARD_ROLE_HOST)
+static bool hostLowMemoryFailsafeLatched = false;
+#endif
 static bool hostZigbeeStatusCollectPending = false;
 static volatile bool hostDeviceListPersistPending = false;
 static volatile bool hostMqttCommandResubscribePending = false;
@@ -2504,6 +2507,50 @@ void setup() {
 #endif
 }
 
+#if defined(BOARD_ROLE_HOST)
+static void runHostLowMemoryFailsafe() {
+    if (hostLowMemoryFailsafeLatched) {
+        return;
+    }
+    hostLowMemoryFailsafeLatched = true;
+    const uint16_t thresholdKb =
+        settingsManager != nullptr ? settingsManager->lowMemoryThresholdKb() : DEFAULT_LOW_MEMORY_THRESHOLD_KB;
+    const size_t freeHeap = ESP.getFreeHeap();
+    // Stops: HTTP/WS (tearDown), further web rebind, and remaining loop work after return.
+    LOGGER.error(
+        String("Low-memory fail-safe: freeHeap=")
+        + String((unsigned long)freeHeap)
+        + " thresholdKb="
+        + String((unsigned)thresholdKb)
+    );
+    if (webConsole != nullptr) {
+        webConsole->tearDown();
+        delete webConsole;
+        webConsole = nullptr;
+    }
+    if (!historyStore.persistSnapshot()) {
+        LOGGER.error("Low-memory fail-safe: history snapshot persist failed");
+    }
+    delay(100);
+    ESP.restart();
+}
+
+static void maybeTripHostLowMemoryFailsafe() {
+    if (hostLowMemoryFailsafeLatched || settingsManager == nullptr) {
+        return;
+    }
+    if (FIRMWARE_OTA.busy()) {
+        return;
+    }
+    const uint32_t thresholdBytes =
+        (uint32_t)settingsManager->lowMemoryThresholdKb() * 1024u;
+    if (ESP.getFreeHeap() > thresholdBytes) {
+        return;
+    }
+    runHostLowMemoryFailsafe();
+}
+#endif
+
 void loop() {
 #if defined(BOARD_ROLE_HOST)
     settingsManager->handlePendingRestart(400);
@@ -2515,6 +2562,11 @@ void loop() {
     if (FIRMWARE_OTA.isUpdatingSlave()) {
         wifiController->update();
         STATUS_RGB.service();
+        delay(0);
+        return;
+    }
+    maybeTripHostLowMemoryFailsafe();
+    if (hostLowMemoryFailsafeLatched) {
         delay(0);
         return;
     }

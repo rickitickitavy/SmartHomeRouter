@@ -124,6 +124,7 @@ void SettingsManager::applyDefaults() {
     setHistoryMaxSizeKiB(DEFAULT_HISTORY_MAX_SIZE_KIB);
     setHistoryEntrySize(DEFAULT_HISTORY_ENTRY_SIZE);
     setHistorySdBackupIntervalMin(DEFAULT_HISTORY_SD_BACKUP_INTERVAL_MIN);
+    setLowMemoryThresholdKb(DEFAULT_LOW_MEMORY_THRESHOLD_KB);
 }
 
 void SettingsManager::applyEmailDefaults() {
@@ -568,6 +569,38 @@ void SettingsManager::setHistorySdBackupIntervalMin(uint16_t minutes) {
         settings.reserved + HISTORY_SD_BACKUP_INTERVAL_MIN_RESERVED_OFFSET,
         &minutes,
         sizeof(minutes)
+    );
+}
+
+uint16_t SettingsManager::clampLowMemoryThresholdKb(uint16_t thresholdKb) {
+    if (thresholdKb < LOW_MEMORY_THRESHOLD_KB_MIN) {
+        return LOW_MEMORY_THRESHOLD_KB_MIN;
+    }
+    if (thresholdKb > LOW_MEMORY_THRESHOLD_KB_MAX) {
+        return LOW_MEMORY_THRESHOLD_KB_MAX;
+    }
+    return thresholdKb;
+}
+
+uint16_t SettingsManager::lowMemoryThresholdKb() const {
+    uint16_t thresholdKb = 0;
+    memcpy(
+        &thresholdKb,
+        settings.reserved + LOW_MEMORY_THRESHOLD_KB_RESERVED_OFFSET,
+        sizeof(thresholdKb)
+    );
+    if (thresholdKb == 0 || thresholdKb == 0xFFFFu) {
+        return DEFAULT_LOW_MEMORY_THRESHOLD_KB;
+    }
+    return clampLowMemoryThresholdKb(thresholdKb);
+}
+
+void SettingsManager::setLowMemoryThresholdKb(uint16_t thresholdKb) {
+    thresholdKb = clampLowMemoryThresholdKb(thresholdKb);
+    memcpy(
+        settings.reserved + LOW_MEMORY_THRESHOLD_KB_RESERVED_OFFSET,
+        &thresholdKb,
+        sizeof(thresholdKb)
     );
 }
 

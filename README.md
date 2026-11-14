@@ -185,5 +185,5 @@ The host never starts 802.15.4. Zigbee runs only on the slave and stays up in ho
 ## Build notes
 
 - pioarduino `espressif32` (Arduino 3.x)
-- Host S3: `partitions/host_s3_16MB.csv`; host P4: `partitions/host_p4_32MB.csv`; PSRAM (`BOARD_HAS_PSRAM`)
+- Host S3: `partitions/host_s3_16MB.csv` (dual OTA 4 MB); host P4: `partitions/host_p4_32MB.csv` (dual OTA 6 MB); PSRAM (`BOARD_HAS_PSRAM`)
 - Slave: `-DZIGBEE_MODE_ZCZR`, `partitions/zigbee_zczr_16MB.csv` (`zb_storage`, `zb_fct`, dual OTA app, LittleFS)

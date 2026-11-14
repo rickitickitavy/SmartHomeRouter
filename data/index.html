@@ -2576,6 +2576,14 @@
                         sdIntervalField.hidden = true;
                     }
                 }
+                var lowMemoryInput = document.getElementById("lowMemoryThresholdKb");
+                if (lowMemoryInput) {
+                    lowMemoryInput.value = String(
+                        hardwareSettings.lowMemoryThresholdKb != null
+                            ? hardwareSettings.lowMemoryThresholdKb
+                            : 16
+                    );
+                }
             }).catch(function (error) {
                 if (speedSelect && !speedSelect.value) {
                     speedSelect.value = "500000";
@@ -2622,6 +2630,10 @@
             var sdIntervalInput = document.getElementById("historySdBackupIntervalMin");
             if (sdIntervalField && !sdIntervalField.hidden && sdIntervalInput) {
                 body.historySdBackupIntervalMin = parseInt(sdIntervalInput.value, 10);
+            }
+            var lowMemoryInput = document.getElementById("lowMemoryThresholdKb");
+            if (lowMemoryInput) {
+                body.lowMemoryThresholdKb = parseInt(lowMemoryInput.value, 10);
             }
             fetch("/api/hardware", {
                 method: "POST",
@@ -20647,6 +20659,11 @@
                             <input id="historySdBackupIntervalMin" type="number" min="5" max="600" step="1" value="60">
                             <p class="field-hint">Minutes between SD history backups when a MicroSD card is usable (5–600). Default 60. P4 only.</p>
                         </div>
+                        <div class="field">
+                            <label for="lowMemoryThresholdKb">Low memory threshold</label>
+                            <input id="lowMemoryThresholdKb" type="number" min="10" max="32" step="1" value="16">
+                            <p class="field-hint">Free internal heap at or below this many kB trips the low-memory fail-safe (stop web, save history, reboot). Range 10–32. Default 16.</p>
+                        </div>
                     </div>
                     <div class="dialog-actions hardware-tab-actions">
                         <button type="button" class="btn btn-primary" onclick="saveHardware()">Save</button>
@@ -20658,7 +20675,7 @@
                         <p id="maintenanceStoreError" class="save-error" hidden></p>
                         <div id="maintenanceSettingsCard" class="upload-card">
                             <h3 class="upload-title">Settings</h3>
-                            <p class="field-hint">Export MQTT, Zigbee, hardware (including SD history backup interval on P4), devices, users, consoles, automations, cameras, and scenes. Restore replaces those groups when present in the file. Wi-Fi is never included. E-mail password is exported empty (restore keeps the current password when blank).</p>
+                            <p class="field-hint">Export MQTT, Zigbee, hardware (including low memory threshold and SD history backup interval on P4), devices, users, consoles, automations, cameras, and scenes. Restore replaces those groups when present in the file. Wi-Fi is never included. E-mail password is exported empty (restore keeps the current password when blank).</p>
                             <p id="settingsRestoreError" class="save-error" hidden></p>
                             <input id="settingsRestoreFile" type="file" accept="application/json,.json" hidden onchange="onSettingsRestoreFileSelected(event)">
                             <div class="dialog-actions">

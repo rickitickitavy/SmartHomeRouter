@@ -739,12 +739,34 @@ void WebConsole::begin() {
 }
 
 void WebConsole::rebind() {
+    if (tornDown) {
+        return;
+    }
     LOGGER.info("Rebinding web console after Wi-Fi change");
     clearCameraHeavyOp();
     server.end();
     delay(50);
     server.begin();
     LOGGER.info("Web console rebound on port 80");
+}
+
+bool WebConsole::isTornDown() const {
+    return tornDown;
+}
+
+void WebConsole::tearDown() {
+    if (tornDown) {
+        return;
+    }
+    // Low-memory fail-safe: stop accepting work, free AsyncWebServer heap, do not begin again.
+    tornDown = true;
+    clearCameraHeavyOp();
+    devicesSocket.closeAll();
+    consolesSocket.closeAll();
+    devicesSocket.cleanupClients();
+    consolesSocket.cleanupClients();
+    server.end();
+    LOGGER.info("Web console torn down for low-memory fail-safe");
 }
 
 void WebConsole::clearCameraHeavyOp() {
@@ -880,6 +902,9 @@ void WebConsole::cameraHeavyWorkerTask(void *param) {
 }
 
 void WebConsole::loop() {
+    if (tornDown) {
+        return;
+    }
     serviceWebRequestLeds();
     devicesSocket.cleanupClients();
     consolesSocket.cleanupClients();
@@ -2996,6 +3021,8 @@ void WebConsole::handleHardwareGet(AsyncWebServerRequest *request) {
     json += ",\"historySdBackupIntervalMin\":";
     json += String((unsigned)settingsManager->historySdBackupIntervalMin());
 #endif
+    json += ",\"lowMemoryThresholdKb\":";
+    json += String((unsigned)settingsManager->lowMemoryThresholdKb());
     json += "}";
     request->send(200, "application/json", json);
 }
@@ -3044,6 +3071,7 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
     int historyMaxSizeKiB = settingsManager->historyMaxSizeKiB();
     int historyEntrySize = settingsManager->historyEntrySize();
     int historySdBackupIntervalMin = settingsManager->historySdBackupIntervalMin();
+    int lowMemoryThresholdKb = settingsManager->lowMemoryThresholdKb();
     const bool haveHistoryDays = extractJsonInt(body.c_str(), "historyMaxStoreDays", historyMaxStoreDays);
     const bool haveHistorySweep =
         extractJsonInt(body.c_str(), "historySweepIntervalMin", historySweepIntervalMin);
@@ -3051,6 +3079,8 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
     const bool haveHistoryEntry = extractJsonInt(body.c_str(), "historyEntrySize", historyEntrySize);
     const bool haveHistorySdBackup =
         extractJsonInt(body.c_str(), "historySdBackupIntervalMin", historySdBackupIntervalMin);
+    const bool haveLowMemoryThreshold =
+        extractJsonInt(body.c_str(), "lowMemoryThresholdKb", lowMemoryThresholdKb);
     if (haveHistoryDays
         && (historyMaxStoreDays < HISTORY_MAX_STORE_DAYS_MIN
             || historyMaxStoreDays > HISTORY_MAX_STORE_DAYS_MAX)) {
@@ -3086,6 +3116,12 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
         request->send(400, "text/plain", "historySdBackupIntervalMin must be 5-600");
         return;
     }
+    if (haveLowMemoryThreshold
+        && (lowMemoryThresholdKb < LOW_MEMORY_THRESHOLD_KB_MIN
+            || lowMemoryThresholdKb > LOW_MEMORY_THRESHOLD_KB_MAX)) {
+        request->send(400, "text/plain", "lowMemoryThresholdKb must be 10-32");
+        return;
+    }
     settingsManager->setSpiSpeedHz(clamped);
     settingsManager->setRfUpdateSpiSpeedHz(rfUpdateClamped);
     settingsManager->setLedBrightness(bluePercent, greenPercent);
@@ -3104,6 +3140,9 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
     }
     if (haveHistorySdBackup) {
         settingsManager->setHistorySdBackupIntervalMin((uint16_t)historySdBackupIntervalMin);
+    }
+    if (haveLowMemoryThreshold) {
+        settingsManager->setLowMemoryThresholdKb((uint16_t)lowMemoryThresholdKb);
     }
     settingsManager->saveMain(false);
     if (applyHardware != nullptr) {
@@ -3602,6 +3641,17 @@ bool WebConsole::applyHardwareJson(const char *json, String *errorText) {
         }
         settingsManager->setHistorySdBackupIntervalMin((uint16_t)historySdBackupIntervalMin);
     }
+    int lowMemoryThresholdKb = settingsManager->lowMemoryThresholdKb();
+    if (extractJsonInt(json, "lowMemoryThresholdKb", lowMemoryThresholdKb)) {
+        if (lowMemoryThresholdKb < LOW_MEMORY_THRESHOLD_KB_MIN
+            || lowMemoryThresholdKb > LOW_MEMORY_THRESHOLD_KB_MAX) {
+            if (errorText != nullptr) {
+                *errorText = "lowMemoryThresholdKb must be 10-32";
+            }
+            return false;
+        }
+        settingsManager->setLowMemoryThresholdKb((uint16_t)lowMemoryThresholdKb);
+    }
     settingsManager->setSpiSpeedHz(clamped);
     settingsManager->setLedBrightness(bluePercent, greenPercent);
     settingsManager->setUseQueueForBaseDeviceCommand(useQueueForBaseDeviceCommand);
@@ -3678,6 +3728,8 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
     response->print((unsigned)settingsManager->historyEntrySize());
     response->print(",\"historySdBackupIntervalMin\":");
     response->print((unsigned)settingsManager->historySdBackupIntervalMin());
+    response->print(",\"lowMemoryThresholdKb\":");
+    response->print((unsigned)settingsManager->lowMemoryThresholdKb());
     response->print("},\"ui\":{\"theme\":\"");
     response->print(UserStore::themeJsonId(user->theme));
     response->print("\"},\"devices\":");
