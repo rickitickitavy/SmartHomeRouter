@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 class DeviceTopicMap;
+class SdCardStorage;
 
 // Keep HistoryStore.h free of ReportableData/DeviceTopicMap bodies so native
 // unit tests can compile against lightweight stubs.
@@ -58,7 +59,14 @@ public:
     void end();
     bool available() const { return slab != nullptr && pageCount > 0; }
 
-    // LittleFS snapshot of filled entries + used pages (restart survival).
+    // Snapshot of filled entries + used pages (LittleFS or SD when usable).
+    void setSdBackend(SdCardStorage *sdStorage);
+    bool persistOnSd() const;
+    void setSdBackupIntervalMin(uint16_t minutes);
+    uint16_t sdBackupIntervalMin() const { return sdBackupIntervalMinutes; }
+    // Seconds until next periodic SD backup; 0 when SD persist inactive.
+    uint32_t sdSecondsToSave() const;
+
     bool persistSnapshot();
     bool restoreSnapshot();
     void discardSnapshotFile();
@@ -155,6 +163,9 @@ private:
     SeriesRuntime *series = nullptr;
     uint16_t seriesCapacity = 0;
     uint16_t seriesCount = 0;
+    SdCardStorage *sdBackend = nullptr;
+    uint16_t sdBackupIntervalMinutes = DEFAULT_HISTORY_SD_BACKUP_INTERVAL_MIN;
+    unsigned long lastSdBackupMs = 0;
 
     bool allocSlab(uint16_t maxSizeKiB);
     void freeSlab();

@@ -2992,6 +2992,10 @@ void WebConsole::handleHardwareGet(AsyncWebServerRequest *request) {
     json += String((unsigned)HISTORY_MAX_SIZE_KIB_MAX);
     json += ",\"historyEntrySize\":";
     json += String((unsigned)settingsManager->historyEntrySize());
+#if defined(BOARD_HOST_P4)
+    json += ",\"historySdBackupIntervalMin\":";
+    json += String((unsigned)settingsManager->historySdBackupIntervalMin());
+#endif
     json += "}";
     request->send(200, "application/json", json);
 }
@@ -3039,11 +3043,14 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
     int historySweepIntervalMin = settingsManager->historySweepIntervalMin();
     int historyMaxSizeKiB = settingsManager->historyMaxSizeKiB();
     int historyEntrySize = settingsManager->historyEntrySize();
+    int historySdBackupIntervalMin = settingsManager->historySdBackupIntervalMin();
     const bool haveHistoryDays = extractJsonInt(body.c_str(), "historyMaxStoreDays", historyMaxStoreDays);
     const bool haveHistorySweep =
         extractJsonInt(body.c_str(), "historySweepIntervalMin", historySweepIntervalMin);
     const bool haveHistorySize = extractJsonInt(body.c_str(), "historyMaxSizeKiB", historyMaxSizeKiB);
     const bool haveHistoryEntry = extractJsonInt(body.c_str(), "historyEntrySize", historyEntrySize);
+    const bool haveHistorySdBackup =
+        extractJsonInt(body.c_str(), "historySdBackupIntervalMin", historySdBackupIntervalMin);
     if (haveHistoryDays
         && (historyMaxStoreDays < HISTORY_MAX_STORE_DAYS_MIN
             || historyMaxStoreDays > HISTORY_MAX_STORE_DAYS_MAX)) {
@@ -3073,6 +3080,12 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
         request->send(400, "text/plain", "historyEntrySize must be 256/512/1024/2048/4096");
         return;
     }
+    if (haveHistorySdBackup
+        && (historySdBackupIntervalMin < HISTORY_SD_BACKUP_INTERVAL_MIN_MIN
+            || historySdBackupIntervalMin > HISTORY_SD_BACKUP_INTERVAL_MIN_MAX)) {
+        request->send(400, "text/plain", "historySdBackupIntervalMin must be 5-600");
+        return;
+    }
     settingsManager->setSpiSpeedHz(clamped);
     settingsManager->setRfUpdateSpiSpeedHz(rfUpdateClamped);
     settingsManager->setLedBrightness(bluePercent, greenPercent);
@@ -3089,10 +3102,22 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
     if (haveHistoryEntry) {
         settingsManager->setHistoryEntrySize((uint16_t)historyEntrySize);
     }
+    if (haveHistorySdBackup) {
+        settingsManager->setHistorySdBackupIntervalMin((uint16_t)historySdBackupIntervalMin);
+    }
     settingsManager->saveMain(false);
     if (applyHardware != nullptr) {
         applyHardware(clamped, bluePercent, greenPercent);
     }
+#if defined(BOARD_ROLE_HOST)
+    if (historyStore != nullptr) {
+        historyStore->setRetention(
+            settingsManager->historyMaxStoreDays(),
+            settingsManager->historySweepIntervalMin()
+        );
+        historyStore->setSdBackupIntervalMin(settingsManager->historySdBackupIntervalMin());
+    }
+#endif
     request->send(200, "text/plain", "Saved. Hardware settings are active now.");
 }
 
@@ -3566,12 +3591,32 @@ bool WebConsole::applyHardwareJson(const char *json, String *errorText) {
         }
         settingsManager->setHistoryEntrySize((uint16_t)historyEntrySize);
     }
+    int historySdBackupIntervalMin = settingsManager->historySdBackupIntervalMin();
+    if (extractJsonInt(json, "historySdBackupIntervalMin", historySdBackupIntervalMin)) {
+        if (historySdBackupIntervalMin < HISTORY_SD_BACKUP_INTERVAL_MIN_MIN
+            || historySdBackupIntervalMin > HISTORY_SD_BACKUP_INTERVAL_MIN_MAX) {
+            if (errorText != nullptr) {
+                *errorText = "historySdBackupIntervalMin must be 5-600";
+            }
+            return false;
+        }
+        settingsManager->setHistorySdBackupIntervalMin((uint16_t)historySdBackupIntervalMin);
+    }
     settingsManager->setSpiSpeedHz(clamped);
     settingsManager->setLedBrightness(bluePercent, greenPercent);
     settingsManager->setUseQueueForBaseDeviceCommand(useQueueForBaseDeviceCommand);
     if (applyHardware != nullptr) {
         applyHardware(clamped, bluePercent, greenPercent);
     }
+#if defined(BOARD_ROLE_HOST)
+    if (historyStore != nullptr) {
+        historyStore->setRetention(
+            settingsManager->historyMaxStoreDays(),
+            settingsManager->historySweepIntervalMin()
+        );
+        historyStore->setSdBackupIntervalMin(settingsManager->historySdBackupIntervalMin());
+    }
+#endif
     return true;
 }
 
@@ -3631,6 +3676,8 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
     response->print((unsigned)settingsManager->historyMaxSizeKiB());
     response->print(",\"historyEntrySize\":");
     response->print((unsigned)settingsManager->historyEntrySize());
+    response->print(",\"historySdBackupIntervalMin\":");
+    response->print((unsigned)settingsManager->historySdBackupIntervalMin());
     response->print("},\"ui\":{\"theme\":\"");
     response->print(UserStore::themeJsonId(user->theme));
     response->print("\"},\"devices\":");

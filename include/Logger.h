@@ -7,7 +7,12 @@ class Logger {
 public:
     using LineHookFn = void (*)(const char *line);
 
+#if defined(BOARD_HOST_P4)
+    // P4 has more PSRAM headroom; keep a larger diagnostic ring.
+    static const size_t kRingCapacityTarget = 512 * 1024;
+#else
     static const size_t kRingCapacityTarget = 128 * 1024;
+#endif
     static const size_t kWebViewMaxBytes = 64 * 1024;
     static const size_t kInternalFallbackBytes = 64 * 1024;
 

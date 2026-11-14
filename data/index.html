@@ -181,6 +181,21 @@
             }
         }
 
+        function formatHistorySdCountdown(secondsValue) {
+            var totalSec = Math.max(0, parseInt(secondsValue, 10) || 0);
+            var minutes = Math.floor(totalSec / 60);
+            var seconds = totalSec % 60;
+            if (minutes >= 60) {
+                var hours = Math.floor(minutes / 60);
+                minutes = minutes % 60;
+                return String(hours) + "h " + String(minutes) + "m";
+            }
+            if (minutes > 0) {
+                return String(minutes) + "m " + String(seconds) + "s";
+            }
+            return String(seconds) + "s";
+        }
+
         function formatOnlineTime(onlineSec) {
             var totalSeconds = Number(onlineSec);
             if (!(totalSeconds >= 0)) {
@@ -342,6 +357,54 @@
                 "statusHistoryValues",
                 payload && payload.historyValuesStored != null ? String(payload.historyValuesStored) : "—"
             );
+            var historySaveRow = document.getElementById("statusHistorySaveRow");
+            if (historySaveRow) {
+                if (payload && payload.historySdSecondsToSave != null) {
+                    historySaveRow.hidden = false;
+                    setStatusText(
+                        "statusHistoryTimeBeforeSave",
+                        formatHistorySdCountdown(payload.historySdSecondsToSave)
+                    );
+                } else {
+                    historySaveRow.hidden = true;
+                    setStatusText("statusHistoryTimeBeforeSave", "—");
+                }
+            }
+            var historySdSizeRow = document.getElementById("statusHistorySdSizeRow");
+            if (historySdSizeRow) {
+                if (payload && payload.historySdSizeKiB != null) {
+                    historySdSizeRow.hidden = false;
+                    setStatusText(
+                        "statusHistorySdSize",
+                        String(payload.historySdSizeKiB) + " kB"
+                    );
+                } else {
+                    historySdSizeRow.hidden = true;
+                    setStatusText("statusHistorySdSize", "—");
+                }
+            }
+            var sdGroup = document.getElementById("statusSdCardGroup");
+            if (sdGroup) {
+                var hasSdStatus = payload && payload.sdStatus != null && payload.sdStatus !== "";
+                var isP4Host = String(masterVersion || "").indexOf("P4-") === 0;
+                if (hasSdStatus || isP4Host) {
+                    sdGroup.hidden = false;
+                    setStatusText(
+                        "statusSdStatus",
+                        hasSdStatus ? String(payload.sdStatus) : "—"
+                    );
+                    setStatusText(
+                        "statusSdCapacityMb",
+                        payload && payload.sdCapacityMb != null ? String(payload.sdCapacityMb) : "—"
+                    );
+                    setStatusText(
+                        "statusSdFreeMb",
+                        payload && payload.sdFreeMb != null ? String(payload.sdFreeMb) : "—"
+                    );
+                } else {
+                    sdGroup.hidden = true;
+                }
+            }
             setStatusText(
                 "statusFsTotal",
                 payload && payload.fsTotalKb != null ? String(payload.fsTotalKb) + " kB" : "—"
@@ -2503,6 +2566,16 @@
                 if (entrySelect) {
                     entrySelect.value = String(hardwareSettings.historyEntrySize != null ? hardwareSettings.historyEntrySize : 1024);
                 }
+                var sdIntervalField = document.getElementById("historySdBackupIntervalField");
+                var sdIntervalInput = document.getElementById("historySdBackupIntervalMin");
+                if (sdIntervalField && sdIntervalInput) {
+                    if (hardwareSettings.historySdBackupIntervalMin != null) {
+                        sdIntervalField.hidden = false;
+                        sdIntervalInput.value = String(hardwareSettings.historySdBackupIntervalMin);
+                    } else {
+                        sdIntervalField.hidden = true;
+                    }
+                }
             }).catch(function (error) {
                 if (speedSelect && !speedSelect.value) {
                     speedSelect.value = "500000";
@@ -2545,6 +2618,11 @@
                 historyMaxSizeKiB: parseInt(document.getElementById("historyMaxSizeKiB").value, 10),
                 historyEntrySize: parseInt(document.getElementById("historyEntrySize").value, 10)
             };
+            var sdIntervalField = document.getElementById("historySdBackupIntervalField");
+            var sdIntervalInput = document.getElementById("historySdBackupIntervalMin");
+            if (sdIntervalField && !sdIntervalField.hidden && sdIntervalInput) {
+                body.historySdBackupIntervalMin = parseInt(sdIntervalInput.value, 10);
+            }
             fetch("/api/hardware", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -19859,6 +19937,25 @@
                             </div>
                         </div>
                         <div class="status-group">
+                            <h3 class="group-title">Devices</h3>
+                            <div class="status-row">
+                                <span class="status-row-label">Zigbee devices</span>
+                                <p id="statusZigbeeDevices" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Zigbee online</span>
+                                <p id="statusZigbeeOnline" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">MQTT devices</span>
+                                <p id="statusMqttDevices" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">MQTT online</span>
+                                <p id="statusMqttOnline" class="status-value">—</p>
+                            </div>
+                        </div>
+                        <div class="status-group">
                             <h3 class="group-title">Historical storage</h3>
                             <div class="status-row">
                                 <span class="status-row-label">Entries</span>
@@ -19875,6 +19972,29 @@
                             <div class="status-row">
                                 <span class="status-row-label">Values stored</span>
                                 <p id="statusHistoryValues" class="status-value">—</p>
+                            </div>
+                            <div class="status-row" id="statusHistorySaveRow" hidden>
+                                <span class="status-row-label">time before save</span>
+                                <p id="statusHistoryTimeBeforeSave" class="status-value">—</p>
+                            </div>
+                            <div class="status-row" id="statusHistorySdSizeRow" hidden>
+                                <span class="status-row-label">on-SD history size</span>
+                                <p id="statusHistorySdSize" class="status-value">—</p>
+                            </div>
+                        </div>
+                        <div class="status-group" id="statusSdCardGroup" hidden>
+                            <h3 class="group-title">SD card</h3>
+                            <div class="status-row">
+                                <span class="status-row-label">Status</span>
+                                <p id="statusSdStatus" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Capacity Mb</span>
+                                <p id="statusSdCapacityMb" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Free Mb</span>
+                                <p id="statusSdFreeMb" class="status-value">—</p>
                             </div>
                         </div>
                         <div class="status-group">
@@ -19894,25 +20014,6 @@
                             <div class="status-row">
                                 <span class="status-row-label">Scene size</span>
                                 <p id="statusFsScene" class="status-value">—</p>
-                            </div>
-                        </div>
-                        <div class="status-group">
-                            <h3 class="group-title">Devices</h3>
-                            <div class="status-row">
-                                <span class="status-row-label">Zigbee devices</span>
-                                <p id="statusZigbeeDevices" class="status-value">—</p>
-                            </div>
-                            <div class="status-row">
-                                <span class="status-row-label">Zigbee online</span>
-                                <p id="statusZigbeeOnline" class="status-value">—</p>
-                            </div>
-                            <div class="status-row">
-                                <span class="status-row-label">MQTT devices</span>
-                                <p id="statusMqttDevices" class="status-value">—</p>
-                            </div>
-                            <div class="status-row">
-                                <span class="status-row-label">MQTT online</span>
-                                <p id="statusMqttOnline" class="status-value">—</p>
                             </div>
                         </div>
                     </div>
@@ -20541,6 +20642,11 @@
                             </select>
                             <p class="field-hint">History entry (page directory) size. Applied on next boot with Maximum history size.</p>
                         </div>
+                        <div class="field" id="historySdBackupIntervalField" hidden>
+                            <label for="historySdBackupIntervalMin">interval for backup historical data to SD</label>
+                            <input id="historySdBackupIntervalMin" type="number" min="5" max="600" step="1" value="60">
+                            <p class="field-hint">Minutes between SD history backups when a MicroSD card is usable (5–600). Default 60. P4 only.</p>
+                        </div>
                     </div>
                     <div class="dialog-actions hardware-tab-actions">
                         <button type="button" class="btn btn-primary" onclick="saveHardware()">Save</button>
@@ -20552,7 +20658,7 @@
                         <p id="maintenanceStoreError" class="save-error" hidden></p>
                         <div id="maintenanceSettingsCard" class="upload-card">
                             <h3 class="upload-title">Settings</h3>
-                            <p class="field-hint">Export MQTT, Zigbee, hardware, devices, users, consoles, automations, cameras, and scenes. Restore replaces those groups when present in the file. Wi-Fi is never included. E-mail password is exported empty (restore keeps the current password when blank).</p>
+                            <p class="field-hint">Export MQTT, Zigbee, hardware (including SD history backup interval on P4), devices, users, consoles, automations, cameras, and scenes. Restore replaces those groups when present in the file. Wi-Fi is never included. E-mail password is exported empty (restore keeps the current password when blank).</p>
                             <p id="settingsRestoreError" class="save-error" hidden></p>
                             <input id="settingsRestoreFile" type="file" accept="application/json,.json" hidden onchange="onSettingsRestoreFileSelected(event)">
                             <div class="dialog-actions">

@@ -41,9 +41,12 @@ public:
     void setHistoryMaxSizeKiB(uint16_t sizeKiB);
     uint16_t historyEntrySize() const;
     void setHistoryEntrySize(uint16_t entrySize);
+    uint16_t historySdBackupIntervalMin() const;
+    void setHistorySdBackupIntervalMin(uint16_t minutes);
     static bool isValidHistoryEntrySize(uint16_t entrySize);
     static uint8_t clampHistoryMaxStoreDays(uint8_t days);
     static uint8_t clampHistorySweepIntervalMin(uint8_t minutes);
+    static uint16_t clampHistorySdBackupIntervalMin(uint16_t minutes);
     uint8_t uiTheme() const;
     void setUiTheme(uint8_t themeId);
     static const char *uiThemeJsonId(uint8_t themeId);

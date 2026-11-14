@@ -123,6 +123,7 @@ void SettingsManager::applyDefaults() {
     setHistorySweepIntervalMin(DEFAULT_HISTORY_SWEEP_INTERVAL_MIN);
     setHistoryMaxSizeKiB(DEFAULT_HISTORY_MAX_SIZE_KIB);
     setHistoryEntrySize(DEFAULT_HISTORY_ENTRY_SIZE);
+    setHistorySdBackupIntervalMin(DEFAULT_HISTORY_SD_BACKUP_INTERVAL_MIN);
 }
 
 void SettingsManager::applyEmailDefaults() {
@@ -540,6 +541,34 @@ void SettingsManager::setHistoryEntrySize(uint16_t entrySize) {
         entrySize = DEFAULT_HISTORY_ENTRY_SIZE;
     }
     memcpy(settings.reserved + HISTORY_ENTRY_SIZE_RESERVED_OFFSET, &entrySize, sizeof(entrySize));
+}
+
+uint16_t SettingsManager::clampHistorySdBackupIntervalMin(uint16_t minutes) {
+    if (minutes < HISTORY_SD_BACKUP_INTERVAL_MIN_MIN) {
+        return HISTORY_SD_BACKUP_INTERVAL_MIN_MIN;
+    }
+    if (minutes > HISTORY_SD_BACKUP_INTERVAL_MIN_MAX) {
+        return HISTORY_SD_BACKUP_INTERVAL_MIN_MAX;
+    }
+    return minutes;
+}
+
+uint16_t SettingsManager::historySdBackupIntervalMin() const {
+    uint16_t minutes = 0;
+    memcpy(&minutes, settings.reserved + HISTORY_SD_BACKUP_INTERVAL_MIN_RESERVED_OFFSET, sizeof(minutes));
+    if (minutes == 0 || minutes == 0xFFFFu) {
+        return DEFAULT_HISTORY_SD_BACKUP_INTERVAL_MIN;
+    }
+    return clampHistorySdBackupIntervalMin(minutes);
+}
+
+void SettingsManager::setHistorySdBackupIntervalMin(uint16_t minutes) {
+    minutes = clampHistorySdBackupIntervalMin(minutes);
+    memcpy(
+        settings.reserved + HISTORY_SD_BACKUP_INTERVAL_MIN_RESERVED_OFFSET,
+        &minutes,
+        sizeof(minutes)
+    );
 }
 
 uint8_t SettingsManager::blueLedBrightness() const {
