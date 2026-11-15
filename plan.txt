@@ -7,13 +7,24 @@ cloud (websocket)
 1) hardware brownout
 5) new action: HTTP request
 
-change for P4 and S3. enable optional title for gauges on scenes. Also with specifying its place (left, top, right, bottom)
-
  change for P4 and S3. For all type users (Simple and normal).
 
-
+values for sensor from history after normal reboot only
 
 python3 scripts/firmware_join.py --host .pio/build/esp32-p4-host/firmware.bin --hosted-c6 tools/p4-hosted-c6-update/data/esp32c6-hosted.bin --hosted-c6-version 2.12.11 --host-board p4 -o firmware-joined.zip
 python3 scripts/firmware_join.py --host .pio/build/esp32-p4-host/firmware.bin --slave .pio/build/esp32-c6-slave/firmware.bin  --hosted-c6 tools/p4-hosted-c6-update/data/esp32c6-hosted.bin --hosted-c6-version 2.12.11 --host-board p4 -o firmware-joined.zip
 
 
+2026-11-14 16:34:22 [slave] WARNING: ZCL APS delivery failed status=-1191 ep=1
+
+/opsx-propose
+## goal
+prevent user disappointment when after the router reboot user may see absent values for sensors that reports values very rare
+
+## instruments
+previously saved historical data on SD card or littleFS
+
+## solution
+You may use last value from historical data for such sensor if any
+
+status card for simple mode in deffer to base user always blinking. It uses request pool algorithm as I learned. The algorithm of STATUS refresh for simple user must be the same for the base user
