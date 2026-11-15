@@ -149,7 +149,9 @@ enum SpiEvent : uint8_t {
     SpiEvtErr = 0x8E,
     SpiEvtTimeout = 0x8F,
     SpiEvtUserMap = 0x90,
-    SpiEvtRebindResult = 0x91
+    SpiEvtRebindResult = 0x91,
+    /** Slave → host: request full configure (settings + store push), same outcome as boot. */
+    SpiEvtConfigRequest = 0x92
 };
 
 constexpr uint8_t SPI_REBIND_OUTCOME_FAILED = 0;

@@ -463,6 +463,18 @@ void InterChipHost::handleInbound(const SpiFrame &frame) {
             }
         }
     }
+    if (frame.cmd == SpiEvtConfigRequest) {
+        LOGGER.info("CONFIG_REQUEST from slave");
+        if (FIRMWARE_OTA.isUpdatingSlave()) {
+            LOGGER.warning("CONFIG_REQUEST ignored during slave OTA");
+        } else if (state == HostBringupWaitReady || state == HostBringupNormal
+                   || state == HostBringupPushSettings) {
+            LOGGER.info("CONFIG_REQUEST: re-pushing settings (normal configure path)");
+            settingsQueued = false;
+            hasPending = false;
+            maybePushSettings();
+        }
+    }
     if (frame.cmd == SpiEvtSettingsOk) {
         state = HostBringupNormal;
         bringupFailStreak = 0;

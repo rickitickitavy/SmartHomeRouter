@@ -147,6 +147,9 @@ private:
     String fileDumpText;
     uint8_t nextSeq = 1;
     bool readySent = false;
+    bool configRequestSent = false;
+    unsigned long configRequestDeadlineMs = 0;
+    static constexpr unsigned long kConfigRequestDelayMs = 10000UL;
     bool spiReady = false;
     bool zigbeeStarted = false;
     bool zigbeeLostRebootPending = false;

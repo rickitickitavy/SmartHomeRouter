@@ -1012,8 +1012,17 @@ void InterChipSlave::pump() {
     }
     if (!readySent && spiReady) {
         readySent = true;
+        configRequestSent = false;
+        configRequestDeadlineMs = millis() + kConfigRequestDelayMs;
         enqueueEvent(SpiEvtSlaveReady, nullptr, 0);
         LOGGER.info("SLAVE_READY queued");
+    }
+    if (readySent && !configRequestSent && configRequestDeadlineMs != 0
+        && (long)(millis() - configRequestDeadlineMs) >= 0) {
+        configRequestSent = true;
+        configRequestDeadlineMs = 0;
+        enqueueEvent(SpiEvtConfigRequest, nullptr, 0);
+        LOGGER.info("CONFIG_REQUEST queued");
     }
     serviceSpi();
 }
