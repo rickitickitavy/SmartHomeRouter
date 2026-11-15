@@ -9227,7 +9227,49 @@
             host.appendChild(grid);
         }
 
+        function syncPlaceConsoleTabsScrollButtons() {
+            var tabsHost = document.getElementById("placeConsoleTabs");
+            var prevBtn = document.getElementById("placeTabsScrollPrev");
+            var nextBtn = document.getElementById("placeTabsScrollNext");
+            if (!tabsHost || !prevBtn || !nextBtn) {
+                return;
+            }
+            // Measure after layout; only show arrows when the strip actually overflows.
+            var maxScroll = Math.max(0, tabsHost.scrollWidth - tabsHost.clientWidth);
+            var needsScroll = maxScroll > 2;
+            if (!needsScroll) {
+                prevBtn.hidden = true;
+                nextBtn.hidden = true;
+                return;
+            }
+            var atStart = tabsHost.scrollLeft <= 1;
+            var atEnd = tabsHost.scrollLeft >= maxScroll - 1;
+            prevBtn.hidden = atStart;
+            nextBtn.hidden = atEnd;
+        }
+
+        function scrollPlaceConsoleTabs(direction) {
+            var tabsHost = document.getElementById("placeConsoleTabs");
+            if (!tabsHost) {
+                return;
+            }
+            var step = Math.max(80, Math.floor(tabsHost.clientWidth * 0.75));
+            tabsHost.scrollBy({ left: direction * step, behavior: "smooth" });
+            window.setTimeout(syncPlaceConsoleTabsScrollButtons, 180);
+        }
+
+        function bindPlaceConsoleTabsScrollListeners() {
+            var tabsHost = document.getElementById("placeConsoleTabs");
+            if (!tabsHost || tabsHost._placeTabsScrollBound) {
+                return;
+            }
+            tabsHost._placeTabsScrollBound = true;
+            tabsHost.addEventListener("scroll", syncPlaceConsoleTabsScrollButtons, { passive: true });
+            window.addEventListener("resize", syncPlaceConsoleTabsScrollButtons);
+        }
+
         function renderPlaceConsoleTabs() {
+            var tabChrome = document.getElementById("placeConsoleTabChrome");
             var tabsHost = document.getElementById("placeConsoleTabs");
             var panelsHost = document.getElementById("placeConsolePanels");
             var emptyState = document.getElementById("placeEmptyState");
@@ -9241,22 +9283,28 @@
             tabsHost.innerHTML = "";
             panelsHost.innerHTML = "";
             if (!placeAssignedConsoles.length) {
-                tabsHost.hidden = true;
+                if (tabChrome) {
+                    tabChrome.hidden = true;
+                }
                 panelsHost.hidden = true;
                 placeDisplayedConsoleIndex = -1;
                 if (emptyState) {
                     emptyState.hidden = false;
                 }
+                syncPlaceConsoleTabsScrollButtons();
                 return;
             }
             if (placeActiveConsoleIndex >= placeAssignedConsoles.length) {
                 placeActiveConsoleIndex = 0;
             }
-            tabsHost.hidden = false;
+            if (tabChrome) {
+                tabChrome.hidden = false;
+            }
             panelsHost.hidden = false;
             if (emptyState) {
                 emptyState.hidden = true;
             }
+            bindPlaceConsoleTabsScrollListeners();
             var tabIndex;
             for (tabIndex = 0; tabIndex < placeAssignedConsoles.length; tabIndex++) {
                 var tabButton = document.createElement("button");
@@ -9283,6 +9331,9 @@
                 panelsHost,
                 placeConsoleScrollByIndex[placeActiveConsoleIndex]
             );
+            window.requestAnimationFrame(function () {
+                window.requestAnimationFrame(syncPlaceConsoleTabsScrollButtons);
+            });
         }
 
         function loadPlaceConsoles() {
@@ -20561,7 +20612,17 @@
         <section id="section-place" class="section-panel" aria-label="Place">
             <h2 class="section-title">Place</h2>
             <div class="place-console-shell">
-                <div id="placeConsoleTabs" class="tabs user-console-tabs" hidden></div>
+                <div id="placeConsoleTabChrome" class="place-console-tab-chrome" hidden>
+                    <button type="button" id="placeTabsScrollPrev"
+                            class="btn btn-secondary btn-icon place-console-tabs-scroll-btn"
+                            title="Scroll tabs left" aria-label="Scroll tabs left"
+                            hidden onclick="scrollPlaceConsoleTabs(-1)">&lt;</button>
+                    <div id="placeConsoleTabs" class="tabs user-console-tabs"></div>
+                    <button type="button" id="placeTabsScrollNext"
+                            class="btn btn-secondary btn-icon place-console-tabs-scroll-btn"
+                            title="Scroll tabs right" aria-label="Scroll tabs right"
+                            hidden onclick="scrollPlaceConsoleTabs(1)">&gt;</button>
+                </div>
                 <div id="placeConsolePanels" class="user-console-panels place-console-panels" hidden></div>
                 <p id="placeEmptyState" class="field-hint user-console-empty" hidden>No consoles are assigned to your account.</p>
             </div>
