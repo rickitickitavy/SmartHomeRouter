@@ -1707,6 +1707,12 @@ html, body {
     line-height: 1;
 }
 
+/* Author display:inline-flex above beats the UA [hidden] rule — force hide. */
+.btn-icon[hidden],
+.place-console-tabs-scroll-btn[hidden] {
+    display: none !important;
+}
+
 .data-table tbody tr {
     position: relative;
 }
@@ -1948,18 +1954,62 @@ html, body {
     margin-left: 0.35rem;
 }
 
-.place-console-shell > .tabs,
-.place-console-shell > .user-console-tabs {
-    flex: 0 0 auto;
+/* Base-user Place: single-line tabs; scroll via < > (no scrollbar chrome). */
+.place-console-tab-chrome {
+    display: flex;
+    flex-wrap: nowrap;
     align-items: flex-end;
+    flex: 0 0 auto;
+    min-width: 0;
+    width: 100%;
+    gap: 0.35rem;
+    border-bottom: 1px solid var(--border);
 }
 
-.place-console-shell > .tabs .tab-btn,
-.place-console-shell > .user-console-tabs .tab-btn {
+.place-console-tabs-scroll-btn {
+    flex: 0 0 auto;
     align-self: flex-end;
+    margin: 0 0 -1px;
+    min-width: 2rem;
+    width: 2rem;
+    padding-left: 0;
+    padding-right: 0;
+    min-height: 44px;
+    position: relative;
+    z-index: 2;
+    background: var(--surface);
+    color: var(--text);
+}
+
+.place-console-tab-chrome > .tabs,
+.place-console-tab-chrome > .user-console-tabs {
+    flex: 1 1 auto;
+    align-self: stretch;
+    min-width: 0;
+    margin: 0;
+    border-bottom: none;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.place-console-tab-chrome > .tabs::-webkit-scrollbar,
+.place-console-tab-chrome > .user-console-tabs::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+}
+
+.place-console-tab-chrome > .tabs .tab-btn,
+.place-console-tab-chrome > .user-console-tabs .tab-btn {
+    align-self: flex-end;
+    flex: 0 0 auto;
     height: auto;
     min-height: 44px;
     max-height: 44px;
+    white-space: nowrap;
 }
 
 .user-console-header {
@@ -3675,13 +3725,9 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     overflow: hidden;
 }
 
-.place-console-shell > .tabs {
+.place-console-shell > .place-console-tab-chrome {
     flex: 0 0 auto;
     width: 100%;
-    height: auto;
-    max-height: none;
-    align-items: flex-end;
-    align-content: flex-end;
 }
 
 .place-console-panels {
