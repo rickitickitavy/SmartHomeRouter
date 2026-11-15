@@ -1207,10 +1207,18 @@
                 if (activeConsoleIndex >= assignedConsoles.length) {
                     activeConsoleIndex = 0;
                 }
-                renderConsoleTabs();
+                if (showingAccountTab) {
+                    refreshConsoleTabButtonsOnly();
+                } else {
+                    renderConsoleTabs();
+                }
             }).catch(function () {
                 assignedConsoles = [];
-                renderConsoleTabs();
+                if (showingAccountTab) {
+                    refreshConsoleTabButtonsOnly();
+                } else {
+                    renderConsoleTabs();
+                }
             });
         }
 
@@ -1228,7 +1236,15 @@
 
         function selectAccountTab() {
             var panelsHost = document.getElementById("consolePanels");
-            if (panelsHost && !showingAccountTab) {
+            if (showingAccountTab) {
+                // Already on account/Status: refresh tab labels only; keep Status DOM.
+                refreshConsoleTabButtonsOnly();
+                if (statusPollTimer == null) {
+                    startStatusPolling();
+                }
+                return;
+            }
+            if (panelsHost) {
                 consoleScrollByIndex[activeConsoleIndex] =
                     captureConsolePanelScroll(panelsHost);
             }
@@ -1540,11 +1556,9 @@
             );
         }
 
+        // Same Status poll algorithm as operator index.html Status section.
         function refreshGatewayStatus() {
             fetch("/api/status", { cache: "no-store" }).then(function (response) {
-                if (!response.ok) {
-                    throw new Error("status unavailable");
-                }
                 return response.json();
             }).then(function (payload) {
                 applyGatewayStatus(payload);
@@ -2830,8 +2844,36 @@
             refreshConsoleControls();
         }
 
+        function refreshConsoleTabButtonsOnly() {
+            var tabsHost = document.getElementById("consoleTabs");
+            if (!tabsHost) {
+                return;
+            }
+            tabsHost.innerHTML = "";
+            var tabIndex;
+            for (tabIndex = 0; tabIndex < assignedConsoles.length; tabIndex++) {
+                var tabButton = document.createElement("button");
+                tabButton.type = "button";
+                tabButton.className = "tab-btn";
+                tabButton.textContent = assignedConsoles[tabIndex].name || "Console";
+                tabButton.onclick = (function (storedIndex) {
+                    return function () {
+                        selectConsoleTab(storedIndex);
+                    };
+                })(tabIndex);
+                tabsHost.appendChild(tabButton);
+            }
+            appendUserConsoleAccountTab(tabsHost);
+        }
+
         function refreshConsoleControls() {
             loadAutomationStatuses().finally(function () {
+                // Keep account/Status DOM stable (operator Status algorithm): live
+                // device/automation updates must not rebuild Status to "—".
+                if (showingAccountTab) {
+                    refreshConsoleTabButtonsOnly();
+                    return;
+                }
                 renderConsoleTabs();
             });
         }
