@@ -135,6 +135,13 @@ The arc gauge center value text MUST scale proportionally with the rendered arc 
 - **WHEN** the same console layout with arc gauges is opened in Place and on the simple-user page at the same viewport size
 - **THEN** corresponding gauges show the same center digit font size
 
+### Requirement: Composite cell arc gauges keep Option B fit
+Composite and grid cell arc gauges MUST keep the existing Option B center-digit fit (proportional to cell with the established min/max clamp). This change MUST NOT retune cell gauge digit or title sizing.
+
+#### Scenario: Heating grid cells unchanged
+- **WHEN** an operator opens a composite/grid console such as Отопление with many cell arc gauges
+- **THEN** center digits and titles keep the pre-change cell fit look (not oversized into the needle/arc)
+
 ### Requirement: Binary sensor icon view style
 For Binary Input / Binary Output / Binary Value (and BACnet binary) device bindings, On/Off device bindings, automation bindings, and `userData` bindings whose selected schema field type is `bool`, the binding MUST support view style `default` or `icon`. When view style is `icon`, the binding MUST store an icon id from the Material Design Icons set used by Home Assistant (`mdi:…`). Missing view style MUST behave as `default`. Binary sensor types and `userData` bool fields MUST NOT offer gauge. On/Off and automation `default` MUST keep the existing switch control. `userData` bool `default` MUST show the boolean state as text (ON/OFF), not a switch.
 

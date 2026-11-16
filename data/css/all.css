@@ -5453,6 +5453,9 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     max-width: none;
     min-height: 0;
     flex: 1 1 auto;
+    /* Inline size is the gauge width. Digits query this, not the page. */
+    container-type: inline-size;
+    container-name: scene-pin-gauge;
 }
 
 .console-composite-cell-body .scene-cell-pin .console-gauge-arc-svg,
@@ -5463,18 +5466,32 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     height: auto;
 }
 
+/*
+ * Scene-pin arc digits only. Operator formula: clamp(16px, 13 * gaugeWidth/104, 22px).
+ * cqi is the scene-pin gauge width. Cell gauges are not selected here.
+ */
 .console-composite-cell-body .scene-cell-pin .console-gauge-value-svg,
 .scene-cell-pin .console-gauge-value-svg,
 .scene-bind-pin .console-gauge-value-svg {
-    font-size: clamp(16px, 16cqmin, 44px);
+    font-size: clamp(16px, calc(100cqi * 13 / 104), 22px);
+    line-height: 1;
     font-weight: 700;
 }
 
 .console-composite-cell-body .scene-cell-pin .console-gauge-value,
 .scene-cell-pin .console-gauge-value,
 .scene-bind-pin .console-gauge-value {
-    font-size: clamp(16px, 16cqmin, 44px);
     font-weight: 700;
+}
+
+/* Scene-pin gauge titles (21-32-10): ~1/3 of digits; hard max limits fallout. */
+.console-composite-cell-body .scene-cell-pin .console-device-row--gauge .console-device-row-title,
+.scene-cell-pin .console-device-row--gauge .console-device-row-title,
+.scene-bind-pin .console-device-row--gauge .console-device-row-title {
+    font-size: clamp(8px, 9cqmin, 20px);
+    line-height: 1.15;
+    max-width: 100%;
+    overflow: hidden;
 }
 
 .console-composite-cell-body .scene-cell-pin .console-device-row-controls,
