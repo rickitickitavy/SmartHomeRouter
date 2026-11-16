@@ -1258,6 +1258,15 @@ static String hostGatewayStatusJson() {
             json += ",\"historySdSecondsToSave\":null";
             json += ",\"historySdSizeKiB\":null";
         }
+        if (historyStore.persistOnFlash()) {
+            json += ",\"historyFlashSecondsToSave\":";
+            json += String((unsigned long)historyStore.flashSecondsToSave());
+            json += ",\"historyFlashSizeKiB\":";
+            json += String((unsigned long)historyStore.flashSnapshotKiB());
+        } else {
+            json += ",\"historyFlashSecondsToSave\":null";
+            json += ",\"historyFlashSizeKiB\":null";
+        }
     }
 #if defined(BOARD_HOST_P4)
     json += ",\"sdStatus\":\"";
@@ -2258,6 +2267,10 @@ static void setupHost() {
     }
 
     settingsManager = new SettingsManager();
+    if (settingsManager->reconcileHistoryFlashPersist()) {
+        settingsManager->saveMain(false);
+        LOGGER.info("History flash persist forced off because max size is above 4096 KiB");
+    }
     settingsManager->loadDeviceFile();
     sdCardStorage.beginBootProbe();
     if (!historyStore.begin(
@@ -2272,6 +2285,10 @@ static void setupHost() {
         );
         historyStore.setSdBackend(&sdCardStorage);
         historyStore.setSdBackupIntervalMin(settingsManager->historySdBackupIntervalMin());
+        historyStore.setFlashPersist(
+            settingsManager->historyPersistFlash(),
+            settingsManager->historyFlashBackupIntervalMin()
+        );
         if (historyStore.snapshotFilePresent()) {
             if (historyStore.restoreSnapshot()) {
                 LOGGER.info(

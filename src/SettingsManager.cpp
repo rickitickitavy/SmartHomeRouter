@@ -526,6 +526,11 @@ void SettingsManager::setHistoryMaxSizeKiB(uint16_t sizeKiB) {
         sizeKiB = HISTORY_MAX_SIZE_KIB_MAX;
     }
     memcpy(settings.reserved + HISTORY_MAX_SIZE_KIB_RESERVED_OFFSET, &sizeKiB, sizeof(sizeKiB));
+#if !defined(BOARD_HOST_P4)
+    if (sizeKiB > HISTORY_FLASH_PERSIST_MAX_KIB) {
+        settings.reserved[HISTORY_FLASH_PERSIST_RESERVED_OFFSET] = HISTORY_FLASH_PERSIST_OFF;
+    }
+#endif
 }
 
 uint16_t SettingsManager::historyEntrySize() const {
@@ -570,6 +575,76 @@ void SettingsManager::setHistorySdBackupIntervalMin(uint16_t minutes) {
         &minutes,
         sizeof(minutes)
     );
+}
+
+bool SettingsManager::historyPersistFlash() const {
+    if (historyMaxSizeKiB() > HISTORY_FLASH_PERSIST_MAX_KIB) {
+        return false;
+    }
+    const uint8_t stored = settings.reserved[HISTORY_FLASH_PERSIST_RESERVED_OFFSET];
+    if (stored == HISTORY_FLASH_PERSIST_OFF) {
+        return false;
+    }
+    if (stored == HISTORY_FLASH_PERSIST_ON) {
+        return true;
+    }
+    return true;
+}
+
+void SettingsManager::setHistoryPersistFlash(bool enabled) {
+    if (historyMaxSizeKiB() > HISTORY_FLASH_PERSIST_MAX_KIB) {
+        settings.reserved[HISTORY_FLASH_PERSIST_RESERVED_OFFSET] = HISTORY_FLASH_PERSIST_OFF;
+        return;
+    }
+    settings.reserved[HISTORY_FLASH_PERSIST_RESERVED_OFFSET] =
+        enabled ? HISTORY_FLASH_PERSIST_ON : HISTORY_FLASH_PERSIST_OFF;
+}
+
+uint16_t SettingsManager::clampHistoryFlashBackupIntervalMin(uint16_t minutes) {
+    if (minutes < HISTORY_FLASH_BACKUP_INTERVAL_MIN_MIN) {
+        return HISTORY_FLASH_BACKUP_INTERVAL_MIN_MIN;
+    }
+    if (minutes > HISTORY_FLASH_BACKUP_INTERVAL_MIN_MAX) {
+        return HISTORY_FLASH_BACKUP_INTERVAL_MIN_MAX;
+    }
+    return minutes;
+}
+
+uint16_t SettingsManager::historyFlashBackupIntervalMin() const {
+    uint16_t minutes = 0;
+    memcpy(
+        &minutes,
+        settings.reserved + HISTORY_FLASH_BACKUP_INTERVAL_MIN_RESERVED_OFFSET,
+        sizeof(minutes)
+    );
+    if (minutes == 0 || minutes == 0xFFFFu) {
+        return DEFAULT_HISTORY_FLASH_BACKUP_INTERVAL_MIN;
+    }
+    return clampHistoryFlashBackupIntervalMin(minutes);
+}
+
+void SettingsManager::setHistoryFlashBackupIntervalMin(uint16_t minutes) {
+    minutes = clampHistoryFlashBackupIntervalMin(minutes);
+    memcpy(
+        settings.reserved + HISTORY_FLASH_BACKUP_INTERVAL_MIN_RESERVED_OFFSET,
+        &minutes,
+        sizeof(minutes)
+    );
+}
+
+bool SettingsManager::reconcileHistoryFlashPersist() {
+#if defined(BOARD_HOST_P4)
+    return false;
+#else
+    if (historyMaxSizeKiB() <= HISTORY_FLASH_PERSIST_MAX_KIB) {
+        return false;
+    }
+    if (settings.reserved[HISTORY_FLASH_PERSIST_RESERVED_OFFSET] == HISTORY_FLASH_PERSIST_OFF) {
+        return false;
+    }
+    settings.reserved[HISTORY_FLASH_PERSIST_RESERVED_OFFSET] = HISTORY_FLASH_PERSIST_OFF;
+    return true;
+#endif
 }
 
 uint16_t SettingsManager::clampLowMemoryThresholdKb(uint16_t thresholdKb) {

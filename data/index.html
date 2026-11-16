@@ -376,13 +376,18 @@
                 payload && payload.historyValuesStored != null ? String(payload.historyValuesStored) : "—"
             );
             var sdHistoryPersistActive = payload && payload.historySdSecondsToSave != null;
+            var flashHistoryPersistActive = payload && payload.historyFlashSecondsToSave != null;
             var historySaveRow = document.getElementById("statusHistorySaveRow");
             if (historySaveRow) {
-                if (sdHistoryPersistActive) {
+                if (sdHistoryPersistActive || flashHistoryPersistActive) {
                     historySaveRow.hidden = false;
                     setStatusText(
                         "statusHistoryTimeBeforeSave",
-                        formatHistorySdCountdown(payload.historySdSecondsToSave)
+                        formatHistorySdCountdown(
+                            sdHistoryPersistActive
+                                ? payload.historySdSecondsToSave
+                                : payload.historyFlashSecondsToSave
+                        )
                     );
                 } else {
                     historySaveRow.hidden = true;
@@ -403,6 +408,21 @@
                 } else {
                     historySdSizeRow.hidden = true;
                     setStatusText("statusHistorySdSize", "—");
+                }
+            }
+            var historyFlashSizeRow = document.getElementById("statusHistoryFlashSizeRow");
+            if (historyFlashSizeRow) {
+                if (flashHistoryPersistActive) {
+                    historyFlashSizeRow.hidden = false;
+                    var historyFlashSizeKiB =
+                        payload.historyFlashSizeKiB != null ? payload.historyFlashSizeKiB : 0;
+                    setStatusText(
+                        "statusHistoryFlashSize",
+                        String(historyFlashSizeKiB) + " kB"
+                    );
+                } else {
+                    historyFlashSizeRow.hidden = true;
+                    setStatusText("statusHistoryFlashSize", "—");
                 }
             }
             var sdGroup = document.getElementById("statusSdCardGroup");
@@ -443,6 +463,21 @@
                 "statusFsScene",
                 payload && payload.fsSceneKb != null ? String(payload.fsSceneKb) + " kB" : "—"
             );
+            var historyFsSizeRow = document.getElementById("statusFsHistorySizeRow");
+            if (historyFsSizeRow) {
+                if (flashHistoryPersistActive) {
+                    historyFsSizeRow.hidden = false;
+                    var historyFsSizeKiB =
+                        payload.historyFlashSizeKiB != null ? payload.historyFlashSizeKiB : 0;
+                    setStatusText(
+                        "statusFsHistorySize",
+                        String(historyFsSizeKiB) + " kB"
+                    );
+                } else {
+                    historyFsSizeRow.hidden = true;
+                    setStatusText("statusFsHistorySize", "—");
+                }
+            }
             if (payload && payload.wifiRssiDbm != null) {
                 setStatusText("statusWifiSignal", String(payload.wifiRssiDbm) + " dBm");
             } else {
@@ -2588,6 +2623,7 @@
                 if (entrySelect) {
                     entrySelect.value = String(hardwareSettings.historyEntrySize != null ? hardwareSettings.historyEntrySize : 1024);
                 }
+                syncHistoryFlashPersistControls(hardwareSettings);
                 var sdIntervalField = document.getElementById("historySdBackupIntervalField");
                 var sdIntervalInput = document.getElementById("historySdBackupIntervalMin");
                 if (sdIntervalField && sdIntervalInput) {
@@ -2631,6 +2667,56 @@
             });
         }
 
+        function syncHistoryFlashPersistControls(hardwareSettings) {
+            var persistField = document.getElementById("historyPersistFlashField");
+            var persistInput = document.getElementById("historyPersistFlash");
+            var intervalField = document.getElementById("historyFlashBackupIntervalField");
+            var intervalInput = document.getElementById("historyFlashBackupIntervalMin");
+            var sizeInput = document.getElementById("historyMaxSizeKiB");
+            if (!persistField || !persistInput) {
+                return;
+            }
+            var persistHint = document.getElementById("historyPersistFlashHint");
+            var s3FlashSettings = hardwareSettings && hardwareSettings.historyPersistFlash != null;
+            persistField.hidden = !s3FlashSettings;
+            if (persistHint) {
+                persistHint.hidden = !s3FlashSettings;
+            }
+            if (!s3FlashSettings) {
+                if (intervalField) {
+                    intervalField.hidden = true;
+                }
+                return;
+            }
+            var sizeKiB = sizeInput ? parseInt(sizeInput.value, 10) : 4096;
+            var sizeAllowsPersist = !isNaN(sizeKiB) && sizeKiB <= 4096;
+            persistInput.checked = !!hardwareSettings.historyPersistFlash && sizeAllowsPersist;
+            persistInput.disabled = !sizeAllowsPersist;
+            if (intervalInput && hardwareSettings.historyFlashBackupIntervalMin != null) {
+                intervalInput.value = String(hardwareSettings.historyFlashBackupIntervalMin);
+            }
+            if (intervalField) {
+                intervalField.hidden = !persistInput.checked;
+            }
+        }
+
+        function onHistoryFlashPersistUiChanged() {
+            var persistInput = document.getElementById("historyPersistFlash");
+            var intervalField = document.getElementById("historyFlashBackupIntervalField");
+            var sizeInput = document.getElementById("historyMaxSizeKiB");
+            var sizeKiB = sizeInput ? parseInt(sizeInput.value, 10) : 4096;
+            var sizeAllowsPersist = !isNaN(sizeKiB) && sizeKiB <= 4096;
+            if (persistInput) {
+                persistInput.disabled = !sizeAllowsPersist;
+                if (!sizeAllowsPersist) {
+                    persistInput.checked = false;
+                }
+            }
+            if (intervalField) {
+                intervalField.hidden = !(persistInput && persistInput.checked && !persistInput.disabled);
+            }
+        }
+
         function saveHardware() {
             var saveError = document.getElementById("hardwareSaveError");
             var saveSuccess = document.getElementById("hardwareSaveSuccess");
@@ -2653,6 +2739,15 @@
             if (sdIntervalField && !sdIntervalField.hidden && sdIntervalInput) {
                 body.historySdBackupIntervalMin = parseInt(sdIntervalInput.value, 10);
             }
+            var persistField = document.getElementById("historyPersistFlashField");
+            var persistInput = document.getElementById("historyPersistFlash");
+            var flashIntervalInput = document.getElementById("historyFlashBackupIntervalMin");
+            if (persistField && !persistField.hidden && persistInput) {
+                body.historyPersistFlash = !!(persistInput.checked && !persistInput.disabled);
+                if (flashIntervalInput) {
+                    body.historyFlashBackupIntervalMin = parseInt(flashIntervalInput.value, 10);
+                }
+            }
             var lowMemoryInput = document.getElementById("lowMemoryThresholdKb");
             if (lowMemoryInput) {
                 body.lowMemoryThresholdKb = parseInt(lowMemoryInput.value, 10);
@@ -2666,6 +2761,7 @@
                     if (response.ok) {
                         saveSuccess.hidden = false;
                         saveSuccess.textContent = text || "Saved. Hardware settings are active now.";
+                        loadHardware();
                     } else {
                         saveError.hidden = false;
                         saveError.textContent = text || ("Save failed (HTTP " + response.status + ")");
@@ -20092,6 +20188,10 @@
                                 <span class="status-row-label">on-SD history size</span>
                                 <p id="statusHistorySdSize" class="status-value">—</p>
                             </div>
+                            <div class="status-row" id="statusHistoryFlashSizeRow" hidden>
+                                <span class="status-row-label">On-flash history size</span>
+                                <p id="statusHistoryFlashSize" class="status-value">—</p>
+                            </div>
                         </div>
                         <div class="status-group" id="statusSdCardGroup" hidden>
                             <h3 class="group-title">SD card</h3>
@@ -20125,6 +20225,10 @@
                             <div class="status-row">
                                 <span class="status-row-label">Scene size</span>
                                 <p id="statusFsScene" class="status-value">—</p>
+                            </div>
+                            <div class="status-row" id="statusFsHistorySizeRow" hidden>
+                                <span class="status-row-label">Historical data size</span>
+                                <p id="statusFsHistorySize" class="status-value">—</p>
                             </div>
                         </div>
                     </div>
@@ -20773,7 +20877,7 @@
                         </div>
                         <div class="field">
                             <label for="historyMaxSizeKiB">Maximum history size (kB)</label>
-                            <input id="historyMaxSizeKiB" type="number" min="4" max="65534" step="1" value="4096">
+                            <input id="historyMaxSizeKiB" type="number" min="4" max="65534" step="1" value="4096" oninput="onHistoryFlashPersistUiChanged()">
                         </div>
                         <div class="field">
                             <label for="historyEntrySize">Entry size</label>
@@ -20785,6 +20889,16 @@
                                 <option value="4096">4096</option>
                             </select>
                             <p class="field-hint">History entry (page directory) size. Applied on next boot with Maximum history size.</p>
+                        </div>
+                        <div class="field-check" id="historyPersistFlashField" hidden>
+                            <input type="checkbox" id="historyPersistFlash" onchange="onHistoryFlashPersistUiChanged()">
+                            <span>persist historical on internal flash</span>
+                        </div>
+                        <p class="field-hint" id="historyPersistFlashHint" hidden>On only when Maximum history size is 4096 kB or less. Larger sizes turn persist off and keep the reboot snapshot that is deleted after restore. S3 only.</p>
+                        <div class="field" id="historyFlashBackupIntervalField" hidden>
+                            <label for="historyFlashBackupIntervalMin">interval save historical data</label>
+                            <input id="historyFlashBackupIntervalMin" type="number" min="30" max="600" step="1" value="120">
+                            <p class="field-hint">Minutes between full LittleFS history snapshots while persist is on (30–600). Default 120. Applies on the next countdown without reboot.</p>
                         </div>
                         <div class="field" id="historySdBackupIntervalField" hidden>
                             <label for="historySdBackupIntervalMin">interval for backup historical data to SD</label>
@@ -20807,7 +20921,7 @@
                         <p id="maintenanceStoreError" class="save-error" hidden></p>
                         <div id="maintenanceSettingsCard" class="upload-card">
                             <h3 class="upload-title">Settings</h3>
-                            <p class="field-hint">Export MQTT, Zigbee, hardware (including low memory threshold and SD history backup interval on P4), devices, users, consoles, automations, cameras, and scenes. Restore replaces those groups when present in the file. Wi-Fi is never included. E-mail password is exported empty (restore keeps the current password when blank).</p>
+                            <p class="field-hint">Export MQTT, Zigbee, hardware (including low memory threshold, SD history backup interval on P4, and S3 flash history persist plus its interval), devices, users, consoles, automations, cameras, and scenes. Restore replaces those groups when present in the file. Wi-Fi is never included. E-mail password is exported empty (restore keeps the current password when blank).</p>
                             <p id="settingsRestoreError" class="save-error" hidden></p>
                             <input id="settingsRestoreFile" type="file" accept="application/json,.json" hidden onchange="onSettingsRestoreFileSelected(event)">
                             <div class="dialog-actions">

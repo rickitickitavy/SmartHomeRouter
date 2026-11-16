@@ -1466,13 +1466,18 @@
                 payload && payload.historyValuesStored != null ? String(payload.historyValuesStored) : "—"
             );
             var sdHistoryPersistActive = payload && payload.historySdSecondsToSave != null;
+            var flashHistoryPersistActive = payload && payload.historyFlashSecondsToSave != null;
             var historySaveRow = document.getElementById("statusHistorySaveRow");
             if (historySaveRow) {
-                if (sdHistoryPersistActive) {
+                if (sdHistoryPersistActive || flashHistoryPersistActive) {
                     historySaveRow.hidden = false;
                     setStatusText(
                         "statusHistoryTimeBeforeSave",
-                        formatHistorySdCountdown(payload.historySdSecondsToSave)
+                        formatHistorySdCountdown(
+                            sdHistoryPersistActive
+                                ? payload.historySdSecondsToSave
+                                : payload.historyFlashSecondsToSave
+                        )
                     );
                 } else {
                     historySaveRow.hidden = true;
@@ -1493,6 +1498,21 @@
                 } else {
                     historySdSizeRow.hidden = true;
                     setStatusText("statusHistorySdSize", "—");
+                }
+            }
+            var historyFlashSizeRow = document.getElementById("statusHistoryFlashSizeRow");
+            if (historyFlashSizeRow) {
+                if (flashHistoryPersistActive) {
+                    historyFlashSizeRow.hidden = false;
+                    var historyFlashSizeKiB =
+                        payload.historyFlashSizeKiB != null ? payload.historyFlashSizeKiB : 0;
+                    setStatusText(
+                        "statusHistoryFlashSize",
+                        String(historyFlashSizeKiB) + " kB"
+                    );
+                } else {
+                    historyFlashSizeRow.hidden = true;
+                    setStatusText("statusHistoryFlashSize", "—");
                 }
             }
             var sdGroup = document.getElementById("statusSdCardGroup");
@@ -1533,6 +1553,21 @@
                 "statusFsScene",
                 payload && payload.fsSceneKb != null ? String(payload.fsSceneKb) + " kB" : "—"
             );
+            var historyFsSizeRow = document.getElementById("statusFsHistorySizeRow");
+            if (historyFsSizeRow) {
+                if (flashHistoryPersistActive) {
+                    historyFsSizeRow.hidden = false;
+                    var historyFsSizeKiB =
+                        payload.historyFlashSizeKiB != null ? payload.historyFlashSizeKiB : 0;
+                    setStatusText(
+                        "statusFsHistorySize",
+                        String(historyFsSizeKiB) + " kB"
+                    );
+                } else {
+                    historyFsSizeRow.hidden = true;
+                    setStatusText("statusFsHistorySize", "—");
+                }
+            }
             if (payload && payload.wifiRssiDbm != null) {
                 setStatusText("statusWifiSignal", String(payload.wifiRssiDbm) + " dBm");
             } else {
@@ -1640,7 +1675,8 @@
                 ["PSRAM usage", "statusHistoryPsram"],
                 ["Values stored", "statusHistoryValues"],
                 ["time before save", "statusHistoryTimeBeforeSave", "statusHistorySaveRow"],
-                ["on-SD history size", "statusHistorySdSize", "statusHistorySdSizeRow"]
+                ["on-SD history size", "statusHistorySdSize", "statusHistorySdSizeRow"],
+                ["On-flash history size", "statusHistoryFlashSize", "statusHistoryFlashSizeRow"]
             ]);
             appendStatusGroup(stack, "SD card", [
                 ["Status", "statusSdStatus"],
@@ -1651,7 +1687,8 @@
                 ["Total capacity", "statusFsTotal"],
                 ["Free space", "statusFsFree"],
                 ["Config size", "statusFsConfig"],
-                ["Scene size", "statusFsScene"]
+                ["Scene size", "statusFsScene"],
+                ["Historical data size", "statusFsHistorySize", "statusFsHistorySizeRow"]
             ]);
             appendStatusGroup(stack, "Devices", [
                 ["Zigbee devices", "statusZigbeeDevices"],
