@@ -3020,6 +3020,11 @@ void WebConsole::handleHardwareGet(AsyncWebServerRequest *request) {
 #if defined(BOARD_HOST_P4)
     json += ",\"historySdBackupIntervalMin\":";
     json += String((unsigned)settingsManager->historySdBackupIntervalMin());
+#else
+    json += ",\"historyPersistFlash\":";
+    json += settingsManager->historyPersistFlash() ? "true" : "false";
+    json += ",\"historyFlashBackupIntervalMin\":";
+    json += String((unsigned)settingsManager->historyFlashBackupIntervalMin());
 #endif
     json += ",\"lowMemoryThresholdKb\":";
     json += String((unsigned)settingsManager->lowMemoryThresholdKb());
@@ -3079,6 +3084,12 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
     const bool haveHistoryEntry = extractJsonInt(body.c_str(), "historyEntrySize", historyEntrySize);
     const bool haveHistorySdBackup =
         extractJsonInt(body.c_str(), "historySdBackupIntervalMin", historySdBackupIntervalMin);
+    bool historyPersistFlash = settingsManager->historyPersistFlash();
+    int historyFlashBackupIntervalMin = settingsManager->historyFlashBackupIntervalMin();
+    const bool haveHistoryPersistFlash =
+        extractJsonBool(body.c_str(), "historyPersistFlash", historyPersistFlash);
+    const bool haveHistoryFlashBackup =
+        extractJsonInt(body.c_str(), "historyFlashBackupIntervalMin", historyFlashBackupIntervalMin);
     const bool haveLowMemoryThreshold =
         extractJsonInt(body.c_str(), "lowMemoryThresholdKb", lowMemoryThresholdKb);
     if (haveHistoryDays
@@ -3116,6 +3127,12 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
         request->send(400, "text/plain", "historySdBackupIntervalMin must be 5-600");
         return;
     }
+    if (haveHistoryFlashBackup
+        && (historyFlashBackupIntervalMin < HISTORY_FLASH_BACKUP_INTERVAL_MIN_MIN
+            || historyFlashBackupIntervalMin > HISTORY_FLASH_BACKUP_INTERVAL_MIN_MAX)) {
+        request->send(400, "text/plain", "historyFlashBackupIntervalMin must be 30-600");
+        return;
+    }
     if (haveLowMemoryThreshold
         && (lowMemoryThresholdKb < LOW_MEMORY_THRESHOLD_KB_MIN
             || lowMemoryThresholdKb > LOW_MEMORY_THRESHOLD_KB_MAX)) {
@@ -3141,6 +3158,20 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
     if (haveHistorySdBackup) {
         settingsManager->setHistorySdBackupIntervalMin((uint16_t)historySdBackupIntervalMin);
     }
+#if !defined(BOARD_HOST_P4)
+    if (haveHistorySize && historyMaxSizeKiB > (int)HISTORY_FLASH_PERSIST_MAX_KIB) {
+        historyPersistFlash = false;
+    }
+    if (haveHistoryPersistFlash || haveHistorySize) {
+        settingsManager->setHistoryPersistFlash(historyPersistFlash);
+    }
+    if (haveHistoryFlashBackup) {
+        settingsManager->setHistoryFlashBackupIntervalMin((uint16_t)historyFlashBackupIntervalMin);
+    }
+#else
+    (void)historyPersistFlash;
+    (void)haveHistoryPersistFlash;
+#endif
     if (haveLowMemoryThreshold) {
         settingsManager->setLowMemoryThresholdKb((uint16_t)lowMemoryThresholdKb);
     }
@@ -3155,6 +3186,10 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
             settingsManager->historySweepIntervalMin()
         );
         historyStore->setSdBackupIntervalMin(settingsManager->historySdBackupIntervalMin());
+        historyStore->setFlashPersist(
+            settingsManager->historyPersistFlash(),
+            settingsManager->historyFlashBackupIntervalMin()
+        );
     }
 #endif
     request->send(200, "text/plain", "Saved. Hardware settings are active now.");
@@ -3641,6 +3676,27 @@ bool WebConsole::applyHardwareJson(const char *json, String *errorText) {
         }
         settingsManager->setHistorySdBackupIntervalMin((uint16_t)historySdBackupIntervalMin);
     }
+#if !defined(BOARD_HOST_P4)
+    bool historyPersistFlash = settingsManager->historyPersistFlash();
+    if (extractJsonBool(json, "historyPersistFlash", historyPersistFlash)
+        || historyMaxSizeKiB > (int)HISTORY_FLASH_PERSIST_MAX_KIB) {
+        if (historyMaxSizeKiB > (int)HISTORY_FLASH_PERSIST_MAX_KIB) {
+            historyPersistFlash = false;
+        }
+        settingsManager->setHistoryPersistFlash(historyPersistFlash);
+    }
+    int historyFlashBackupIntervalMin = settingsManager->historyFlashBackupIntervalMin();
+    if (extractJsonInt(json, "historyFlashBackupIntervalMin", historyFlashBackupIntervalMin)) {
+        if (historyFlashBackupIntervalMin < HISTORY_FLASH_BACKUP_INTERVAL_MIN_MIN
+            || historyFlashBackupIntervalMin > HISTORY_FLASH_BACKUP_INTERVAL_MIN_MAX) {
+            if (errorText != nullptr) {
+                *errorText = "historyFlashBackupIntervalMin must be 30-600";
+            }
+            return false;
+        }
+        settingsManager->setHistoryFlashBackupIntervalMin((uint16_t)historyFlashBackupIntervalMin);
+    }
+#endif
     int lowMemoryThresholdKb = settingsManager->lowMemoryThresholdKb();
     if (extractJsonInt(json, "lowMemoryThresholdKb", lowMemoryThresholdKb)) {
         if (lowMemoryThresholdKb < LOW_MEMORY_THRESHOLD_KB_MIN
@@ -3665,6 +3721,10 @@ bool WebConsole::applyHardwareJson(const char *json, String *errorText) {
             settingsManager->historySweepIntervalMin()
         );
         historyStore->setSdBackupIntervalMin(settingsManager->historySdBackupIntervalMin());
+        historyStore->setFlashPersist(
+            settingsManager->historyPersistFlash(),
+            settingsManager->historyFlashBackupIntervalMin()
+        );
     }
 #endif
     return true;
@@ -3728,6 +3788,12 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
     response->print((unsigned)settingsManager->historyEntrySize());
     response->print(",\"historySdBackupIntervalMin\":");
     response->print((unsigned)settingsManager->historySdBackupIntervalMin());
+#if !defined(BOARD_HOST_P4)
+    response->print(",\"historyPersistFlash\":");
+    response->print(settingsManager->historyPersistFlash() ? "true" : "false");
+    response->print(",\"historyFlashBackupIntervalMin\":");
+    response->print((unsigned)settingsManager->historyFlashBackupIntervalMin());
+#endif
     response->print(",\"lowMemoryThresholdKb\":");
     response->print((unsigned)settingsManager->lowMemoryThresholdKb());
     response->print("},\"ui\":{\"theme\":\"");

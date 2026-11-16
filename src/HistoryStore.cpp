@@ -1093,6 +1093,39 @@ void HistoryStore::setSdBackupIntervalMin(uint16_t minutes) {
     }
 }
 
+void HistoryStore::setFlashPersist(bool enabled, uint16_t intervalMin) {
+#if defined(BOARD_HOST_P4)
+    flashPersistEnabled = false;
+    (void)enabled;
+    (void)intervalMin;
+#else
+    if (intervalMin < HISTORY_FLASH_BACKUP_INTERVAL_MIN_MIN) {
+        intervalMin = HISTORY_FLASH_BACKUP_INTERVAL_MIN_MIN;
+    }
+    if (intervalMin > HISTORY_FLASH_BACKUP_INTERVAL_MIN_MAX) {
+        intervalMin = HISTORY_FLASH_BACKUP_INTERVAL_MIN_MAX;
+    }
+    flashBackupIntervalMinutes = intervalMin;
+    flashPersistEnabled = enabled;
+    if (flashPersistEnabled) {
+        lastFlashBackupMs = millis();
+    }
+#endif
+}
+
+uint32_t HistoryStore::flashSecondsToSave() const {
+    if (!flashPersistEnabled) {
+        return 0;
+    }
+    const unsigned long intervalMs =
+        (unsigned long)flashBackupIntervalMinutes * 60000UL;
+    const unsigned long elapsed = millis() - lastFlashBackupMs;
+    if (elapsed >= intervalMs) {
+        return 0;
+    }
+    return (uint32_t)((intervalMs - elapsed + 999UL) / 1000UL);
+}
+
 uint32_t HistoryStore::sdSecondsToSave() const {
     if (!persistOnSd()) {
         return 0;
@@ -1127,6 +1160,22 @@ void HistoryStore::loop() {
             } else {
                 lastSdBackupMs = millis();
                 LOGGER.warning("History SD periodic backup failed");
+            }
+        }
+    }
+#endif
+#if !defined(HISTORY_STORE_UNIT_TEST) && !defined(BOARD_HOST_P4)
+    if (flashPersistEnabled) {
+        const unsigned long flashIntervalMs =
+            (unsigned long)flashBackupIntervalMinutes * 60000UL;
+        if (millis() - lastFlashBackupMs >= flashIntervalMs) {
+            LOGGER.info("History flash periodic backup start");
+            if (persistSnapshot()) {
+                lastFlashBackupMs = millis();
+                LOGGER.info("History flash periodic backup ok");
+            } else {
+                lastFlashBackupMs = millis();
+                LOGGER.warning("History flash periodic backup failed");
             }
         }
     }
@@ -1412,6 +1461,7 @@ void HistoryStore::discardSnapshotFile() {
     if (LittleFS.exists(kSnapshotPath)) {
         LittleFS.remove(kSnapshotPath);
     }
+    cachedFlashSnapshotKiB = 0;
 #endif
 }
 
@@ -1511,6 +1561,7 @@ bool HistoryStore::writeSnapshotFile(const uint8_t *bytes, size_t len) const {
         LittleFS.remove(kSnapshotTempPath);
         return false;
     }
+    cachedFlashSnapshotKiB = (uint32_t)((len + 512u) / 1024u);
     return true;
 #endif
 }
@@ -1593,6 +1644,7 @@ bool HistoryStore::readSnapshotFile(uint8_t **outBytes, size_t *outLen) const {
         free(bytes);
         return false;
     }
+    cachedFlashSnapshotKiB = (uint32_t)((len + 512u) / 1024u);
     *outBytes = bytes;
     *outLen = len;
     return true;
@@ -1967,13 +2019,17 @@ bool HistoryStore::restoreSnapshot() {
     const bool ok = applySnapshot(bytes, len);
     free(bytes);
     if (ok) {
-        // LittleFS: delete after restore. SD: keep the durable snapshot file.
-        if (!persistOnSd()) {
-            discardSnapshotFile();
-        } else {
+        // LittleFS delete-after-restore stays on unless SD persist or S3 flash persist is on.
+        if (persistOnSd() || persistOnFlash()) {
 #if !defined(HISTORY_STORE_UNIT_TEST)
-            LOGGER.info("History SD restore keep-file (no delete-after-restore)");
+            LOGGER.info(
+                persistOnSd()
+                    ? "History SD restore keep-file (no delete-after-restore)"
+                    : "History flash restore keep-file (no delete-after-restore)"
+            );
 #endif
+        } else {
+            discardSnapshotFile();
         }
     }
     return ok;

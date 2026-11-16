@@ -66,6 +66,10 @@ public:
     uint16_t sdBackupIntervalMin() const { return sdBackupIntervalMinutes; }
     // Seconds until next periodic SD backup; 0 when SD persist inactive.
     uint32_t sdSecondsToSave() const;
+    void setFlashPersist(bool enabled, uint16_t intervalMin);
+    bool persistOnFlash() const { return flashPersistEnabled; }
+    uint32_t flashSecondsToSave() const;
+    uint32_t flashSnapshotKiB() const { return cachedFlashSnapshotKiB; }
 
     bool persistSnapshot();
     bool restoreSnapshot();
@@ -177,6 +181,10 @@ private:
     SdCardStorage *sdBackend = nullptr;
     uint16_t sdBackupIntervalMinutes = DEFAULT_HISTORY_SD_BACKUP_INTERVAL_MIN;
     unsigned long lastSdBackupMs = 0;
+    bool flashPersistEnabled = false;
+    uint16_t flashBackupIntervalMinutes = DEFAULT_HISTORY_FLASH_BACKUP_INTERVAL_MIN;
+    unsigned long lastFlashBackupMs = 0;
+    mutable uint32_t cachedFlashSnapshotKiB = 0;
 
     bool allocSlab(uint16_t maxSizeKiB);
     void freeSlab();

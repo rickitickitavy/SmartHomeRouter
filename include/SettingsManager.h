@@ -43,12 +43,18 @@ public:
     void setHistoryEntrySize(uint16_t entrySize);
     uint16_t historySdBackupIntervalMin() const;
     void setHistorySdBackupIntervalMin(uint16_t minutes);
+    bool historyPersistFlash() const;
+    void setHistoryPersistFlash(bool enabled);
+    uint16_t historyFlashBackupIntervalMin() const;
+    void setHistoryFlashBackupIntervalMin(uint16_t minutes);
+    bool reconcileHistoryFlashPersist();
     uint16_t lowMemoryThresholdKb() const;
     void setLowMemoryThresholdKb(uint16_t thresholdKb);
     static bool isValidHistoryEntrySize(uint16_t entrySize);
     static uint8_t clampHistoryMaxStoreDays(uint8_t days);
     static uint8_t clampHistorySweepIntervalMin(uint8_t minutes);
     static uint16_t clampHistorySdBackupIntervalMin(uint16_t minutes);
+    static uint16_t clampHistoryFlashBackupIntervalMin(uint16_t minutes);
     static uint16_t clampLowMemoryThresholdKb(uint16_t thresholdKb);
     uint8_t uiTheme() const;
     void setUiTheme(uint8_t themeId);
