@@ -47,21 +47,25 @@ When network role is Repeater, the console MUST hide sidebar sections Place, Dev
 - **THEN** SPI speed, RF update SPI speed, blue/green LED brightness, use queue for base device commands, and low memory threshold are visible and other Hardware groups are hidden
 
 ### Requirement: Found and device UI show non-local router
-When a found or registered Zigbee device has non-zero `router_id`, the Devices / found UI on Main MUST show which paired router owns that device (name or id) so the operator can see remote origin.
+When a found or registered Zigbee device has non-zero `router_id`, the Devices / found UI on Main MUST show which paired router owns that device (name or id) so the operator can see remote origin. When that Repeater is offline, the device row MUST show offline/gray interconnect state and MUST NOT offer a successful remote command path.
 
 #### Scenario: Found row shows repeater
 - **WHEN** Main’s found list includes a device with non-zero `router_id`
 - **THEN** that row identifies the source router
 
+#### Scenario: Offline repeater device looks offline
+- **WHEN** a registered device’s Repeater online indicator is gray
+- **THEN** that device row shows offline/gray for interconnect and commands are blocked or clearly fail as router offline
+
 ### Requirement: Maintenance Interconnection export and import
-System → Maintenance SHALL show an **Interconnection** card with **Export** and **Import** for `isAdmin` on Main. Export SHALL download interconnect JSON matching the global interconnect slice. Import SHALL confirm then apply peers with existing matched peers authoritative. Hide the card on Repeater.
+System → Maintenance SHALL show an **Interconnection** card with **Export** and **Import** for `isAdmin` on Main. Export SHALL download interconnect JSON matching the global interconnect slice. Import SHALL confirm then apply peers matching existing by **MAC** as authoritative. Hide the card on Repeater.
 
 #### Scenario: Export interconnect file
 - **WHEN** an admin exports Interconnection from Maintenance on a Main with one paired Repeater
 - **THEN** the downloaded JSON includes that peer’s persisted interconnect identity fields
 
 #### Scenario: Import keeps matched existing peers
-- **WHEN** an admin confirms Import listing two already-paired Repeaters plus new peers
+- **WHEN** an admin confirms Import listing two already-paired MACs plus new peers
 - **THEN** the two existing Repeaters stay authoritative and new peers are added within cap
 
 #### Scenario: Hidden on Repeater

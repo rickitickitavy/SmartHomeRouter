@@ -36,15 +36,15 @@ The host SHALL persist a single interconnect TCP port used for pairing and for a
 - **THEN** the stored port is 10241
 
 ### Requirement: Request queue windows interconnect sessions
-Because one port serves all exchange traffic and either peer may initiate, the host SHALL queue interconnect jobs in a PSRAM queue of depth **64**. When the queue is full, the host SHALL drop the newest job. Pair-to-host SHALL NOT freeze other interconnect sessions; the listener SHALL demultiplex pairing versus universal exchange after the shared handshake.
+Because one port serves all exchange traffic and either peer may initiate, the host SHALL queue interconnect jobs in a PSRAM queue of depth **128**. When the queue is full, the host SHALL reject new jobs (not enqueue them). Pair-to-host SHALL NOT freeze other interconnect sessions; the listener SHALL demultiplex pairing versus universal exchange after the shared handshake.
 
 #### Scenario: Burst is queued
 - **WHEN** multiple Zigbee forwards are ready while a session is in flight
 - **THEN** later work waits in the queue rather than opening unbounded parallel sessions
 
-#### Scenario: Full queue drops newest
-- **WHEN** the interconnect queue already holds 64 jobs and another job is submitted
-- **THEN** the newest job is dropped
+#### Scenario: Full queue rejects new
+- **WHEN** the interconnect queue already holds 128 jobs and another job is submitted
+- **THEN** the new job is rejected and not enqueued
 
 #### Scenario: Exchange during pairing wait
 - **WHEN** Pair-to-host listen is active and a valid universal-exchange session arrives
@@ -73,7 +73,7 @@ Repeater SHALL listen on the interconnect port; Main SHALL connect and run the d
 - **THEN** both sides exchange the fixed handshake (`ImHere` / `copy`) before MAC/name and Main port/secret fields
 
 ### Requirement: Universal exchange sequence
-A universal exchange SHALL be: TCP connect to the peer interconnect port; handshake `ImHere` / `copy`; one AEAD blob of `type` (1 byte) then payload at most **256** bytes with AAD bound to the peer MAC; receiver replies **`OK`**; initiator disconnects. Either paired peer MAY initiate. The receiver SHALL NOT send a typed reply body.
+A universal exchange SHALL be: TCP connect to the peer interconnect port; handshake `ImHere` / `copy`; a versioned header (`version`, `type`, `len`, nonce) then AEAD ciphertext of the payload at most **256** bytes with AAD bound to the peer MAC; receiver replies **`OK`**; initiator disconnects. Either paired peer MAY initiate. The receiver SHALL NOT send a typed reply body. v1 `version` SHALL be 1.
 
 #### Scenario: Always OK
 - **WHEN** a valid AEAD exchange message is accepted
@@ -84,8 +84,12 @@ A universal exchange SHALL be: TCP connect to the peer interconnect port; handsh
 - **THEN** the receiver does not apply the payload as a successful exchange
 
 #### Scenario: Oversize payload rejected
-- **WHEN** an exchange plaintext exceeds 256 bytes
+- **WHEN** an exchange payload length exceeds 256 bytes
 - **THEN** the receiver rejects it without applying it as success
+
+#### Scenario: Unknown version rejected
+- **WHEN** the header version is not 1
+- **THEN** the receiver rejects the session without applying the payload
 
 ### Requirement: Exchange type enum
 Universal exchange `type` SHALL be one of: `just_booted` (1), `variable` (2), `check_alive` (3), `zigbee_packet` (4), `search_start` (5), `search_stop` (6), `rebind` (7), `rebind_result` (8). Value 0 is reserved. The host SHALL ignore or reject unknown types without applying them as success.
@@ -212,14 +216,14 @@ A `zigbee_packet` payload SHALL use the same event format the host already parse
 - **THEN** the host status/live pipeline updates as for the equivalent local SPI event
 
 ### Requirement: Repeater forwards all non-duplicate Zigbee RX
-A Repeater SHALL forward every Zigbee packet from its local radio to Main as `zigbee_packet`, except duplicates it already forwarded. The Repeater SHALL NOT require a known-device list from Main to filter forwards.
+A Repeater SHALL forward every Zigbee packet from its local radio to Main as `zigbee_packet`, except duplicates. A duplicate SHALL mean the same IEEE, same SPI command id, and identical payload bytes as a packet already forwarded within a short rolling recent window. The Repeater SHALL NOT require a known-device list from Main to filter forwards.
 
 #### Scenario: Non-duplicate report forwarded
 - **WHEN** the Repeater receives a new Zigbee attribute report from a local device
 - **THEN** it sends zigbee_packet to Main
 
 #### Scenario: Duplicate suppressed
-- **WHEN** the Repeater sees the same Zigbee packet again as a duplicate
+- **WHEN** the Repeater sees the same IEEE, SPI command, and payload bytes again within the recent window
 - **THEN** it does not forward that duplicate to Main
 
 ### Requirement: Main routes outbound Zigbee by router id
@@ -252,8 +256,15 @@ Global settings export and restore SHALL include interconnect configuration (rol
 - **THEN** the host replaces interconnect settings from that slice when present
 
 ### Requirement: Interconnect import keeps existing peers authoritative
-When interconnect peers are imported and some imported entries match routers already paired, those existing peers SHALL remain authoritative. Newly imported peers SHALL be added. If Zigbee channels conflict after import, Main SHALL re-run channel assignment with existing peers authoritative.
+When interconnect peers are imported, matching SHALL use **MAC** address. Imported entries whose MAC is already paired SHALL leave those existing peers authoritative. Newly imported MACs SHALL be added. If Zigbee channels conflict after import, Main SHALL re-run channel assignment with existing peers authoritative.
 
 #### Scenario: Import adds without overriding matched peers
-- **WHEN** Main has two paired Repeaters and an import lists those two plus additional peers
+- **WHEN** Main has two paired Repeaters and an import lists those two MACs plus additional peers
 - **THEN** the two existing Repeaters keep their authoritative stored identity and channel assignment, and the additional peers are added subject to the seven-Repeater cap
+
+### Requirement: Offline peer affects device command UX
+When a device’s `router_id` refers to a paired Repeater that is offline, Main SHALL present that device as interconnect-offline (distinct from local radio unknown) and SHALL NOT send Zigbee commands to it as if the Repeater were reachable; the operator-facing result SHALL state the router is offline. Local `router_id` 0 devices SHALL keep today’s online rules.
+
+#### Scenario: Command blocked when repeater offline
+- **WHEN** the operator commands a device whose Repeater online indicator is gray
+- **THEN** the command is not sent over interconnect and the UI/API indicates the router is offline
