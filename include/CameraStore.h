@@ -102,8 +102,8 @@ public:
     // includeSecrets=false -> list shape: id,name,active,type,url,host,status.
     // includeSecrets=true  -> full shape incl. host,port,username,password,channels.
     // Returns an empty String on allocation failure.
-    String listJson(bool includeSecrets) const;
-    String cameraFullJson(const CameraRecord *camera, bool includePassword) const;
+    PsramJsonBuffer listJson(bool includeSecrets) const;
+    PsramJsonBuffer cameraFullJson(const CameraRecord *camera, bool includePassword) const;
     static void appendListJson(PsramJsonBuffer &json, const CameraStore &store, bool includeSecrets);
     static void appendCameraFullJson(PsramJsonBuffer &json, const CameraRecord *camera, bool includePassword,
         bool includeStatus = true);
@@ -129,17 +129,17 @@ public:
     bool isDiscovering() const;
     void tickDiscovery();
     // Unknown (not registered by host) discoveries only (host/xaddr; channels filled via Resolve).
-    String discoveredJson() const;
+    PsramJsonBuffer discoveredJson() const;
     int discoveredCount() const;
 
     // Resolve ONVIF media URLs from camera dialog host/port/credentials (Resolve button).
     // Writes JSON object: name,url,host,port,channels[{snapshotUrl,liveUrl},...], ok, error.
-    String testOnvifJson(const char *jsonBody) const;
+    PsramJsonBuffer testOnvifJson(const char *jsonBody) const;
 
     // Test channel snapshot HTTP URLs (Test button). Body: username, password, snapshotUrl1/2
     // (or channels[].snapshotUrl). Fetches each snapshot into PSRAM briefly; never keeps images.
     // Writes {ok, error, channels:[{ok,error,bytes},...]}.
-    String testSnapshotsJson(const char *jsonBody) const;
+    PsramJsonBuffer testSnapshotsJson(const char *jsonBody) const;
 
     // Fetch channel snapshot HTTP URL into a new PSRAM buffer (caller frees with free()).
     // Never uses internal RAM for image bytes. Returns nullptr on failure.

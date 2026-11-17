@@ -161,7 +161,7 @@ int UserStore::consoleIdCount(const UserRecord *user) {
     return count;
 }
 
-void UserStore::appendConsolesJson(String &json, const UserRecord *user) {
+void UserStore::appendConsolesJson(PsramJsonBuffer &json, const UserRecord *user) {
     json += ",\"consoles\":[";
     bool first = true;
     if (user != nullptr) {
@@ -427,15 +427,19 @@ bool UserStore::saveToFile() const {
         LOGGER.error("Users file write failed");
         return false;
     }
-    const String json = listExportJson();
-    const size_t written = file.print(json);
+    const PsramJsonBuffer json = listExportJson();
+    const bool written = json.ok() && json.writeToFile(file);
     file.close();
-    return written == json.length();
+    return written;
 }
 
 bool UserStore::parseUsersJson(const String &json, bool requireHashes) {
+    return parseUsersJson(json.c_str(), requireHashes);
+}
+
+bool UserStore::parseUsersJson(const char *json, bool requireHashes) {
     clearUsers();
-    const char *cursor = json.c_str();
+    const char *cursor = json == nullptr ? "" : json;
     while (cursor != nullptr && *cursor != '\0' && storedCount < USER_STORE_MAX) {
         const char *objectStart = strchr(cursor, '{');
         if (objectStart == nullptr) {
@@ -503,13 +507,17 @@ bool UserStore::loadFromFile() {
     if (!file) {
         return false;
     }
-    String json = file.readString();
+    PsramJsonBuffer json;
+    const bool loaded = json.assignFromFile(file);
     file.close();
+    if (!loaded || !json.ok()) {
+        return false;
+    }
     json.trim();
     if (json.length() == 0 || json.charAt(0) != '[') {
         return false;
     }
-    return parseUsersJson(json, true);
+    return parseUsersJson(json.c_str(), true);
 }
 
 bool UserStore::begin(bool persistToLittleFs) {
@@ -663,6 +671,15 @@ bool UserStore::removeByName(const char *userName, bool notify) {
 
 bool UserStore::replaceFromExportJson(
     const String &json,
+    char (*removedNames)[USER_NAME_MAX],
+    int *removedCount,
+    int removedMax
+) {
+    return replaceFromExportJson(json.c_str(), removedNames, removedCount, removedMax);
+}
+
+bool UserStore::replaceFromExportJson(
+    const char *json,
     char (*removedNames)[USER_NAME_MAX],
     int *removedCount,
     int removedMax
@@ -988,7 +1005,7 @@ UserWriteResult UserStore::deleteUser(const UserRecord *actor, const char *userN
     return UserWriteOk;
 }
 
-void UserStore::appendUserPublicJson(String &json, const UserRecord *user) const {
+void UserStore::appendUserPublicJson(PsramJsonBuffer &json, const UserRecord *user) const {
     json += "{\"userName\":\"";
     appendJsonEscaped(json, user->userName, sizeof(user->userName));
     json += "\",\"addedAt\":";
@@ -1020,7 +1037,7 @@ void UserStore::appendUserPublicJson(String &json, const UserRecord *user) const
     json += "}";
 }
 
-void UserStore::appendUserExportJson(String &json, const UserRecord *user) const {
+void UserStore::appendUserExportJson(PsramJsonBuffer &json, const UserRecord *user) const {
     json += "{\"userName\":\"";
     appendJsonEscaped(json, user->userName, sizeof(user->userName));
     json += "\",\"addedAt\":";
@@ -1056,8 +1073,9 @@ void UserStore::appendUserExportJson(String &json, const UserRecord *user) const
     json += "\"}";
 }
 
-String UserStore::listPublicJson() const {
-    String json = "[";
+PsramJsonBuffer UserStore::listPublicJson() const {
+    PsramJsonBuffer json;
+    json += "[";
     bool first = true;
     for (const UserRecord *user = usersHead; user != nullptr; user = user->next) {
         if (!first) {
@@ -1070,8 +1088,9 @@ String UserStore::listPublicJson() const {
     return json;
 }
 
-String UserStore::listExportJson() const {
-    String json = "[";
+PsramJsonBuffer UserStore::listExportJson() const {
+    PsramJsonBuffer json;
+    json += "[";
     bool first = true;
     for (const UserRecord *user = usersHead; user != nullptr; user = user->next) {
         if (!first) {

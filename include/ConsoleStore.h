@@ -134,10 +134,10 @@ public:
     ConsoleWriteResult deleteConsole(const char *consoleId);
     bool replaceAllFromJson(const String &json);
     bool replaceAllFromJson(const char *json);
-    String listSummaryJson(class UserStore *userStore) const;
-    String listFullJson() const;
-    String consoleFullJson(const ConsoleRecord *console) const;
-    String mineJson(const class UserRecord *user) const;
+    PsramJsonBuffer listSummaryJson(class UserStore *userStore) const;
+    PsramJsonBuffer listFullJson() const;
+    PsramJsonBuffer consoleFullJson(const ConsoleRecord *console) const;
+    PsramJsonBuffer mineJson(const class UserRecord *user) const;
     static bool heapAllowsAllocation(size_t bytes);
     // Copy [start, endInclusive] into out without reading past endInclusive (avoids
     // String(ptr).substring which first copies from ptr to the JSON NUL terminator).

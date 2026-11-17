@@ -517,7 +517,7 @@ void SceneStore::appendSceneListItem(PsramJsonBuffer &json, const SceneRecord *s
     json += "}";
 }
 
-String SceneStore::listJson() const {
+PsramJsonBuffer SceneStore::listJson() const {
     PsramJsonBuffer json;
     json += "[";
     bool firstItem = true;
@@ -529,25 +529,19 @@ String SceneStore::listJson() const {
         appendSceneListItem(json, scene);
     }
     json += "]";
-    if (!json.ok()) {
-        return String();
-    }
-    return String(json.c_str());
+    return json;
 }
 
-String SceneStore::sceneFullJson(const SceneRecord *scene) const {
+PsramJsonBuffer SceneStore::sceneFullJson(const SceneRecord *scene) const {
     if (scene == nullptr) {
-        return String();
+        return PsramJsonBuffer();
     }
     PsramJsonBuffer json;
     appendSceneFull(json, scene);
-    if (!json.ok()) {
-        return String();
-    }
-    return String(json.c_str());
+    return json;
 }
 
-String SceneStore::exportJson() const {
+PsramJsonBuffer SceneStore::exportJson() const {
     PsramJsonBuffer json;
     json += "[";
     bool firstItem = true;
@@ -559,10 +553,7 @@ String SceneStore::exportJson() const {
         appendSceneFull(json, scene);
     }
     json += "]";
-    if (!json.ok()) {
-        return String();
-    }
-    return String(json.c_str());
+    return json;
 }
 
 SceneWriteResult SceneStore::createFromJson(const char *json, SceneRecord **createdOut) {

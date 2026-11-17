@@ -2052,19 +2052,18 @@ void ConsoleStore::appendGaugeJson(PsramJsonBuffer &json, const ConsoleBinding *
     json += "]}";
 }
 
-String ConsoleStore::consoleFullJson(const ConsoleRecord *console) const {
+PsramJsonBuffer ConsoleStore::consoleFullJson(const ConsoleRecord *console) const {
     if (console == nullptr) {
-        return String("null");
+        PsramJsonBuffer json;
+        json += "null";
+        return json;
     }
     PsramJsonBuffer json;
     appendConsoleFull(json, console);
-    if (!json.ok()) {
-        return String();
-    }
-    return json.toString();
+    return json;
 }
 
-String ConsoleStore::listFullJson() const {
+PsramJsonBuffer ConsoleStore::listFullJson() const {
     PsramJsonBuffer json;
     json += "[";
     bool first = true;
@@ -2076,13 +2075,10 @@ String ConsoleStore::listFullJson() const {
         appendConsoleFull(json, console);
     }
     json += "]";
-    if (!json.ok()) {
-        return String();
-    }
-    return json.toString();
+    return json;
 }
 
-String ConsoleStore::listSummaryJson(UserStore *userStore) const {
+PsramJsonBuffer ConsoleStore::listSummaryJson(UserStore *userStore) const {
     PsramJsonBuffer json;
     json += "[";
     bool first = true;
@@ -2117,13 +2113,10 @@ String ConsoleStore::listSummaryJson(UserStore *userStore) const {
         json += "]}";
     }
     json += "]";
-    if (!json.ok()) {
-        return String();
-    }
-    return json.toString();
+    return json;
 }
 
-String ConsoleStore::mineJson(const UserRecord *user) const {
+PsramJsonBuffer ConsoleStore::mineJson(const UserRecord *user) const {
     PsramJsonBuffer json;
     json += "[";
     bool first = true;
@@ -2141,8 +2134,5 @@ String ConsoleStore::mineJson(const UserRecord *user) const {
         }
     }
     json += "]";
-    if (!json.ok()) {
-        return String();
-    }
-    return json.toString();
+    return json;
 }

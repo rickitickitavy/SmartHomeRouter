@@ -1784,10 +1784,14 @@ bool AutomationStore::replaceAllFromJson(const char *json) {
 }
 
 bool AutomationStore::mergeAllFromJson(const String &json) {
+    return mergeAllFromJson(json.c_str());
+}
+
+bool AutomationStore::mergeAllFromJson(const char *json) {
     // Pass 1: validate every object without mutating the live store.
     int count = 0;
     int newNameCount = 0;
-    const char *cursor = json.c_str();
+    const char *cursor = json;
     PsramJsonBuffer object;
     while (cursor != nullptr && *cursor != '\0') {
         const char *objectStart = strchr(cursor, '{');
@@ -1877,7 +1881,7 @@ bool AutomationStore::mergeAllFromJson(const String &json) {
     }
 
     // Pass 2: upsert after the file is known-good.
-    cursor = json.c_str();
+    cursor = json;
     int index = 0;
     while (cursor != nullptr && *cursor != '\0' && index < count) {
         const char *objectStart = strchr(cursor, '{');
@@ -2440,16 +2444,13 @@ void AutomationStore::appendAutomationFull(PsramJsonBuffer &json, const Automati
     json += "]}";
 }
 
-String AutomationStore::automationFullJson(const AutomationRecord *automation, bool includeRuntime) const {
+PsramJsonBuffer AutomationStore::automationFullJson(const AutomationRecord *automation, bool includeRuntime) const {
     PsramJsonBuffer json;
     appendAutomationFull(json, automation, includeRuntime);
-    if (!json.ok()) {
-        return String();
-    }
-    return json.toString();
+    return json;
 }
 
-String AutomationStore::listFullJson() const {
+PsramJsonBuffer AutomationStore::listFullJson() const {
     PsramJsonBuffer json;
     json += "[";
     bool first = true;
@@ -2461,13 +2462,10 @@ String AutomationStore::listFullJson() const {
         appendAutomationFull(json, automation, false);
     }
     json += "]";
-    if (!json.ok()) {
-        return String();
-    }
-    return json.toString();
+    return json;
 }
 
-String AutomationStore::listSummaryJson() const {
+PsramJsonBuffer AutomationStore::listSummaryJson() const {
     PsramJsonBuffer json;
     json += "[";
     bool first = true;
@@ -2528,8 +2526,5 @@ String AutomationStore::listSummaryJson() const {
         json += "}";
     }
     json += "]";
-    if (!json.ok()) {
-        return String();
-    }
-    return json.toString();
+    return json;
 }

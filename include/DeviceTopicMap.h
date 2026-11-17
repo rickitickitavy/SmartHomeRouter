@@ -153,12 +153,12 @@ public:
     using LastRssiFn = bool (*)(const uint8_t ieee[8], int8_t *rssiDbm);
     using ListTelemetryFn = void (*)(const uint8_t ieee[8], PsramJsonBuffer &json);
 
-    String listJson();
-    String listJson(OnlineFn isOnline);
-    String listJson(OnlineFn isOnline, LastRssiFn lastRssi);
-    String listJson(OnlineFn isOnline, LastRssiFn lastRssi, ListTelemetryFn telemetry);
-    String entryJson(const uint8_t ieee[8], OnlineFn isOnline, LastRssiFn lastRssi, ListTelemetryFn telemetry);
-    String listStoreJson();
+    PsramJsonBuffer listJson();
+    PsramJsonBuffer listJson(OnlineFn isOnline);
+    PsramJsonBuffer listJson(OnlineFn isOnline, LastRssiFn lastRssi);
+    PsramJsonBuffer listJson(OnlineFn isOnline, LastRssiFn lastRssi, ListTelemetryFn telemetry);
+    PsramJsonBuffer entryJson(const uint8_t ieee[8], OnlineFn isOnline, LastRssiFn lastRssi, ListTelemetryFn telemetry);
+    PsramJsonBuffer listStoreJson();
     void replaceFromJson(const String &json);
     void replaceFromJson(const char *json);
     bool loadFromFile(const char *path);

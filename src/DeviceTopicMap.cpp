@@ -1674,7 +1674,7 @@ bool DeviceTopicMap::parseIeee(const char *text, uint8_t ieee[8]) {
     return true;
 }
 
-String DeviceTopicMap::listJson() {
+PsramJsonBuffer DeviceTopicMap::listJson() {
     return listJson(nullptr, nullptr);
 }
 
@@ -1761,15 +1761,15 @@ static void appendDeviceListEntryJson(
     json += "}";
 }
 
-String DeviceTopicMap::listJson(OnlineFn isOnline) {
+PsramJsonBuffer DeviceTopicMap::listJson(OnlineFn isOnline) {
     return listJson(isOnline, nullptr);
 }
 
-String DeviceTopicMap::listJson(OnlineFn isOnline, LastRssiFn lastRssi) {
+PsramJsonBuffer DeviceTopicMap::listJson(OnlineFn isOnline, LastRssiFn lastRssi) {
     return listJson(isOnline, lastRssi, nullptr);
 }
 
-String DeviceTopicMap::listJson(OnlineFn isOnline, LastRssiFn lastRssi, ListTelemetryFn telemetry) {
+PsramJsonBuffer DeviceTopicMap::listJson(OnlineFn isOnline, LastRssiFn lastRssi, ListTelemetryFn telemetry) {
     PsramJsonBuffer json;
     json += "[";
     bool first = true;
@@ -1791,13 +1791,10 @@ String DeviceTopicMap::listJson(OnlineFn isOnline, LastRssiFn lastRssi, ListTele
         appendDeviceListEntryJson(this, json, deviceEntry, isOnline, lastRssi, telemetry);
     }
     json += "]";
-    if (!json.ok()) {
-        return String();
-    }
-    return json.toString();
+    return json;
 }
 
-String DeviceTopicMap::entryJson(
+PsramJsonBuffer DeviceTopicMap::entryJson(
     const uint8_t ieee[8],
     OnlineFn isOnline,
     LastRssiFn lastRssi,
@@ -1805,16 +1802,13 @@ String DeviceTopicMap::entryJson(
 ) {
     const DeviceTopicEntry *deviceEntry = findByIeee(ieee);
     if (deviceEntry == nullptr || !deviceEntry->used) {
-        return String();
+        return PsramJsonBuffer();
     }
     PsramJsonBuffer json;
     appendDeviceListEntryJson(this, json, deviceEntry, isOnline, lastRssi, telemetry);
-    if (!json.ok()) {
-        return String();
-    }
-    return json.toString();
+    return json;
 }
 
-String DeviceTopicMap::listStoreJson() {
+PsramJsonBuffer DeviceTopicMap::listStoreJson() {
     return listJson(nullptr);
 }

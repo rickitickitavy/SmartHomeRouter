@@ -64,9 +64,9 @@ public:
     bool readBakeJpeg(const char *sceneId, uint8_t **dataOut, size_t *lengthOut) const;
     void deleteBakeFile(const SceneRecord *scene) const;
 
-    String listJson() const;
-    String sceneFullJson(const SceneRecord *scene) const;
-    String exportJson() const;
+    PsramJsonBuffer listJson() const;
+    PsramJsonBuffer sceneFullJson(const SceneRecord *scene) const;
+    PsramJsonBuffer exportJson() const;
 
     static const char *writeResultText(SceneWriteResult result);
     static bool isIdSafe(const char *sceneId);
