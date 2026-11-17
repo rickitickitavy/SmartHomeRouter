@@ -6,33 +6,41 @@ A single Zigbee coordinator covers one radio neighborhood. Operators need one Ma
 
 ## What Changes
 
-- Add System → **Interconnection** tab (after **Log**) with router name (max 32), network role (**Main** | **Repeater**), pairing TCP port (default **10241**, Save), and checkAlive interval (5–600 s, default 60; Main-owned).
+- Add System → **Interconnection** tab (after **Log**) with router name (max 32), network role (**Main** | **Repeater**), one TCP port for pairing and exchange (default **10241**, Save), and checkAlive interval (5–600 s, default 60; Main-owned).
 - **Main**: paired-routers table (Name, MAC, IP, Port, online indicator, devices, In, Out) and **Pair** dialog (IP optional, port default 10241; subnet scan when IP empty; confirm found peer; full pairing).
-- **Repeater**: **Pair to host** (open pairing port up to 120 s, modal countdown + Cancel, host RED LED 2 Hz); show Main IP/name/MAC/online; hide operator sections that must not run on a slave router (Place, Devices, Automation, Cameras, Scenes, Consoles, Security, most Maintenance/Hardware—with listed Hardware exceptions and Reboot kept).
-- Pairing / system-parameter / data-exchange protocols over **short TCP sessions** protected by **shared-secret AEAD** established at pairing (not SSL/TLS).
-- Persist **router id** (4-byte) on each paired router and on each device record (`0` = local); Main routes Zigbee commands by `router_id`; Repeaters forward non-duplicate Zigbee packets to Main; Main injects them into the existing host Zigbee ingest path.
-- Multi-router device search: Main and all Repeaters open search; found rows show source router; save stores `router_id`.
-- Main pushes shared params (**checkAlive interval**, **zigbee search interval**) to all Repeaters on change and again after Main reboot.
+- **Repeater**: **Pair to host** (listen up to 120 s, modal countdown + Cancel, host RED LED 2 Hz); show Main IP/name/MAC/online; hide blocked operator sections (Place, Devices, Automation, Cameras, Scenes, Consoles, Security, most Maintenance/Hardware—with listed Hardware exceptions and Reboot kept).
+- **Two protocols only:** (1) pairing (unchanged sequence, establishes peer identity + shared AEAD secret + router id); (2) **universal exchange** — short TCP session, `ImHere`/`copy`, one AEAD blob `type(1) || payload` (max **256** bytes, AAD bound to peer MAC), reply always **`OK`**, disconnect. Either peer may initiate to the other’s same port; a **PSRAM queue of depth 64** (drop newest when full) windows work. Listener demuxes pairing vs exchange after handshake; Pair-to-host does not freeze other interconnect traffic.
+- Exchange types (v1 enum): `just_booted`, `variable`, `check_alive`, `zigbee_packet`, `search_start`, `search_stop`, `rebind`, `rebind_result`.
+- **Rebind** works for devices on Repeaters: Main routes by `router_id`; Repeater runs local SPI rebind; outcome returns via a follow-up `rebind_result` exchange (always-`OK` sessions cannot carry the result in-reply).
+- STAR size cap: **8 routers total** (1 Main + **≤7** Repeaters).
+- Zigbee **channels must be unique** across all routers in the STAR. Main assigns each Repeater’s channel automatically (pool 11–26, excluding Main and other Repeaters), at pairing and again on `just_booted` / whenever Main recalculates; push via `variable`.
+- Repeater boot: send `just_booted` + version to Main; Main then pushes shared settings via separate `variable` sessions (including that Repeater’s channel). Main also pushes shared settings on change and after Main reboot. `check_alive` is Main → Repeater only.
+- Persist **router id** (4-byte) on each paired router and device (`0` = local). Repeaters forward all non-duplicate Zigbee RX as `zigbee_packet` in the **same SPI event format** the host already parses; Main injects them into the existing ingest path (remote radio emulates local SPI Zigbee). Main filters known vs found; no known-device list push to Repeaters.
+- Multi-router search: Main `search_start` locally and to Repeaters; finds appear via forwarded join/`zigbee_packet`; save stores `router_id`.
+- Changing network role clears the paired table after **double confirmation**.
 - Include interconnect settings and paired-router table in global settings export/restore (not Wi‑Fi).
-- **Out of scope this change:** MQTT device forwarding from Repeaters; automations/consoles/history “working” on Repeater role.
+- System → Maintenance: dedicated **Interconnection** card with **Export** and **Import** (confirm then replace; existing matched peers stay authoritative; re-assign channels on conflict), in addition to the global settings export slice.
+- UI: Zigbee duration label **“Zigbee search window (sec)”**; on Repeater, that field and Zigbee channel are **visible read-only**. Rebind waits **30 s** locally and remotely.
+- **Out of scope:** MQTT forwarding from Repeaters; automations/consoles/history working on Repeater; typed replies; `request` / `search_found` types.
 
 ## Capabilities
 
 ### New Capabilities
 
-- `router-interconnect`: STAR Main/Repeater roles, Interconnection UI, pairing and short-session AEAD protocols, online/checkAlive, shared network params, Zigbee packet forward/inject, and Repeater function blocking.
+- `router-interconnect`: STAR Main/Repeater roles, Interconnection UI, pairing + universal typed AEAD exchange, queue/windowing, online/checkAlive, shared params, Zigbee forward/inject, Repeater function blocking.
 
 ### Modified Capabilities
 
-- `device-registry`: Persist `router_id` on registered (and found) Zigbee devices; multi-router search accumulation; route identity for local vs remote radio.
-- `web-console`: System → Interconnection tab; role-gated sidebar/System visibility on Repeater; Maintenance export/restore hint and interconnect slice; device/found UI shows router when non-local.
+- `device-registry`: Persist `router_id` on registered (and found) Zigbee devices; multi-router search accumulation via injected join path; route identity for local vs remote radio.
+- `web-console`: System → Interconnection tab; role-gated visibility on Repeater; double-confirm role change clearing peers; Maintenance Interconnection Export/Import card; global export/restore interconnect slice; device/found UI shows router when non-local.
 - `status-rgb-led`: Host RED LED blinks at 2 Hz for the Repeater pairing wait window (cancel/timeout/success ends blink).
+- `zigbee-device-rebind`: Rebind for registered Zigbee devices with non-zero `router_id` runs on the owning Repeater and reports the same success / pairing-fallback / failure outcomes to Main.
 
 ## Impact
 
-- Host firmware: new interconnect settings store, TCP client/server short sessions, AEAD (mbedtls), pairing/scan state machine, packet forward/inject hooks in Zigbee command and SPI-event ingest paths, RED LED pairing mode.
-- Web console (`data/index.html`, shared CSS as needed): Interconnection tab, pairing modals, paired table, Repeater chrome hiding.
-- APIs: interconnect get/save, pair start/cancel/status, paired list; device JSON gains `routerId` (or equivalent); settings export/restore slice.
-- Device store / `DeviceTopicEntry`: new persisted `router_id`.
-- Slave Zigbee radio: **no required source change** for v1 (host-authoritative `router_id`; Repeaters use their local SPI as today).
-- Firmware: bump `FIRMWARE_VERSION_HOST` build only for this propose (no slave bump).
+- Host firmware: interconnect store, one-port TCP client/server with request queue, AEAD, pairing/scan, typed exchange handlers, SPI-equivalent inject/forward, RED LED pairing mode.
+- Web console: Interconnection tab, pairing modals, role double-confirm, Repeater chrome hiding.
+- APIs: interconnect get/save, pair start/cancel/status, paired list; device JSON `routerId`; settings export/restore slice.
+- Device store: persisted `router_id`.
+- Slave: **no required source change** for v1.
+- Firmware: host build bump already done for this change propose (no slave bump).

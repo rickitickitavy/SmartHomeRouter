@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: System Interconnection tab after Log
-When System is selected, the console MUST show an **Interconnection** nested tab immediately after **Log**. Only `isAdmin` MUST use Interconnection. The tab MUST load and save interconnect settings (router name, network role, pairing port) and MUST show role-specific controls (Main paired table and Pair; Repeater Pair to host and Main status).
+When System is selected, the console MUST show an **Interconnection** nested tab immediately after **Log**. Only `isAdmin` MUST use Interconnection. The tab MUST load and save interconnect settings (router name, network role, interconnect TCP port) and MUST show role-specific controls (Main paired table and Pair; Repeater Pair to host and Main status). Changing network role MUST require two confirmation steps before the role is saved and paired peers are cleared.
 
 #### Scenario: Tab order places Interconnection after Log
 - **WHEN** an admin opens System
@@ -11,7 +11,11 @@ When System is selected, the console MUST show an **Interconnection** nested tab
 
 #### Scenario: Admin opens Interconnection
 - **WHEN** an admin selects System → Interconnection
-- **THEN** router name, network role, and pairing port controls are shown
+- **THEN** router name, network role, and interconnect port controls are shown
+
+#### Scenario: Role change needs two confirms
+- **WHEN** an admin changes network role and dismisses the first confirm
+- **THEN** the role and paired table remain unchanged until a second confirm completes
 
 ### Requirement: Interconnection Main paired table UI
 When network role is Main, Interconnection MUST show the paired-routers table (Name, MAC, IP, Port, online circle, devices, In, Out) and a **Pair** button beneath it that opens the IP/port pairing dialog (Start/Cancel; port default 10241).
@@ -49,7 +53,43 @@ When a found or registered Zigbee device has non-zero `router_id`, the Devices /
 - **WHEN** Main’s found list includes a device with non-zero `router_id`
 - **THEN** that row identifies the source router
 
+### Requirement: Maintenance Interconnection export and import
+System → Maintenance SHALL show an **Interconnection** card with **Export** and **Import** for `isAdmin` on Main. Export SHALL download interconnect JSON matching the global interconnect slice. Import SHALL confirm then apply peers with existing matched peers authoritative. Hide the card on Repeater.
+
+#### Scenario: Export interconnect file
+- **WHEN** an admin exports Interconnection from Maintenance on a Main with one paired Repeater
+- **THEN** the downloaded JSON includes that peer’s persisted interconnect identity fields
+
+#### Scenario: Import keeps matched existing peers
+- **WHEN** an admin confirms Import listing two already-paired Repeaters plus new peers
+- **THEN** the two existing Repeaters stay authoritative and new peers are added within cap
+
+#### Scenario: Hidden on Repeater
+- **WHEN** network role is Repeater and an admin opens Maintenance
+- **THEN** the Interconnection export/import card is not shown
+
+### Requirement: Repeater shows read-only Main-owned Zigbee fields
+When network role is Repeater, Zigbee channel and Zigbee search window MUST remain visible and MUST be read-only (Main-owned via interconnect).
+
+#### Scenario: Repeater shows read-only channel and search window
+- **WHEN** network role is Repeater and an admin opens Zigbee settings
+- **THEN** Zigbee channel and Zigbee search window are visible and not editable
+
 ## MODIFIED Requirements
+
+### Requirement: ZigBee tab edits the Zigbee group
+
+The ZigBee tab MUST show and allow saving CHANNEL and **Zigbee search window (sec)** (stored as `permitJoinOnBootSec`) from the Zigbee group record. CHANNEL MUST be 11–26. Zigbee search window MUST be 0–254 seconds. The page MUST load those values from `GET /api/zigbee` when the tab opens and on first page load, and MUST persist them with `POST /api/zigbee`. Saving MUST write EEPROM and apply the radio settings without restarting the router. Reset MUST reload stored values and MUST NOT write settings.
+
+#### Scenario: Load Zigbee settings
+
+- **WHEN** the operator opens the ZigBee section
+- **THEN** CHANNEL and Zigbee search window (sec) show the values stored on the host
+
+#### Scenario: Save Zigbee settings
+
+- **WHEN** the operator sets a valid channel and Zigbee search window duration and saves
+- **THEN** the Zigbee group is persisted and the radio settings are applied without a router restart
 
 ### Requirement: System has Update and Log tabs
 

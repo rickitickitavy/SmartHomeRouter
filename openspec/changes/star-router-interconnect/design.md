@@ -2,79 +2,97 @@
 
 ## Context
 
-See `proposal.md` for motivation. Today each gateway is a single host+slave Zigbee radio with device registry and ingest entirely on the host (`DeviceTopicMap`, `onHostSpiEvent` / `ZigbeeSpiProxy`, command path through `applyRegisteredDeviceCommand*`). There is no peer-host TCP control plane. System tabs are Log → Update → Hardware → Maintenance; Hardware and settings export already cover SPI/LED/queue/low-memory knobs. Crypto in-tree is mbedtls digests/HMAC and stack TLS for SMTP—not application AEAD. Firmware bump for this propose: host build only (no slave source required for v1).
+See `proposal.md` for motivation. Host owns device registry and Zigbee ingest (`onHostSpiEvent` / `FoundDeviceList` / command path). No peer-host control plane yet. Crypto in-tree is mbedtls digests/HMAC and stack TLS—not application AEAD. Host-only for v1 (no slave bump).
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Host-side STAR interconnect: settings, pairing, short-session AEAD transport, checkAlive, param push, Zigbee forward/inject/route by `router_id`.
-- Operator UI on System → Interconnection plus Repeater chrome allow-list.
-- Persist `router_id` on devices; multi-router search aggregation on Main.
-- Include interconnect in global export/restore.
+- Pairing protocol unchanged; everything else uses one universal typed AEAD exchange.
+- One TCP port for pairing + exchange; PSRAM queue depth 64 (drop newest when full).
+- SPI-equivalent `zigbee_packet` so Main ingest treats socket frames like local SPI events.
+- Repeater boot hello → Main shared `variable` push; checkAlive Main→Repeater; role change clears peers with double confirm.
 
 **Non-Goals:**
-- MQTT device forwarding from Repeaters (later).
-- Making automations/consoles/history “work” on Repeater role.
-- TLS/SSL for interconnect sessions.
-- Persistent long-lived TCP between routers.
-- Slave SPI schema / `router_id` on slave (host-authoritative).
-- Changing fragile OTA/SPI-OTA or SMTP worker paths.
+- TLS; typed replies; `request` / `search_found`; known-IEEE list push to Repeaters; MQTT forward; slave `router_id`.
 
 ## Decisions
 
-### 1. Shared-secret AEAD over short TCP (not TLS)
-- **Choice:** Pairing establishes a per-peer secret; every later session is TCP + AEAD (prefer ChaCha20-Poly1305 or AES-GCM via mbedtls) with explicit nonce/counter and MAC binding to paired identity.
-- **Why:** Protocols are connect→exchange→OK→disconnect; TLS handshake cost/RAM per short session is unacceptable on ESP32.
-- **Alternatives:** mTLS (rejected for RAM/time); shared TLS PSK (still heavy); plaintext token (too weak).
+### 1. Two protocols only
+- **Pairing:** existing cleartext sequence (`ImHere`/`copy`, identity, port, secret, router id); persist peer only after both OKs.
+- **Universal exchange:** listen/connect on the **same** configured port → `ImHere`/`copy` → one AEAD message `type_u8 || payload` → reply **`OK`** → disconnect. Either side may initiate.
+- After the shared handshake, the listener **demultiplexes** by what follows (pairing cleartext steps vs AEAD blob). No global “pairing-only” lock; normal exchange traffic may continue during Pair-to-host.
 
-### 2. Host-only `router_id` and routing branch
-- **Choice:** Add `uint32_t routerId` to host `DeviceTopicEntry` / JSON (`routerId`). Local = `0`. Outbound: branch before SPI enqueue—remote ids use interconnect data-exchange to the paired Repeater. Inbound from Repeater: decode packet and call the same host ingest used for `SpiEvtAttrReport` / join events (shared helper), not a parallel MQTT-only path.
-- **Why:** Host already owns registry and ignores slave dumps as authoritative; avoids SPI sync layout change and slave bump.
-- **Alternatives:** Sync `router_id` to slave (extra complexity, little benefit for v1).
+### 2. v1 type enum
+| Value | Name | Direction (typical) | Payload |
+|------:|------|---------------------|---------|
+| 0 | reserved | — | — |
+| 1 | `just_booted` | Repeater → Main | host firmware version string |
+| 2 | `variable` | Main → Repeater | name + value (checkAlive interval, zigbee search window, Zigbee channel) |
+| 3 | `check_alive` | Main → Repeater | empty or small nonce |
+| 4 | `zigbee_packet` | either | SPI event frame bytes (same layout host already parses) |
+| 5 | `search_start` | Main → Repeater | duration / search window |
+| 6 | `search_stop` | Main → Repeater | empty |
+| 7 | `rebind` | Main → Repeater | IEEE (8 bytes) |
+| 8 | `rebind_result` | Repeater → Main | IEEE + outcome (success / pairing fallback / failure) |
 
-### 3. Interconnect module + listen ports
-- **Choice:** New host module (e.g. `RouterInterconnect`) owning settings store, paired table, pairing state machines, exchange listen port (Main’s port advertised in pairing), AEAD session helper, counters (In/Out), and checkAlive timer. Use blocking or short-task TCP client/server suitable for one session at a time to bound peak RAM.
-- **Why:** Keeps WebConsole thin; matches short-session model.
-- **Alternatives:** Fold into WebConsole (harder to test); long-lived sockets (out of product protocol).
+One `zigbee_packet` type for reports and commands; direction + payload decide meaning.  
+Rebind: Main sends `rebind` → `OK`; Repeater runs local SPI rebind; Repeater sends `rebind_result`; Main API waits **30 s** (same for local SPI rebind).
 
-### 4. Handshake and secret establishment
-- **Choice:** Cleartext handshake bytes during pairing window only (`ImHere` / `copy`), then exchange identity fields and derive/store shared secret (e.g. random 32-byte key from Main, or ECDH if cheap—default **Main generates random key**, sends during pairing after handshake, both persist). Subsequent sessions AEAD with that key; Main rejects unknown MAC on inbound.
-- **Why:** Matches user’s pairing steps; keeps first implementation small.
-- **Alternatives:** ECDH (stronger, more code); pre-shared factory key (weaker fleet-wide).
+### 3. AEAD framing
+- Single AEAD blob: `type (1) || payload`.
+- **Max plaintext payload 256 bytes** (matches `SPI_MAX_PAYLOAD`; enough for SPI-equivalent frames).
+- AAD bound to peer **MAC**; shared secret from pairing (Main generates random key).
+- Nonce/counter layout at implement time; reject bad tag; Main accepts exchange only for paired MAC/secret.
 
-### 5. Zigbee search interval mapping
-- **Choice:** Main-owned “zigbee search interval” is the permit-join / search window duration pushed to Repeaters; align storage with existing search duration semantics (`permitJoinOnBootSec` / search window) so one duration drives Main-local and remote search when Main starts Search.
-- **Why:** No separate orphan interval; user asked for a shared Main-controlled search duration.
-- **Alternatives:** Independent new knob disconnected from local search (confusing).
+### 4. One port + request queue
+- Default port **10241** for pairing and all exchanges.
+- Outbound/accept **queue depth 64**, allocated in **PSRAM**. When full, **drop the newest** job.
+- Pairing wait does not freeze other interconnect work; demux per accepted session.
 
-### 6. Repeater UI gating
-- **Choice:** Gate sidebar and System panels from persisted network role on the console (and enforce on sensitive APIs where practical). Hardware allow-list and Maintenance=Reboot-only as specified.
-- **Why:** Spec requires hidden functions; role is the single switch.
+### 5. Max routers in STAR = 8
+- Cap **8 routers total**: 1 Main + **≤7** paired Repeaters.
 
-### 7. RED LED 2 Hz
-- **Choice:** Extend `StatusRgb` with an interconnect-pairing blink mode on host LED6 at 2 Hz; priority critical > firmware-update 5 Hz > interconnect 2 Hz.
-- **Why:** Matches pairing UX; reuses existing LED6 red channel.
+### 5b. Unique Zigbee channels (Main-assigned)
+- Every router uses a different channel from **11–26**.
+- Assign at pairing; re-send on `just_booted` and on Main recalculation via `variable`.
+- Repeater applies channel locally; UI shows it **read-only** on Repeater.
 
-### 8. Export/restore slice
-- **Choice:** Add `interconnect` object to settings export/restore (role, name, ports, intervals, paired peers including secret material needed to restore peering). Update Maintenance hint copy.
-- **Why:** Project rule: persisted features join global export unless excluded.
+### 6. `zigbee_packet` = SPI-equivalent emulation
+- Same event shape as SPI ingest; Repeater forwards all non-duplicate RX; Main injects like local SPI with `routerId`.
+
+### 7. Boot and shared params
+- `just_booted` then separate `variable` sessions (checkAlive interval, zigbee search window, channel).
+- Same pushes on Main change/recalc/reboot.
+
+### 8. Search
+- Local + `search_start`; finds via forwarded joins; no known-list push; optional `search_stop`.
+- UI label for search duration: **“Zigbee search window (sec)”** (replaces `PERMIT_JOIN_ON_BOOT_SEC` caption). On Repeater that field is **visible read-only** (Main-owned).
+
+### 9. Role change
+- Two confirms, then clear paired peers/secrets.
+
+### 10. Export/restore / Import
+- Global settings include interconnect slice.
+- Maintenance **Interconnection** Export/Import (confirm → replace).
+- On Import: peers that **match already existing** peers are **authoritative** (keep existing assignment/identity); newly imported peers are added; if channels conflict, **re-run** channel assignment with existing peers authoritative.
+
+### 11. Rebind via Repeater
+- `router_id == 0`: local SPI rebind, wait **30 s**.
+- `router_id != 0`: `rebind` / `rebind_result`, wait **30 s**.
 
 ## Risks / Trade-offs
 
-- **[Risk] AEAD short sessions under Zigbee burst load → latency/heap pressure** → Mitigation: one in-flight interconnect session; drop/coalesce duplicates on Repeater; bounded payload size; reuse buffers.
-- **[Risk] Subnet scan noisy / slow** → Mitigation: skip paired IPs; handshake-only probe; operator confirm; cancelable; reasonable per-IP timeout.
-- **[Risk] Pairing secret sniffed on LAN during wait** → Mitigation: only while explicit 120 s pairing window + LED/modal; document physical/LAN trust; future can upgrade to ECDH without changing STAR UX.
-- **[Risk] Injecting remote packets into local ingest double-counts or loops** → Mitigation: tag ingest source as interconnect; never re-forward Main→Repeater traffic back to Main; duplicate filter on Repeater.
-- **[Risk] Remote devices still SPI-synced as local** → Mitigation: do not push remote-`router_id` devices to slave `SpiCmdSetDevice` (or push only local `router_id==0`).
-- **[Risk] Repeater still has stored automations that must not run** → Mitigation: skip AutomationEngine (and similar) scheduling when role is Repeater, not only hide UI.
+- **[Risk] Queue full drops newest** → Mitigation: counters/log; operator sees lost forwards under extreme burst.
+- **[Risk] Pairing secret sniffed on LAN** → Mitigation: only during explicit 120 s window + LED/modal.
+- **[Risk] Inject loops** → Mitigation: never re-forward Main→Repeater traffic back; tag ingest source.
+- **[Risk] Channel pool exhausted** → Mitigation: recalculate and push; refuse pair if no free channel in 11–26.
 
 ## Migration Plan
 
-- Existing single-gateway installs default role `Main`, empty paired table, `routerId=0` on all devices—behavior unchanged.
-- No slave OTA required for this feature.
-- Restore of interconnect slice replaces peering config; operator may need to re-pair if secrets omitted in older files.
+- Default role Main, empty peers, `routerId=0` — unchanged single-gateway behavior.
+- No slave OTA required.
+- Role switch wipes peering after double confirm.
 
 ## Open Questions
 
-- Exact AEAD framing bytes (length prefix, nonce size, AAD contents) can be fixed at implement time without changing requirements.
-- Maximum paired Repeater count (suggest small fixed cap, e.g. 8) chosen at implement time from RAM.
+- Exact AEAD nonce/counter byte layout (implement-time; payload max and AAD-to-MAC are fixed).
