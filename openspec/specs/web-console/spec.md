@@ -2479,6 +2479,10 @@ On the ESP32-S3 and ESP32-P4 hosts, a JSON HTTP response whose document is large
 - **WHEN** a signed-in operator loads a JSON list or export larger than 4096 bytes
 - **THEN** the response body is the same logical JSON as before and was not held as a full copy on internal heap
 
+#### Scenario: Scene view is sent from PSRAM
+- **WHEN** a signed-in user loads a scene view whose JSON is larger than 4096 bytes
+- **THEN** the response fields stay id, name, bakePath, and pins, and that document is not held as a full copy on internal heap
+
 ### Requirement: Large JSON response PSRAM failure
 On the ESP32-S3 and ESP32-P4 hosts, if PSRAM cannot hold a JSON response larger than 4096 bytes, the host MUST respond with HTTP 507 and MUST NOT build that document on internal heap.
 

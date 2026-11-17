@@ -2290,7 +2290,8 @@ void WebConsole::handleSceneViewGet(AsyncWebServerRequest *request) {
         request->send(404, "text/plain", "Scene not found");
         return;
     }
-    String json = "{\"id\":\"";
+    PsramJsonBuffer json;
+    json += "{\"id\":\"";
     appendJsonEscaped(json, scene->id, SCENE_ID_BUF);
     json += "\",\"name\":\"";
     appendJsonEscaped(json, scene->name, SCENE_NAME_MAX);
@@ -2299,9 +2300,7 @@ void WebConsole::handleSceneViewGet(AsyncWebServerRequest *request) {
     json += "\",\"pins\":";
     json += scene->pinsJson != nullptr ? scene->pinsJson : "[]";
     json += "}";
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, std::move(json));
 }
 
 void WebConsole::handleSceneBakeGet(AsyncWebServerRequest *request) {

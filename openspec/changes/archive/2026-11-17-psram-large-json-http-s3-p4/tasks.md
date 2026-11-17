@@ -13,6 +13,7 @@
 
 - [x] 3.1 Add a response path that writes a `PsramJsonBuffer` and frees it on complete and on abort, without copying the full document into a `String` or an internal response buffer. If stock `beginResponse` copies, use a small response type that holds the pointer. Verify by inspection that the send path’s only full-document allocation is the PSRAM buffer, and that abort frees it once.
 - [x] 3.2 Return list, export, and full-document JSON from device, console, automation, camera, and scene stores as `PsramJsonBuffer` (move) instead of `toString()`. Send those responses, and settings export assembled into one `PsramJsonBuffer`, through the path from 3.1. On buffer failure send HTTP 507. Keep short settings and status fragments on `String`. JSON fields stay the same. Verify with a search that those store `*Json` methods no longer `return json.toString()`, and that settings export no longer builds the full file through `AsyncResponseStream` plus section `String`s.
+- [x] 3.3 Send `/api/scenes/view` through the same `PsramJsonBuffer` path. Do not build that JSON in an Arduino `String` or pass it to `beginResponse(..., String)`. The query id stays a short `String`. JSON fields stay `id`, `name`, `bakePath`, and `pins`.
 
 ## 4. Host build
 

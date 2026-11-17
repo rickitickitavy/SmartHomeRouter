@@ -36,7 +36,7 @@ On `BOARD_HAS_PSRAM` (S3 and P4 hosts), `allocate` for more than 4096 bytes uses
 
 Store list/export/full-document builders that today `return json.toString()` return a `PsramJsonBuffer` (move). The console sends it with a response that writes those bytes and frees them when the response finishes. Do not pass the document through `beginResponse(..., String)` or `AsyncResponseStream` for a full large document. Settings export is assembled into one `PsramJsonBuffer` (MQTT, email, devices, consoles, automations, cameras, scenes, and the other existing groups) and sent the same way.
 
-A document of 4096 bytes or less MAY still be sent as a `String`. Anything built as `PsramJsonBuffer` for a list or export is sent from that buffer even when it happens to be small, so there is one path and no size-check copy.
+A document of 4096 bytes or less MAY still be sent as a `String`. Anything built as `PsramJsonBuffer` for a list or export is sent from that buffer even when it happens to be small, so there is one path and no size-check copy. `/api/scenes/view` is one of those documents: its pin list can exceed 4096 bytes, so it is built in `PsramJsonBuffer` and sent through the same path. The scene id query parameter stays a short `String`.
 
 If reserve/append fails, respond **507** `Out of memory` (already used for scene/camera export) and free the partial buffer.
 
