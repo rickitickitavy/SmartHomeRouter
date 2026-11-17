@@ -844,8 +844,23 @@ System → Maintenance SHALL show **Export settings** above **Restore settings**
 - **WHEN** the host has a saved scene and an `isAdmin` operator exports settings
 - **THEN** the JSON `scenes` array includes that scene’s id, name, sceneModel, and pins
 
+### Requirement: Settings restore clamps bounded numerics to firmware min/max
+On settings restore, bounded numeric Hardware fields in the file SHALL clamp to this firmware’s declared min/max (`>` max → max; `<` min → min). Restore SHALL NOT fail solely for out-of-range. Invalid history Entry size SHALL map to the nearest allowed choice (tie → default). Not a PSRAM-safe slab cap.
+
+#### Scenario: History size above max clamps on restore
+- **WHEN** a restore file’s hardware has `historyMaxSizeKiB` greater than this firmware’s `HISTORY_MAX_SIZE_KIB_MAX` and the operator confirms restore
+- **THEN** the host stores `HISTORY_MAX_SIZE_KIB_MAX` and does not fail the hardware apply for that reason alone
+
+#### Scenario: History days below min clamps on restore
+- **WHEN** a restore file’s hardware has `historyMaxStoreDays` less than 1 and the operator confirms restore
+- **THEN** the host stores 1 (the firmware minimum)
+
+#### Scenario: Invalid entry size snaps to allowed choice
+- **WHEN** a restore file’s hardware has `historyEntrySize` 300 and the operator confirms restore
+- **THEN** the host stores the nearest allowed entry size among 128/256/384/512/768/1024/1536/2048 (or factory default on a tie)
+
 ### Requirement: Maintenance restores settings after confirm
-Restore settings SHALL ask the operator to confirm before applying a file. After confirm, the host SHALL replace MQTT, Zigbee, hardware SPI speed, blue/green LED brightness, **history retention/slab fields**, and on P4 the **SD history backup interval** when present in the file, and the registered device list from the file. When `ui.theme` is present, the host SHALL apply it to the **signed-in user** only. When a users list is present, the host SHALL replace the users table from that list (hashes and salts, never plaintext passwords). When a consoles list is present, the host SHALL replace control consoles from that list. When an automations list is present, the host SHALL replace automations from that list. When a cameras list is present, the host SHALL replace the camera registry from that list (including ONVIF username and password). When a scenes list is present, the host SHALL replace the scene registry from that list (model and pins; bake JPEGs kept only when id and bakePath still match). The host SHALL leave Wi-Fi unchanged even if the file contains a wifi object. A file that is not valid JSON, or that lacks a usable settings body, SHALL be rejected and SHALL NOT write settings. Only `isAdmin` SHALL restore settings. Devices Export/Restore on the Devices page SHALL remain. A restore file whose `hardware` object lacks brightness fields SHALL keep the host’s current brightness values. A restore file whose `hardware` object lacks the SD backup interval SHALL keep the host’s current interval (or factory default if never set).
+Restore settings SHALL ask the operator to confirm before applying a file. After confirm, the host SHALL replace MQTT, Zigbee, hardware SPI speed, blue/green LED brightness, **history retention/slab fields**, and on P4 the **SD history backup interval** when present in the file, and the registered device list from the file. When `ui.theme` is present, the host SHALL apply it to the **signed-in user** only. When a users list is present, the host SHALL replace the users table from that list (hashes and salts, never plaintext passwords). When a consoles list is present, the host SHALL replace control consoles from that list. When an automations list is present, the host SHALL replace automations from that list. When a cameras list is present, the host SHALL replace the camera registry from that list (including ONVIF username and password). When a scenes list is present, the host SHALL replace the scene registry from that list (model and pins; bake JPEGs kept only when id and bakePath still match). The host SHALL leave Wi-Fi unchanged even if the file contains a wifi object. A file that is not valid JSON, or that lacks a usable settings body, SHALL be rejected and SHALL NOT write settings. Only `isAdmin` SHALL restore settings. Devices Export/Restore on the Devices page SHALL remain. A restore file whose `hardware` object lacks brightness fields SHALL keep the host’s current brightness values. A restore file whose `hardware` object lacks the SD backup interval SHALL keep the host’s current interval (or factory default if never set). Bounded numeric Hardware fields present in the file SHALL be clamped to this firmware’s min/max (or discrete allowed set) rather than rejecting restore for being out of range.
 
 #### Scenario: Confirm then apply
 - **WHEN** the operator chooses Restore settings, selects a valid export file, and confirms
@@ -883,6 +898,14 @@ Restore settings SHALL ask the operator to confirm before applying a file. After
 #### Scenario: Cameras in file replace registry with credentials
 - **WHEN** an `isAdmin` operator confirms restore of a valid file that includes cameras with usernames and passwords
 - **THEN** the host camera registry matches that file, including each camera’s username and password
+
+#### Scenario: Out-of-range history size clamps on restore
+- **WHEN** the file’s hardware has `historyMaxSizeKiB` above this firmware’s maximum and the operator confirms
+- **THEN** restore succeeds with that field stored at the firmware maximum
+
+#### Scenario: Out-of-range brightness does not reject restore
+- **WHEN** the file’s hardware has `blueLedBrightness` 0 or 101 and the operator confirms
+- **THEN** restore succeeds and that brightness is stored as the factory default (100)
 
 ### Requirement: Maintenance theme picker
 System → Maintenance SHALL show a Theme control with options **Light** and **Dark**. Light SHALL be the current gray/white chrome. Dark SHALL use a cool slate-night dashboard: near-black blue-gray page and sidebar, slightly lighter cards, cool off-white body text, muted blue-gray secondary text, and steel-blue primary buttons with dark labels. No magenta, pink, or red-violet accents. Changing the picker SHALL apply that theme to the whole console immediately without a reload. The last **saved** theme for the **signed-in user** SHALL load after login; the login form SHALL use Dark. Changing the picker without Save SHALL NOT persist; a later reload with the same session SHALL restore that user’s last saved theme.
@@ -1109,7 +1132,7 @@ Consoles MUST show a table with columns Console name, Active, and Users (user na
 - **THEN** a large dialog opens for that console’s content
 
 ### Requirement: Hardware tab sets blue and green LED brightness
-System → Hardware SHALL show SPI speed plus **BLUE LED brightness** and **GREEN LED brightness** as integer fields from 1 to 100 (percent), a checkbox **use queue for base device command** (square-only toggle; default unchecked / false), plus the history fields **Max History store days**, **History sweep interval (minutes)**, **Maximum history size** (kB), and **Entry size** (hard choice 256/512/1024/2048/4096). GET `/api/hardware` SHALL return `spiSpeedHz`, `blueLedBrightness`, `greenLedBrightness`, `useQueueForBaseDeviceCommand` (boolean), and the history fields. POST `/api/hardware` SHALL require the brightness and SPI fields as today, accept the boolean (omitted on older clients MUST mean false), accept the history fields (omitted on older clients MUST keep prior stored values or factory defaults), reject values outside 1–100 for either brightness, reject out-of-range history days or sweep interval, reject Entry size values outside the hard choice set, persist them with hardware settings, apply brightness without requiring a reboot, push brightness to the slave when the link is up, and persist the queue flag for use by the action/command FIFO. Factory default for both brightness fields SHALL be 100. Factory default for **use queue for base device command** SHALL be false. Factory defaults for history SHALL be days 7, sweep 10 minutes, Entry size 1024, and Maximum history size **3072** KiB. Only `isAdmin` SHALL use Hardware.
+System → Hardware SHALL show SPI speed plus **BLUE LED brightness** and **GREEN LED brightness** as integer fields from 1 to 100 (percent), a checkbox **use queue for base device command** (square-only toggle; default unchecked / false), plus the history fields **Max History store days**, **History sweep interval (minutes)**, **Maximum history size** (kB), and **Entry size** (hard choice 128/256/384/512/768/1024/1536/2048). Each Entry size choice SHALL show how many pages that size can address and how many number (4-byte), logic (1-byte), and string (31-character) values one series can store. GET `/api/hardware` SHALL return `spiSpeedHz`, `blueLedBrightness`, `greenLedBrightness`, `useQueueForBaseDeviceCommand` (boolean), and the history fields. POST `/api/hardware` SHALL require the brightness and SPI fields as today, accept the boolean (omitted on older clients MUST mean false), accept the history fields (omitted on older clients MUST keep prior stored values or factory defaults), reject values outside 1–100 for either brightness, **clamp** out-of-range history days, sweep interval, maximum history size, and backup intervals to this firmware’s min/max (and map invalid Entry size to the nearest allowed choice), persist them with hardware settings, apply brightness without requiring a reboot, push brightness to the slave when the link is up, and persist the queue flag for use by the action/command FIFO. Factory default for both brightness fields SHALL be 100. Factory default for **use queue for base device command** SHALL be false. Factory defaults for history SHALL be days 7, sweep 10 minutes, Entry size 1024, and Maximum history size **3072** KiB. Only `isAdmin` SHALL use Hardware.
 
 #### Scenario: Load shows brightness
 - **WHEN** an admin opens System → Hardware
@@ -1130,6 +1153,10 @@ System → Hardware SHALL show SPI speed plus **BLUE LED brightness** and **GREE
 #### Scenario: History fields round-trip
 - **WHEN** the admin sets Max History store days to 10, sweep interval to 15, Maximum history size to 512, Entry size to 512, and saves
 - **THEN** GET `/api/hardware` returns those history values
+
+#### Scenario: History size above max clamps on Hardware save
+- **WHEN** POST `/api/hardware` sends `historyMaxSizeKiB` greater than this firmware’s maximum
+- **THEN** the host stores the firmware maximum and responds success (does not 400 solely for that field)
 
 ### Requirement: Login Enter focuses empty password
 
@@ -2281,19 +2308,19 @@ On S3 hosts only, when persist historical on internal flash is ON, Status **File
 - **THEN** File system does not show Historical data size (P4 keeps on-SD size only under Historical storage)
 
 ### Requirement: Hardware history retention and slab size
-System → Hardware SHALL show Max History store days (1–20, default 7), History sweep interval minutes (1–120, default 10), Maximum history size in KiB (default **3072**), and **Entry size** as a hard choice of 256, 512, 1024, 2048, or 4096 (default 1024). `/api/hardware` SHALL round-trip these fields, reject invalid days/interval/entry size, and apply slab size and entry size at next boot. Only `isAdmin` SHALL use Hardware.
+System → Hardware SHALL show Max History store days (1–20, default 7), History sweep interval minutes (1–120, default 10), Maximum history size in KiB (default **3072**), and **Entry size** as a hard choice of 128, 256, 384, 512, 768, 1024, 1536, or 2048 (default 1024). `/api/hardware` SHALL round-trip these fields, clamp out-of-range days, sweep interval, and maximum size to the firmware min/max, map an invalid Entry size to the nearest allowed choice (tie → 1024), and apply slab size and entry size at next boot. Only `isAdmin` SHALL use Hardware.
 
 #### Scenario: Defaults on first open
 - **WHEN** an admin opens Hardware and history settings were never saved
 - **THEN** days show 7, sweep interval shows 10, Maximum history size shows 3072, and Entry size shows 1024
 
-#### Scenario: Reject bad days
+#### Scenario: Out-of-range days clamp
 - **WHEN** POST `/api/hardware` sends Max History store days `0` or `21`
-- **THEN** the host responds 400 and does not change stored history settings
+- **THEN** the host stores the firmware minimum or maximum and does not respond 400 for that field
 
-#### Scenario: Reject bad entry size
+#### Scenario: Invalid entry size snaps
 - **WHEN** POST `/api/hardware` sends Entry size `300`
-- **THEN** the host responds 400 and does not change stored Entry size
+- **THEN** the host stores the nearest allowed size and does not respond 400 for that field
 
 ### Requirement: Device dialog Hist flag and epsilon
 The device parameter dialog SHALL show Hist (square-only) and epsilon for main-state history. Stored epsilon `< 0` loads as Hist off with epsilon empty/disabled/grayed; Hist off keeps epsilon disabled. Save off persists `-1`; save on persists entered epsilon `>= 0`. Reportable rows SHALL use the same pattern; string rows are flag-only (`0` on / `-1` off).

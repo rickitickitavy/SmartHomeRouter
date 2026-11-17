@@ -20882,13 +20882,16 @@
                         <div class="field">
                             <label for="historyEntrySize">Entry size</label>
                             <select id="historyEntrySize">
-                                <option value="256">256</option>
-                                <option value="512">512</option>
-                                <option value="1024" selected>1024</option>
-                                <option value="2048">2048</option>
-                                <option value="4096">4096</option>
+                                <option value="128">128 — 9 pages; number 4599; logic 7362; string 1044</option>
+                                <option value="256">256 — 20 pages; number 10220; logic 16360; string 2320</option>
+                                <option value="384">384 — 31 pages; number 15841; logic 25358; string 3596</option>
+                                <option value="512">512 — 41 pages; number 20951; logic 33538; string 4756</option>
+                                <option value="768">768 — 63 pages; number 32193; logic 51534; string 7308</option>
+                                <option value="1024" selected>1024 — 84 pages; number 42924; logic 68712; string 9744</option>
+                                <option value="1536">1536 — 127 pages; number 64897; logic 103886; string 14732</option>
+                                <option value="2048">2048 — 169 pages; number 86359; logic 138242; string 19604</option>
                             </select>
-                            <p class="field-hint">History entry (page directory) size. Applied on next boot with Maximum history size.</p>
+                            <p class="field-hint">Applied on next boot with Maximum history size. Counts are for one series: number is a 4-byte value, logic is one byte, string is 31 characters.</p>
                         </div>
                         <div class="field-check" id="historyPersistFlashField" hidden>
                             <input type="checkbox" id="historyPersistFlash" onchange="onHistoryFlashPersistUiChanged()">
