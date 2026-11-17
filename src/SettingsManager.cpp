@@ -470,8 +470,8 @@ uint8_t SettingsManager::clampHistorySweepIntervalMin(uint8_t minutes) {
 }
 
 bool SettingsManager::isValidHistoryEntrySize(uint16_t entrySize) {
-    return entrySize == 256 || entrySize == 512 || entrySize == 1024 || entrySize == 2048
-        || entrySize == 4096;
+    return entrySize == 128 || entrySize == 256 || entrySize == 384 || entrySize == 512
+        || entrySize == 768 || entrySize == 1024 || entrySize == 1536 || entrySize == 2048;
 }
 
 uint8_t SettingsManager::historyMaxStoreDays() const {

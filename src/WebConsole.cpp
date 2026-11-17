@@ -3004,6 +3004,60 @@ void WebConsole::handleHardwareGet(AsyncWebServerRequest *request) {
     request->send(200, "application/json", json);
 }
 
+static int clampSignedToRange(int value, int minValue, int maxValue) {
+    if (value < minValue) {
+        return minValue;
+    }
+    if (value > maxValue) {
+        return maxValue;
+    }
+    return value;
+}
+
+static void logHardwareFieldClamp(const char *fieldName, int before, int after) {
+    if (before == after) {
+        return;
+    }
+    LOGGER.info(
+        String("Hardware clamp ") + fieldName + " " + String(before) + " -> " + String(after)
+    );
+}
+
+static int nearestHistoryEntrySize(int value) {
+    static const int kAllowed[] = {128, 256, 384, 512, 768, 1024, 1536, 2048};
+    int best = kAllowed[0];
+    int bestDistance = value - best;
+    if (bestDistance < 0) {
+        bestDistance = -bestDistance;
+    }
+    int nearestCount = 1;
+    for (size_t index = 1; index < sizeof(kAllowed) / sizeof(kAllowed[0]); index++) {
+        int distance = value - kAllowed[index];
+        if (distance < 0) {
+            distance = -distance;
+        }
+        if (distance < bestDistance) {
+            best = kAllowed[index];
+            bestDistance = distance;
+            nearestCount = 1;
+        } else if (distance == bestDistance) {
+            nearestCount++;
+        }
+    }
+    if (nearestCount > 1) {
+        return DEFAULT_HISTORY_ENTRY_SIZE;
+    }
+    return best;
+}
+
+static bool jsonObjectHasKey(const char *json, const char *key) {
+    if (json == nullptr || key == nullptr) {
+        return false;
+    }
+    const String pattern = String("\"") + key + "\"";
+    return strstr(json, pattern.c_str()) != nullptr;
+}
+
 void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
     PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
@@ -3053,7 +3107,7 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
     const bool haveHistorySweep =
         extractJsonInt(body.c_str(), "historySweepIntervalMin", historySweepIntervalMin);
     const bool haveHistorySize = extractJsonInt(body.c_str(), "historyMaxSizeKiB", historyMaxSizeKiB);
-    const bool haveHistoryEntry = extractJsonInt(body.c_str(), "historyEntrySize", historyEntrySize);
+    bool haveHistoryEntry = extractJsonInt(body.c_str(), "historyEntrySize", historyEntrySize);
     const bool haveHistorySdBackup =
         extractJsonInt(body.c_str(), "historySdBackupIntervalMin", historySdBackupIntervalMin);
     bool historyPersistFlash = settingsManager->historyPersistFlash();
@@ -3064,46 +3118,67 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
         extractJsonInt(body.c_str(), "historyFlashBackupIntervalMin", historyFlashBackupIntervalMin);
     const bool haveLowMemoryThreshold =
         extractJsonInt(body.c_str(), "lowMemoryThresholdKb", lowMemoryThresholdKb);
-    if (haveHistoryDays
-        && (historyMaxStoreDays < HISTORY_MAX_STORE_DAYS_MIN
-            || historyMaxStoreDays > HISTORY_MAX_STORE_DAYS_MAX)) {
-        request->send(400, "text/plain", "historyMaxStoreDays must be 1-20");
-        return;
-    }
-    if (haveHistorySweep
-        && (historySweepIntervalMin < HISTORY_SWEEP_INTERVAL_MIN_MIN
-            || historySweepIntervalMin > HISTORY_SWEEP_INTERVAL_MIN_MAX)) {
-        request->send(400, "text/plain", "historySweepIntervalMin must be 1-120");
-        return;
-    }
-    if (haveHistorySize
-        && (historyMaxSizeKiB < (int)HISTORY_MAX_SIZE_KIB_MIN
-            || historyMaxSizeKiB > (int)HISTORY_MAX_SIZE_KIB_MAX)) {
-        request->send(
-            400,
-            "text/plain",
-            "historyMaxSizeKiB must be "
-                + String((unsigned)HISTORY_MAX_SIZE_KIB_MIN)
-                + "-"
-                + String((unsigned)HISTORY_MAX_SIZE_KIB_MAX)
+    if (haveHistoryDays) {
+        const int clampedDays = clampSignedToRange(
+            historyMaxStoreDays,
+            HISTORY_MAX_STORE_DAYS_MIN,
+            HISTORY_MAX_STORE_DAYS_MAX
         );
-        return;
+        logHardwareFieldClamp("historyMaxStoreDays", historyMaxStoreDays, clampedDays);
+        historyMaxStoreDays = clampedDays;
     }
-    if (haveHistoryEntry && !SettingsManager::isValidHistoryEntrySize((uint16_t)historyEntrySize)) {
-        request->send(400, "text/plain", "historyEntrySize must be 256/512/1024/2048/4096");
-        return;
+    if (haveHistorySweep) {
+        const int clampedSweep = clampSignedToRange(
+            historySweepIntervalMin,
+            HISTORY_SWEEP_INTERVAL_MIN_MIN,
+            HISTORY_SWEEP_INTERVAL_MIN_MAX
+        );
+        logHardwareFieldClamp("historySweepIntervalMin", historySweepIntervalMin, clampedSweep);
+        historySweepIntervalMin = clampedSweep;
     }
-    if (haveHistorySdBackup
-        && (historySdBackupIntervalMin < HISTORY_SD_BACKUP_INTERVAL_MIN_MIN
-            || historySdBackupIntervalMin > HISTORY_SD_BACKUP_INTERVAL_MIN_MAX)) {
-        request->send(400, "text/plain", "historySdBackupIntervalMin must be 5-600");
-        return;
+    if (haveHistorySize) {
+        const int clampedSize = clampSignedToRange(
+            historyMaxSizeKiB,
+            (int)HISTORY_MAX_SIZE_KIB_MIN,
+            (int)HISTORY_MAX_SIZE_KIB_MAX
+        );
+        logHardwareFieldClamp("historyMaxSizeKiB", historyMaxSizeKiB, clampedSize);
+        historyMaxSizeKiB = clampedSize;
     }
-    if (haveHistoryFlashBackup
-        && (historyFlashBackupIntervalMin < HISTORY_FLASH_BACKUP_INTERVAL_MIN_MIN
-            || historyFlashBackupIntervalMin > HISTORY_FLASH_BACKUP_INTERVAL_MIN_MAX)) {
-        request->send(400, "text/plain", "historyFlashBackupIntervalMin must be 30-600");
-        return;
+    if (haveHistoryEntry) {
+        const int snappedEntry = nearestHistoryEntrySize(historyEntrySize);
+        logHardwareFieldClamp("historyEntrySize", historyEntrySize, snappedEntry);
+        historyEntrySize = snappedEntry;
+    } else if (jsonObjectHasKey(body.c_str(), "historyEntrySize")) {
+        LOGGER.info("Hardware clamp historyEntrySize non-numeric -> 1024");
+        historyEntrySize = DEFAULT_HISTORY_ENTRY_SIZE;
+        haveHistoryEntry = true;
+    }
+    if (haveHistorySdBackup) {
+        const int clampedSd = clampSignedToRange(
+            historySdBackupIntervalMin,
+            HISTORY_SD_BACKUP_INTERVAL_MIN_MIN,
+            HISTORY_SD_BACKUP_INTERVAL_MIN_MAX
+        );
+        logHardwareFieldClamp(
+            "historySdBackupIntervalMin",
+            historySdBackupIntervalMin,
+            clampedSd
+        );
+        historySdBackupIntervalMin = clampedSd;
+    }
+    if (haveHistoryFlashBackup) {
+        const int clampedFlash = clampSignedToRange(
+            historyFlashBackupIntervalMin,
+            HISTORY_FLASH_BACKUP_INTERVAL_MIN_MIN,
+            HISTORY_FLASH_BACKUP_INTERVAL_MIN_MAX
+        );
+        logHardwareFieldClamp(
+            "historyFlashBackupIntervalMin",
+            historyFlashBackupIntervalMin,
+            clampedFlash
+        );
+        historyFlashBackupIntervalMin = clampedFlash;
     }
     if (haveLowMemoryThreshold
         && (lowMemoryThresholdKb < LOW_MEMORY_THRESHOLD_KB_MIN
@@ -3542,55 +3617,40 @@ bool WebConsole::applyZigbeeJson(const char *json, String *errorText) {
 }
 
 bool WebConsole::applyHardwareJson(const char *json, String *errorText) {
-    int spiSpeedHz = DEFAULT_SPI_SPEED_HZ;
-    if (!extractJsonInt(json, "spiSpeedHz", spiSpeedHz)) {
-        if (errorText != nullptr) {
-            *errorText = "Need hardware spiSpeedHz";
-        }
-        return false;
+    (void)errorText;
+    int spiSpeedHz = (int)settingsManager->spiSpeedHz();
+    if (extractJsonInt(json, "spiSpeedHz", spiSpeedHz)) {
+        const uint32_t clamped = SettingsManager::clampSpiSpeedHz((uint32_t)spiSpeedHz);
+        logHardwareFieldClamp("spiSpeedHz", spiSpeedHz, (int)clamped);
+        settingsManager->setSpiSpeedHz(clamped);
     }
-    const uint32_t clamped = SettingsManager::clampSpiSpeedHz((uint32_t)spiSpeedHz);
-    if (clamped != (uint32_t)spiSpeedHz) {
-        if (errorText != nullptr) {
-            *errorText = "spiSpeedHz must be 100000-40000000";
-        }
-        return false;
-    }
+    const uint32_t clamped = settingsManager->spiSpeedHz();
     int rfUpdateSpiSpeedHz = (int)settingsManager->rfUpdateSpiSpeedHz();
     if (extractJsonInt(json, "rfUpdateSpiSpeedHz", rfUpdateSpiSpeedHz)) {
         const uint32_t rfUpdateClamped =
             SettingsManager::clampRfUpdateSpiSpeedHz((uint32_t)rfUpdateSpiSpeedHz);
-        if (rfUpdateClamped != (uint32_t)rfUpdateSpiSpeedHz) {
-            if (errorText != nullptr) {
-                *errorText = "rfUpdateSpiSpeedHz must be 100k/200k/500k/1M/2M";
-            }
-            return false;
-        }
+        logHardwareFieldClamp("rfUpdateSpiSpeedHz", rfUpdateSpiSpeedHz, (int)rfUpdateClamped);
         settingsManager->setRfUpdateSpiSpeedHz(rfUpdateClamped);
     }
     uint8_t bluePercent = settingsManager->blueLedBrightness();
     uint8_t greenPercent = settingsManager->greenLedBrightness();
     int blueLedBrightness = bluePercent;
     int greenLedBrightness = greenPercent;
-    const bool haveBlue = extractJsonInt(json, "blueLedBrightness", blueLedBrightness);
-    const bool haveGreen = extractJsonInt(json, "greenLedBrightness", greenLedBrightness);
-    if (haveBlue) {
-        if (blueLedBrightness < LED_BRIGHTNESS_PERCENT_MIN || blueLedBrightness > LED_BRIGHTNESS_PERCENT_MAX) {
-            if (errorText != nullptr) {
-                *errorText = "blueLedBrightness must be 1-100";
-            }
-            return false;
+    if (extractJsonInt(json, "blueLedBrightness", blueLedBrightness)) {
+        int clampedBlue = blueLedBrightness;
+        if (clampedBlue < LED_BRIGHTNESS_PERCENT_MIN || clampedBlue > LED_BRIGHTNESS_PERCENT_MAX) {
+            clampedBlue = DEFAULT_LED_BRIGHTNESS_PERCENT;
         }
-        bluePercent = (uint8_t)blueLedBrightness;
+        logHardwareFieldClamp("blueLedBrightness", blueLedBrightness, clampedBlue);
+        bluePercent = (uint8_t)clampedBlue;
     }
-    if (haveGreen) {
-        if (greenLedBrightness < LED_BRIGHTNESS_PERCENT_MIN || greenLedBrightness > LED_BRIGHTNESS_PERCENT_MAX) {
-            if (errorText != nullptr) {
-                *errorText = "greenLedBrightness must be 1-100";
-            }
-            return false;
+    if (extractJsonInt(json, "greenLedBrightness", greenLedBrightness)) {
+        int clampedGreen = greenLedBrightness;
+        if (clampedGreen < LED_BRIGHTNESS_PERCENT_MIN || clampedGreen > LED_BRIGHTNESS_PERCENT_MAX) {
+            clampedGreen = DEFAULT_LED_BRIGHTNESS_PERCENT;
         }
-        greenPercent = (uint8_t)greenLedBrightness;
+        logHardwareFieldClamp("greenLedBrightness", greenLedBrightness, clampedGreen);
+        greenPercent = (uint8_t)clampedGreen;
     }
     bool useQueueForBaseDeviceCommand = false;
     extractJsonBool(json, "useQueueForBaseDeviceCommand", useQueueForBaseDeviceCommand);
@@ -3599,54 +3659,54 @@ bool WebConsole::applyHardwareJson(const char *json, String *errorText) {
     int historyMaxSizeKiB = settingsManager->historyMaxSizeKiB();
     int historyEntrySize = settingsManager->historyEntrySize();
     if (extractJsonInt(json, "historyMaxStoreDays", historyMaxStoreDays)) {
-        if (historyMaxStoreDays < HISTORY_MAX_STORE_DAYS_MIN
-            || historyMaxStoreDays > HISTORY_MAX_STORE_DAYS_MAX) {
-            if (errorText != nullptr) {
-                *errorText = "historyMaxStoreDays must be 1-20";
-            }
-            return false;
-        }
-        settingsManager->setHistoryMaxStoreDays((uint8_t)historyMaxStoreDays);
+        const int clampedDays = clampSignedToRange(
+            historyMaxStoreDays,
+            HISTORY_MAX_STORE_DAYS_MIN,
+            HISTORY_MAX_STORE_DAYS_MAX
+        );
+        logHardwareFieldClamp("historyMaxStoreDays", historyMaxStoreDays, clampedDays);
+        settingsManager->setHistoryMaxStoreDays((uint8_t)clampedDays);
     }
     if (extractJsonInt(json, "historySweepIntervalMin", historySweepIntervalMin)) {
-        if (historySweepIntervalMin < HISTORY_SWEEP_INTERVAL_MIN_MIN
-            || historySweepIntervalMin > HISTORY_SWEEP_INTERVAL_MIN_MAX) {
-            if (errorText != nullptr) {
-                *errorText = "historySweepIntervalMin must be 1-120";
-            }
-            return false;
-        }
-        settingsManager->setHistorySweepIntervalMin((uint8_t)historySweepIntervalMin);
+        const int clampedSweep = clampSignedToRange(
+            historySweepIntervalMin,
+            HISTORY_SWEEP_INTERVAL_MIN_MIN,
+            HISTORY_SWEEP_INTERVAL_MIN_MAX
+        );
+        logHardwareFieldClamp("historySweepIntervalMin", historySweepIntervalMin, clampedSweep);
+        settingsManager->setHistorySweepIntervalMin((uint8_t)clampedSweep);
     }
     if (extractJsonInt(json, "historyMaxSizeKiB", historyMaxSizeKiB)) {
-        if (historyMaxSizeKiB < (int)HISTORY_MAX_SIZE_KIB_MIN
-            || historyMaxSizeKiB > (int)HISTORY_MAX_SIZE_KIB_MAX) {
-            if (errorText != nullptr) {
-                *errorText = "historyMaxSizeKiB out of range";
-            }
-            return false;
-        }
-        settingsManager->setHistoryMaxSizeKiB((uint16_t)historyMaxSizeKiB);
+        const int clampedSize = clampSignedToRange(
+            historyMaxSizeKiB,
+            (int)HISTORY_MAX_SIZE_KIB_MIN,
+            (int)HISTORY_MAX_SIZE_KIB_MAX
+        );
+        logHardwareFieldClamp("historyMaxSizeKiB", historyMaxSizeKiB, clampedSize);
+        historyMaxSizeKiB = clampedSize;
+        settingsManager->setHistoryMaxSizeKiB((uint16_t)clampedSize);
     }
     if (extractJsonInt(json, "historyEntrySize", historyEntrySize)) {
-        if (!SettingsManager::isValidHistoryEntrySize((uint16_t)historyEntrySize)) {
-            if (errorText != nullptr) {
-                *errorText = "historyEntrySize must be 256/512/1024/2048/4096";
-            }
-            return false;
-        }
-        settingsManager->setHistoryEntrySize((uint16_t)historyEntrySize);
+        const int snappedEntry = nearestHistoryEntrySize(historyEntrySize);
+        logHardwareFieldClamp("historyEntrySize", historyEntrySize, snappedEntry);
+        settingsManager->setHistoryEntrySize((uint16_t)snappedEntry);
+    } else if (jsonObjectHasKey(json, "historyEntrySize")) {
+        LOGGER.info("Hardware clamp historyEntrySize non-numeric -> 1024");
+        settingsManager->setHistoryEntrySize(DEFAULT_HISTORY_ENTRY_SIZE);
     }
     int historySdBackupIntervalMin = settingsManager->historySdBackupIntervalMin();
     if (extractJsonInt(json, "historySdBackupIntervalMin", historySdBackupIntervalMin)) {
-        if (historySdBackupIntervalMin < HISTORY_SD_BACKUP_INTERVAL_MIN_MIN
-            || historySdBackupIntervalMin > HISTORY_SD_BACKUP_INTERVAL_MIN_MAX) {
-            if (errorText != nullptr) {
-                *errorText = "historySdBackupIntervalMin must be 5-600";
-            }
-            return false;
-        }
-        settingsManager->setHistorySdBackupIntervalMin((uint16_t)historySdBackupIntervalMin);
+        const int clampedSd = clampSignedToRange(
+            historySdBackupIntervalMin,
+            HISTORY_SD_BACKUP_INTERVAL_MIN_MIN,
+            HISTORY_SD_BACKUP_INTERVAL_MIN_MAX
+        );
+        logHardwareFieldClamp(
+            "historySdBackupIntervalMin",
+            historySdBackupIntervalMin,
+            clampedSd
+        );
+        settingsManager->setHistorySdBackupIntervalMin((uint16_t)clampedSd);
     }
 #if !defined(BOARD_HOST_P4)
     bool historyPersistFlash = settingsManager->historyPersistFlash();
@@ -3659,26 +3719,28 @@ bool WebConsole::applyHardwareJson(const char *json, String *errorText) {
     }
     int historyFlashBackupIntervalMin = settingsManager->historyFlashBackupIntervalMin();
     if (extractJsonInt(json, "historyFlashBackupIntervalMin", historyFlashBackupIntervalMin)) {
-        if (historyFlashBackupIntervalMin < HISTORY_FLASH_BACKUP_INTERVAL_MIN_MIN
-            || historyFlashBackupIntervalMin > HISTORY_FLASH_BACKUP_INTERVAL_MIN_MAX) {
-            if (errorText != nullptr) {
-                *errorText = "historyFlashBackupIntervalMin must be 30-600";
-            }
-            return false;
-        }
-        settingsManager->setHistoryFlashBackupIntervalMin((uint16_t)historyFlashBackupIntervalMin);
+        const int clampedFlash = clampSignedToRange(
+            historyFlashBackupIntervalMin,
+            HISTORY_FLASH_BACKUP_INTERVAL_MIN_MIN,
+            HISTORY_FLASH_BACKUP_INTERVAL_MIN_MAX
+        );
+        logHardwareFieldClamp(
+            "historyFlashBackupIntervalMin",
+            historyFlashBackupIntervalMin,
+            clampedFlash
+        );
+        settingsManager->setHistoryFlashBackupIntervalMin((uint16_t)clampedFlash);
     }
 #endif
     int lowMemoryThresholdKb = settingsManager->lowMemoryThresholdKb();
     if (extractJsonInt(json, "lowMemoryThresholdKb", lowMemoryThresholdKb)) {
-        if (lowMemoryThresholdKb < LOW_MEMORY_THRESHOLD_KB_MIN
-            || lowMemoryThresholdKb > LOW_MEMORY_THRESHOLD_KB_MAX) {
-            if (errorText != nullptr) {
-                *errorText = "lowMemoryThresholdKb must be 10-32";
-            }
-            return false;
-        }
-        settingsManager->setLowMemoryThresholdKb((uint16_t)lowMemoryThresholdKb);
+        const int clampedLowMemory = clampSignedToRange(
+            lowMemoryThresholdKb,
+            LOW_MEMORY_THRESHOLD_KB_MIN,
+            LOW_MEMORY_THRESHOLD_KB_MAX
+        );
+        logHardwareFieldClamp("lowMemoryThresholdKb", lowMemoryThresholdKb, clampedLowMemory);
+        settingsManager->setLowMemoryThresholdKb((uint16_t)clampedLowMemory);
     }
     settingsManager->setSpiSpeedHz(clamped);
     settingsManager->setLedBrightness(bluePercent, greenPercent);
