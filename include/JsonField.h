@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <string.h>
 
+#include "PsramJsonBuffer.h"
+
 template<typename JsonBuf>
 inline void appendJsonEscaped(JsonBuf &json, const char *value, size_t maxLength = 128) {
     if (value == nullptr) {
@@ -260,8 +262,14 @@ inline bool extractJsonDouble(const char *json, const char *key, double &out) {
     return true;
 }
 
-inline bool extractJsonKeyedSlice(const char *json, const char *key, char openBrace, String &out) {
-    if (json == nullptr || key == nullptr) {
+inline bool findJsonKeyedSliceRange(
+    const char *json,
+    const char *key,
+    char openBrace,
+    const char **sliceStart,
+    const char **sliceEnd
+) {
+    if (json == nullptr || key == nullptr || sliceStart == nullptr || sliceEnd == nullptr) {
         return false;
     }
     // Only the root object's own fields (depth 1). Nested keys such as
@@ -311,10 +319,35 @@ inline bool extractJsonKeyedSlice(const char *json, const char *key, char openBr
         if (character == '}' || character == ']') {
             depth--;
             if (depth == 0) {
-                out = String(colon).substring(0, (unsigned int)(cursor - colon + 1));
+                *sliceStart = colon;
+                *sliceEnd = cursor;
                 return true;
             }
         }
     }
     return false;
+}
+
+inline bool extractJsonKeyedSlice(const char *json, const char *key, char openBrace, String &out) {
+    const char *sliceStart = nullptr;
+    const char *sliceEnd = nullptr;
+    if (!findJsonKeyedSliceRange(json, key, openBrace, &sliceStart, &sliceEnd)) {
+        return false;
+    }
+    out = String(sliceStart).substring(0, (unsigned int)(sliceEnd - sliceStart + 1));
+    return true;
+}
+
+inline bool extractJsonKeyedSlice(
+    const char *json,
+    const char *key,
+    char openBrace,
+    PsramJsonBuffer &out
+) {
+    const char *sliceStart = nullptr;
+    const char *sliceEnd = nullptr;
+    if (!findJsonKeyedSliceRange(json, key, openBrace, &sliceStart, &sliceEnd)) {
+        return false;
+    }
+    return out.assignSlice(sliceStart, sliceEnd);
 }

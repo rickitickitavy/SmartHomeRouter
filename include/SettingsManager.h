@@ -16,7 +16,7 @@ public:
     bool saveDeviceSlot(int slotIndex);
     bool saveDevicesJson();
     void loadDeviceFile();
-    String devicesJsonFile();
+    PsramJsonBuffer devicesJsonFile();
     void applyDefaults();
     void resetWiFi();
     void logSettings();

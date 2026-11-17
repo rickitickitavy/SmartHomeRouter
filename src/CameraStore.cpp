@@ -1722,25 +1722,19 @@ void CameraStore::appendListJson(PsramJsonBuffer &json, const CameraStore &store
     json += "]";
 }
 
-String CameraStore::listJson(bool includeSecrets) const {
+PsramJsonBuffer CameraStore::listJson(bool includeSecrets) const {
     PsramJsonBuffer json;
     appendListJson(json, *this, includeSecrets);
-    if (!json.ok()) {
-        return String();
-    }
-    return json.toString();
+    return json;
 }
 
-String CameraStore::cameraFullJson(const CameraRecord *camera, bool includePassword) const {
+PsramJsonBuffer CameraStore::cameraFullJson(const CameraRecord *camera, bool includePassword) const {
     if (camera == nullptr) {
-        return String();
+        return PsramJsonBuffer();
     }
     PsramJsonBuffer json;
     appendCameraFullJson(json, camera, includePassword, true);
-    if (!json.ok()) {
-        return String();
-    }
-    return json.toString();
+    return json;
 }
 
 // ---------------------------------------------------------------------------
@@ -2432,7 +2426,7 @@ int CameraStore::discoveredCount() const {
     return discoveredStoredCount;
 }
 
-String CameraStore::discoveredJson() const {
+PsramJsonBuffer CameraStore::discoveredJson() const {
     PsramJsonBuffer json;
     json += "[";
     bool first = true;
@@ -2457,13 +2451,10 @@ String CameraStore::discoveredJson() const {
         json += "\"}";
     }
     json += "]";
-    if (!json.ok()) {
-        return String();
-    }
-    return json.toString();
+    return json;
 }
 
-String CameraStore::testOnvifJson(const char *jsonBody) const {
+PsramJsonBuffer CameraStore::testOnvifJson(const char *jsonBody) const {
     String hostText;
     String urlText;
     String usernameText;
@@ -2517,7 +2508,9 @@ String CameraStore::testOnvifJson(const char *jsonBody) const {
         if (resolved != nullptr) {
             free(resolved);
         }
-        return String("{\"ok\":false,\"error\":\"out of memory\"}");
+        PsramJsonBuffer errorJson;
+        errorJson += "{\"ok\":false,\"error\":\"out of memory\"}";
+        return errorJson;
     }
     memset(candidates, 0, sizeof(char) * kCandidateMax * CAMERA_URL_MAX);
     memset(resolved, 0, sizeof(*resolved));
@@ -2679,12 +2672,14 @@ String CameraStore::testOnvifJson(const char *jsonBody) const {
     free(candidates);
     free(resolved);
     if (!json.ok()) {
-        return String("{\"ok\":false,\"error\":\"out of memory\"}");
+        PsramJsonBuffer errorJson;
+        errorJson += "{\"ok\":false,\"error\":\"out of memory\"}";
+        return errorJson;
     }
-    return json.toString();
+    return json;
 }
 
-String CameraStore::testSnapshotsJson(const char *jsonBody) const {
+PsramJsonBuffer CameraStore::testSnapshotsJson(const char *jsonBody) const {
     String usernameText;
     String passwordText;
     String snapshotUrl[CAMERA_CHANNELS];
@@ -2805,9 +2800,11 @@ String CameraStore::testSnapshotsJson(const char *jsonBody) const {
         + (summaryError[0] != '\0' ? String(" error=") + summaryError : String(""))
     );
     if (!json.ok()) {
-        return String("{\"ok\":false,\"error\":\"out of memory\",\"channels\":[]}");
+        PsramJsonBuffer errorJson;
+        errorJson += "{\"ok\":false,\"error\":\"out of memory\",\"channels\":[]}";
+        return errorJson;
     }
-    return json.toString();
+    return json;
 }
 
 uint8_t *CameraStore::fetchSnapshotJpeg(const char *cameraId, uint8_t channel, size_t *outSize) {

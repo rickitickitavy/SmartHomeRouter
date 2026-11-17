@@ -96,6 +96,27 @@ public:
         return true;
     }
 
+    // HTTP bodies whose cap can exceed 4096 bytes must not fall back to internal heap.
+    void requireExternalMemory() {
+        externalOnly = true;
+    }
+
+    bool appendBytes(const void *data, size_t dataLength) {
+        if (failed) {
+            return false;
+        }
+        if (data == nullptr || dataLength == 0) {
+            return true;
+        }
+        if (!reserve(used + dataLength + 1)) {
+            return false;
+        }
+        memcpy(bytes + used, data, dataLength);
+        used += dataLength;
+        bytes[used] = '\0';
+        return true;
+    }
+
     bool append(const char *text) {
         if (failed) {
             return false;
@@ -103,14 +124,7 @@ public:
         if (text == nullptr || text[0] == '\0') {
             return true;
         }
-        const size_t textLength = strlen(text);
-        if (!reserve(used + textLength + 1)) {
-            return false;
-        }
-        memcpy(bytes + used, text, textLength);
-        used += textLength;
-        bytes[used] = '\0';
-        return true;
+        return appendBytes(text, strlen(text));
     }
 
     bool append(char character) {
@@ -240,6 +254,34 @@ public:
         return written == used;
     }
 
+    // Hands the caller the buffer. Empty or failed buffers return null and free storage.
+    char *detach(size_t *lengthOut) {
+        if (failed) {
+            release();
+            if (lengthOut != nullptr) {
+                *lengthOut = 0;
+            }
+            return nullptr;
+        }
+        char *owned = bytes;
+        const size_t ownedLength = used;
+        bytes = nullptr;
+        used = 0;
+        capacity = 0;
+        failed = false;
+        if (owned == nullptr || ownedLength == 0) {
+            free(owned);
+            if (lengthOut != nullptr) {
+                *lengthOut = 0;
+            }
+            return nullptr;
+        }
+        if (lengthOut != nullptr) {
+            *lengthOut = ownedLength;
+        }
+        return owned;
+    }
+
     // Bridge for APIs that still return Arduino String. One allocation.
     String toString() const {
         if (failed) {
@@ -263,8 +305,9 @@ private:
     size_t used = 0;
     size_t capacity = 0;
     bool failed = false;
+    bool externalOnly = false;
 
-    static void *allocate(size_t byteCount) {
+    void *allocate(size_t byteCount) const {
         if (byteCount == 0) {
             return nullptr;
         }
@@ -275,6 +318,13 @@ private:
         }
         if (block != nullptr) {
             return block;
+        }
+        if (externalOnly || byteCount > 4096) {
+            return nullptr;
+        }
+#else
+        if (externalOnly) {
+            return nullptr;
         }
 #endif
         return malloc(byteCount);
@@ -299,9 +349,11 @@ private:
         used = other.used;
         capacity = other.capacity;
         failed = other.failed;
+        externalOnly = other.externalOnly;
         other.bytes = nullptr;
         other.used = 0;
         other.capacity = 0;
         other.failed = false;
+        other.externalOnly = false;
     }
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Defines.h"
+#include "PsramJsonBuffer.h"
 #include "SpiProtocol.h"
 #include <Arduino.h>
 #include <stddef.h>
@@ -72,6 +73,12 @@ public:
     UserWriteResult updateUser(const UserRecord *actor, const char *userName, const UserRecord *source, const char *password);
     UserWriteResult deleteUser(const UserRecord *actor, const char *userName);
     bool replaceFromExportJson(
+        const char *json,
+        char (*removedNames)[USER_NAME_MAX],
+        int *removedCount,
+        int removedMax
+    );
+    bool replaceFromExportJson(
         const String &json,
         char (*removedNames)[USER_NAME_MAX],
         int *removedCount,
@@ -83,10 +90,10 @@ public:
     void resetToEmpty();
     void noteRecordChanged(const UserRecord *user);
     void setChangedHandler(ChangedFn handler);
-    String listPublicJson() const;
-    String listExportJson() const;
-    void appendUserPublicJson(String &json, const UserRecord *user) const;
-    void appendUserExportJson(String &json, const UserRecord *user) const;
+    PsramJsonBuffer listPublicJson() const;
+    PsramJsonBuffer listExportJson() const;
+    void appendUserPublicJson(PsramJsonBuffer &json, const UserRecord *user) const;
+    void appendUserExportJson(PsramJsonBuffer &json, const UserRecord *user) const;
     static const char *themeJsonId(uint8_t themeId);
     static uint8_t themeFromJsonId(const char *themeId);
     static bool nameEquals(const char *left, const char *right);
@@ -143,6 +150,7 @@ private:
     bool loadFromFile();
     bool persistNow();
     void afterMutation(UserChangeKind kind, const UserRecord *user);
+    bool parseUsersJson(const char *json, bool requireHashes);
     bool parseUsersJson(const String &json, bool requireHashes);
     int adminCount() const;
     int unlockedAdminCount() const;
@@ -152,7 +160,7 @@ private:
     static bool hashesEqual(const uint8_t *left, const uint8_t *right, size_t length);
     static bool actorMayEditUsers(const UserRecord *actor);
     static void copyRolesAndFlags(UserRecord *destination, const UserRecord *source, bool replaceConsoles);
-    static void appendConsolesJson(String &json, const UserRecord *user);
+    static void appendConsolesJson(PsramJsonBuffer &json, const UserRecord *user);
     static bool userGetsLongIdleSession(const UserRecord *user);
     static bool wallClockIsSane(time_t wallClock);
     static bool computeRememberMac(

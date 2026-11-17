@@ -1394,7 +1394,12 @@ static void runDeviceRegistryFixtures() {
         LOGGER.info("Main snapshot fixture ok");
     }
 
-    const String savedDeviceList = topicMap != nullptr ? topicMap->listStoreJson() : String("[]");
+    PsramJsonBuffer savedDeviceList;
+    if (topicMap != nullptr) {
+        savedDeviceList = topicMap->listStoreJson();
+    } else {
+        savedDeviceList += "[]";
+    }
 
     if (foundDevices == nullptr || topicMap == nullptr) {
         return;
@@ -1539,14 +1544,14 @@ static void runDeviceRegistryFixtures() {
             manufEntry->manufacturer = DeviceManufacturerTuya;
             manufEntry->zigbeeType = ZigbeeDeviceTypeOnOff;
             manufEntry->transport = DeviceTransportZigbee;
-            const String manufJson = topicMap->entryJson(manufIeee, nullptr, nullptr, nullptr);
+            const PsramJsonBuffer manufJson = topicMap->entryJson(manufIeee, nullptr, nullptr, nullptr);
             topicMap->removeByIeee(manufIeee);
-            if (manufJson.indexOf("\"manufacturer\":\"tuya\"") < 0
-                || manufJson.indexOf("\"configurable\":true") < 0) {
+            if (strstr(manufJson.c_str(), "\"manufacturer\":\"tuya\"") == nullptr
+                || strstr(manufJson.c_str(), "\"configurable\":true") == nullptr) {
                 LOGGER.error("Device manufacturer persist fixture failed");
             } else {
                 String wrapped = "[";
-                wrapped += manufJson;
+                wrapped += manufJson.c_str();
                 wrapped += "]";
                 DeviceTopicMap reloadMap;
                 reloadMap.replaceFromJson(wrapped);
@@ -1588,8 +1593,8 @@ static void runDeviceRegistryFixtures() {
     strncpy((char *)joinFrame.payload + SPI_DEVICE_JOIN_MANUFACTURER_OFFSET, "Acme", 31);
     strncpy((char *)joinFrame.payload + SPI_DEVICE_JOIN_MODEL_OFFSET, "Plug", 31);
     foundDevices->noteJoin(joinFrame, topicMap);
-    String foundJson = foundDevices->listJson(topicMap);
-    if (foundJson != "[]") {
+    PsramJsonBuffer foundJson = foundDevices->listJson(topicMap);
+    if (strcmp(foundJson.c_str(), "[]") != 0) {
         LOGGER.error("Found-join before search fixture failed");
     } else {
         LOGGER.info("Found-join before search fixture ok");
@@ -1599,7 +1604,7 @@ static void runDeviceRegistryFixtures() {
     foundDevices->clear();
     foundDevices->noteJoin(joinFrame, topicMap);
     foundJson = foundDevices->listJson(topicMap);
-    if (foundJson.indexOf("AA") < 0 || foundJson.indexOf("\"type\":\"unknown\"") < 0) {
+    if (strstr(foundJson.c_str(), "AA") == nullptr || strstr(foundJson.c_str(), "\"type\":\"unknown\"") == nullptr) {
         LOGGER.error("Found-join fixture failed");
     } else {
         LOGGER.info("Found-join fixture ok");
@@ -1611,7 +1616,7 @@ static void runDeviceRegistryFixtures() {
     joinFrame.length = SPI_DEVICE_JOIN_LEN;
     foundDevices->noteJoin(joinFrame, topicMap);
     foundJson = foundDevices->listJson(topicMap);
-    if (foundJson.indexOf("\"type\":\"onOff\"") < 0) {
+    if (strstr(foundJson.c_str(), "\"type\":\"onOff\"") == nullptr) {
         LOGGER.error("Found type JSON fixture failed");
     } else {
         LOGGER.info("Found type JSON fixture ok");
@@ -1630,7 +1635,7 @@ static void runDeviceRegistryFixtures() {
     joinFrame.length = SPI_DEVICE_JOIN_MIN_LEN;
     foundDevices->noteJoin(joinFrame, topicMap);
     foundJson = foundDevices->listJson(topicMap);
-    if (foundJson.indexOf("BB") >= 0) {
+    if (strstr(foundJson.c_str(), "BB") != nullptr) {
         LOGGER.error("Registered join leaked into found list");
     } else {
         LOGGER.info("Registered join skipped found list");
@@ -1659,7 +1664,7 @@ static void runDeviceRegistryFixtures() {
         const bool typeChanged = foundDevices->noteJoin(joinFrame, topicMap);
         foundJson = foundDevices->listJson(topicMap);
         if (typeChanged || coveringEntry->zigbeeType != ZigbeeDeviceTypeUnknown
-            || foundJson.indexOf("DD") >= 0) {
+            || strstr(foundJson.c_str(), "DD") != nullptr) {
             LOGGER.error("Registered type freeze fixture failed");
         } else {
             LOGGER.info("Registered type freeze fixture ok");
@@ -1673,12 +1678,12 @@ static void runDeviceRegistryFixtures() {
     DeviceTopicEntry *persistEntry = topicMap->upsert(persistIeee, "type-fixture", "", "", "");
     if (persistEntry != nullptr) {
         persistEntry->zigbeeType = ZigbeeDeviceTypeOnOff;
-        String storedJson = topicMap->listJson();
+        PsramJsonBuffer storedJson = topicMap->listJson();
         const uint8_t storedType = persistEntry->zigbeeType;
         persistEntry->zigbeeType = storedType != ZigbeeDeviceTypeUnknown
             ? storedType
             : ZigbeeDeviceTypeIasZone;
-        if (persistEntry->zigbeeType != ZigbeeDeviceTypeOnOff || storedJson.indexOf("\"type\":\"onOff\"") < 0) {
+        if (persistEntry->zigbeeType != ZigbeeDeviceTypeOnOff || strstr(storedJson.c_str(), "\"type\":\"onOff\"") == nullptr) {
             LOGGER.error("Device type persist fixture failed");
         } else {
             LOGGER.info("Device type persist fixture ok");
@@ -1756,7 +1761,7 @@ static void runDeviceRegistryFixtures() {
     }
     foundDevices->setAcceptingJoins(false);
     foundDevices->clear();
-    topicMap->replaceFromJson(savedDeviceList);
+    topicMap->replaceFromJson(savedDeviceList.c_str());
 
     LOGGER.info("Device map cap " + String(DEVICE_MAP_SLOTS) + " (overflow rejected)");
 }
@@ -2388,7 +2393,12 @@ static void setupHost() {
     webConsole->setUsersRestoredHandler(onUsersRestored);
     webConsole->setGatewayStatusHandler(hostGatewayStatusJson);
     webConsole->setDevicesFileHandler([]() {
-        return settingsManager != nullptr ? settingsManager->devicesJsonFile() : String("[]");
+        if (settingsManager == nullptr) {
+            PsramJsonBuffer empty;
+            empty += "[]";
+            return empty;
+        }
+        return settingsManager->devicesJsonFile();
     });
     webConsole->setHistoryStore(&historyStore);
     ZIGBEE_SPI_PROXY.setHistoryStore(&historyStore);

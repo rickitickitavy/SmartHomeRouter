@@ -176,10 +176,11 @@ public:
     AutomationWriteResult deleteAutomation(const char *name);
     bool replaceAllFromJson(const String &json);
     bool replaceAllFromJson(const char *json);
+    bool mergeAllFromJson(const char *json);
     bool mergeAllFromJson(const String &json);
-    String listSummaryJson() const;
-    String listFullJson() const;
-    String automationFullJson(const AutomationRecord *automation, bool includeRuntime) const;
+    PsramJsonBuffer listSummaryJson() const;
+    PsramJsonBuffer listFullJson() const;
+    PsramJsonBuffer automationFullJson(const AutomationRecord *automation, bool includeRuntime) const;
     bool setActive(const char *name, bool active, bool *becameActiveOut);
     void stopTimer(AutomationRecord *automation);
     bool startTimer(AutomationRecord *automation, uint32_t secondsOrZero);

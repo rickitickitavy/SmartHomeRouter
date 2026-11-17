@@ -29,9 +29,22 @@
 namespace {
 
 struct HttpRequestBody {
-    String text;
+    PsramJsonBuffer text;
     bool overflow = false;
+    bool allocFailed = false;
     size_t maxBytes = 0;
+
+    HttpRequestBody() {
+        text.requireExternalMemory();
+    }
+};
+
+struct OwnedJsonBytes {
+    char *bytes = nullptr;
+    size_t length = 0;
+    ~OwnedJsonBytes() {
+        free(bytes);
+    }
 };
 
 // LED3 hold until the HTTP response is finished (not TCP disconnect).
@@ -785,7 +798,7 @@ void WebConsole::clearCameraHeavyOp() {
     cameraHeavyTask = nullptr;
 }
 
-bool WebConsole::queueCameraHeavyOp(CameraHeavyOp op, const String &body, String *errorOut) {
+bool WebConsole::queueCameraHeavyOp(CameraHeavyOp op, const char *body, String *errorOut) {
     if (op == CameraHeavyNone) {
         if (errorOut != nullptr) {
             *errorOut = "bad op";
@@ -808,7 +821,7 @@ bool WebConsole::queueCameraHeavyOp(CameraHeavyOp op, const String &body, String
         cameraHeavyDone = false;
         cameraHeavyOp = CameraHeavyNone;
     }
-    const size_t bodyBytes = body.length() + 1;
+    const size_t bodyBytes = (body != nullptr ? strlen(body) : 0) + 1;
     char *copy = static_cast<char *>(
         heap_caps_malloc(bodyBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
     );
@@ -821,7 +834,10 @@ bool WebConsole::queueCameraHeavyOp(CameraHeavyOp op, const String &body, String
         }
         return false;
     }
-    memcpy(copy, body.c_str(), bodyBytes);
+    if (body != nullptr) {
+        memcpy(copy, body, bodyBytes - 1);
+    }
+    copy[bodyBytes - 1] = '\0';
     cameraHeavyBody = copy;
     cameraHeavyResult = nullptr;
     cameraHeavyOp = op;
@@ -866,28 +882,22 @@ void WebConsole::cameraHeavyWorkerTask(void *param) {
     char *body = self->cameraHeavyBody;
     self->cameraHeavyBody = nullptr;
     const CameraHeavyOp op = self->cameraHeavyOp;
-    String json;
+    PsramJsonBuffer json;
     if (self->cameraStore == nullptr) {
-        json = "{\"ok\":false,\"error\":\"Cameras unavailable\"}";
+        json += "{\"ok\":false,\"error\":\"Cameras unavailable\"}";
     } else if (op == CameraHeavyResolve) {
         json = self->cameraStore->testOnvifJson(body);
     } else if (op == CameraHeavyTestSnapshots) {
         json = self->cameraStore->testSnapshotsJson(body);
     } else {
-        json = "{\"ok\":false,\"error\":\"bad op\"}";
+        json += "{\"ok\":false,\"error\":\"bad op\"}";
     }
     if (body != nullptr) {
         free(body);
     }
-    const size_t resultBytes = json.length() + 1;
-    char *result = static_cast<char *>(
-        heap_caps_malloc(resultBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
-    );
-    if (result == nullptr) {
-        result = static_cast<char *>(ps_malloc(resultBytes));
-    }
-    if (result != nullptr) {
-        memcpy(result, json.c_str(), resultBytes);
+    char *result = nullptr;
+    if (json.ok()) {
+        result = json.detach(nullptr);
     }
     self->cameraHeavyResult = result;
     self->cameraHeavyRunning = false;
@@ -1006,14 +1016,18 @@ void WebConsole::broadcastDeviceUpsert(const uint8_t ieee[8]) {
         return;
     }
     DeviceTopicMap *deviceMap = settingsManager->deviceMap();
-    String deviceJson = deviceMap->entryJson(ieee, isDeviceOnline, lastDeviceRssi, appendDeviceTelemetry);
-    if (deviceJson.length() == 0) {
+    PsramJsonBuffer deviceJson = deviceMap->entryJson(ieee, isDeviceOnline, lastDeviceRssi, appendDeviceTelemetry);
+    if (!deviceJson.ok() || deviceJson.length() == 0) {
         return;
     }
-    String message = "{\"op\":\"upsert\",\"device\":";
-    message += deviceJson;
+    PsramJsonBuffer message;
+    message += "{\"op\":\"upsert\",\"device\":";
+    message += deviceJson.c_str();
     message += "}";
-    devicesSocket.textAll(message);
+    if (!message.ok()) {
+        return;
+    }
+    devicesSocket.textAll(message.c_str());
 }
 
 void WebConsole::notifyDeviceLiveChanged(const uint8_t ieee[8]) {
@@ -1300,7 +1314,7 @@ void WebConsole::sendConsoleWriteResult(AsyncWebServerRequest *request, ConsoleW
 }
 
 void WebConsole::handleAuthLoginPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -1357,11 +1371,9 @@ void WebConsole::handleAuthMeGet(AsyncWebServerRequest *request) {
     if (!requireUser(request, &user, false)) {
         return;
     }
-    String json;
+    PsramJsonBuffer json;
     userStore->appendUserPublicJson(json, user);
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, std::move(json));
 }
 
 void WebConsole::handleAuthTouchPost(AsyncWebServerRequest *request) {
@@ -1375,13 +1387,11 @@ void WebConsole::handleUsersGet(AsyncWebServerRequest *request) {
     if (!requireEditUsers(request, nullptr)) {
         return;
     }
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", userStore->listPublicJson());
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, userStore->listPublicJson());
 }
 
 void WebConsole::handleUsersPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -1410,7 +1420,7 @@ void WebConsole::handleUsersPost(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleUsersUpdatePost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -1435,10 +1445,7 @@ void WebConsole::handleConsolesGet(AsyncWebServerRequest *request) {
         request->send(500, "text/plain", "Consoles unavailable");
         return;
     }
-    AsyncWebServerResponse *response =
-        request->beginResponse(200, "application/json", consoleStore->listSummaryJson(userStore));
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, consoleStore->listSummaryJson(userStore));
 }
 
 void WebConsole::handleConsolesStoreGet(AsyncWebServerRequest *request) {
@@ -1449,14 +1456,11 @@ void WebConsole::handleConsolesStoreGet(AsyncWebServerRequest *request) {
         request->send(500, "text/plain", "Consoles unavailable");
         return;
     }
-    AsyncWebServerResponse *response =
-        request->beginResponse(200, "application/json", consoleStore->listFullJson());
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, consoleStore->listFullJson());
 }
 
 void WebConsole::handleConsolesRestorePost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -1467,13 +1471,12 @@ void WebConsole::handleConsolesRestorePost(AsyncWebServerRequest *request) {
         request->send(500, "text/plain", "Consoles unavailable");
         return;
     }
-    String trimmed = body;
-    trimmed.trim();
-    if (trimmed.length() == 0 || trimmed.charAt(0) != '[') {
+    body.trim();
+    if (body.length() == 0 || body.charAt(0) != '[') {
         request->send(400, "text/plain", "Need a consoles JSON array");
         return;
     }
-    if (!consoleStore->replaceAllFromJson(trimmed)) {
+    if (!consoleStore->replaceAllFromJson(body.c_str())) {
         request->send(400, "text/plain", "Need a valid consoles list");
         return;
     }
@@ -1490,14 +1493,11 @@ void WebConsole::handleConsolesMineGet(AsyncWebServerRequest *request) {
         request->send(500, "text/plain", "Consoles unavailable");
         return;
     }
-    AsyncWebServerResponse *response =
-        request->beginResponse(200, "application/json", consoleStore->mineJson(user));
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, consoleStore->mineJson(user));
 }
 
 void WebConsole::handleConsolesRunActionPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -1532,7 +1532,7 @@ void WebConsole::handleConsolesRunActionPost(AsyncWebServerRequest *request) {
 
 
 void WebConsole::handleConsolesPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -1558,10 +1558,7 @@ void WebConsole::handleConsolesPost(AsyncWebServerRequest *request) {
         return;
     }
     broadcastConsolesReload();
-    AsyncWebServerResponse *response =
-        request->beginResponse(200, "application/json", consoleStore->consoleFullJson(created));
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, consoleStore->consoleFullJson(created));
 }
 
 void WebConsole::handleConsoleGet(AsyncWebServerRequest *request) {
@@ -1588,14 +1585,11 @@ void WebConsole::handleConsoleGet(AsyncWebServerRequest *request) {
             return;
         }
     }
-    AsyncWebServerResponse *response =
-        request->beginResponse(200, "application/json", consoleStore->consoleFullJson(console));
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, consoleStore->consoleFullJson(console));
 }
 
 void WebConsole::handleConsolePut(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -1623,7 +1617,7 @@ void WebConsole::handleConsolePut(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleConsoleDelete(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -1685,14 +1679,11 @@ void WebConsole::handleAutomationsGet(AsyncWebServerRequest *request) {
         request->send(500, "text/plain", "Automations unavailable");
         return;
     }
-    AsyncWebServerResponse *response =
-        request->beginResponse(200, "application/json", automationStore->listSummaryJson());
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, automationStore->listSummaryJson());
 }
 
 void WebConsole::handleAutomationActivePost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -1726,14 +1717,11 @@ void WebConsole::handleAutomationsStoreGet(AsyncWebServerRequest *request) {
         request->send(500, "text/plain", "Automations unavailable");
         return;
     }
-    AsyncWebServerResponse *response =
-        request->beginResponse(200, "application/json", automationStore->listFullJson());
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, automationStore->listFullJson());
 }
 
 void WebConsole::handleAutomationsRestorePost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -1744,9 +1732,8 @@ void WebConsole::handleAutomationsRestorePost(AsyncWebServerRequest *request) {
         request->send(500, "text/plain", "Automations unavailable");
         return;
     }
-    String trimmed = body;
-    trimmed.trim();
-    if (trimmed.length() == 0 || trimmed.charAt(0) != '[') {
+    body.trim();
+    if (body.length() == 0 || body.charAt(0) != '[') {
         LOGGER.error("Automation import failed: body is empty or not a JSON array");
         request->send(400, "text/plain", "Need an automations JSON array");
         return;
@@ -1755,7 +1742,7 @@ void WebConsole::handleAutomationsRestorePost(AsyncWebServerRequest *request) {
     const bool mergeImport =
         request->hasParam("merge") && request->getParam("merge")->value() == "1";
     if (mergeImport) {
-        if (!automationStore->mergeAllFromJson(trimmed)) {
+        if (!automationStore->mergeAllFromJson(body.c_str())) {
             LOGGER.error("Automation import failed: list rejected");
             request->send(400, "text/plain", "Need a valid automations list");
             return;
@@ -1768,7 +1755,7 @@ void WebConsole::handleAutomationsRestorePost(AsyncWebServerRequest *request) {
         request->send(200, "text/plain", "Merged");
         return;
     }
-    if (!automationStore->replaceAllFromJson(trimmed)) {
+    if (!automationStore->replaceAllFromJson(body.c_str())) {
         LOGGER.error("Automation import failed: list rejected");
         request->send(400, "text/plain", "Need a valid automations list");
         return;
@@ -1782,7 +1769,7 @@ void WebConsole::handleAutomationsRestorePost(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleAutomationsPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -1813,13 +1800,7 @@ void WebConsole::handleAutomationsPost(AsyncWebServerRequest *request) {
         sendAutomationWriteResult(request, result);
         return;
     }
-    AsyncWebServerResponse *response = request->beginResponse(
-        200,
-        "application/json",
-        automationStore->automationFullJson(created, true)
-    );
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, automationStore->automationFullJson(created, true));
 }
 
 void WebConsole::handleAutomationGet(AsyncWebServerRequest *request) {
@@ -1839,17 +1820,11 @@ void WebConsole::handleAutomationGet(AsyncWebServerRequest *request) {
         request->send(404, "text/plain", "Automation not found");
         return;
     }
-    AsyncWebServerResponse *response = request->beginResponse(
-        200,
-        "application/json",
-        automationStore->automationFullJson(automation, true)
-    );
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, automationStore->automationFullJson(automation, true));
 }
 
 void WebConsole::handleAutomationPut(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -1884,7 +1859,7 @@ void WebConsole::handleAutomationPut(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleAutomationDelete(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -1962,14 +1937,7 @@ void WebConsole::handleCamerasGet(AsyncWebServerRequest *request) {
     if (user->isAdmin) {
         cameraStore->refreshAllStatus();
     }
-    String json = cameraStore->listJson(false);
-    if (json.length() == 0) {
-        request->send(507, "text/plain", "Out of memory");
-        return;
-    }
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, cameraStore->listJson(false));
 }
 
 void WebConsole::handleCamerasStoreGet(AsyncWebServerRequest *request) {
@@ -1980,18 +1948,11 @@ void WebConsole::handleCamerasStoreGet(AsyncWebServerRequest *request) {
         request->send(500, "text/plain", "Cameras unavailable");
         return;
     }
-    String json = cameraStore->listJson(true);
-    if (json.length() == 0) {
-        request->send(507, "text/plain", "Out of memory");
-        return;
-    }
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, cameraStore->listJson(true));
 }
 
 void WebConsole::handleCamerasRestorePost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2002,14 +1963,13 @@ void WebConsole::handleCamerasRestorePost(AsyncWebServerRequest *request) {
         request->send(500, "text/plain", "Cameras unavailable");
         return;
     }
-    String trimmed = body;
-    trimmed.trim();
-    if (trimmed.length() == 0 || trimmed.charAt(0) != '[') {
+    body.trim();
+    if (body.length() == 0 || body.charAt(0) != '[') {
         LOGGER.error("Camera import failed: body is empty or not a JSON array");
         request->send(400, "text/plain", "Need a cameras JSON array");
         return;
     }
-    const CameraWriteResult result = cameraStore->replaceAllFromJson(trimmed);
+    const CameraWriteResult result = cameraStore->replaceAllFromJson(body.c_str());
     if (result != CameraWriteOk) {
         LOGGER.error(String("Camera import failed: ") + CameraStore::writeResultText(result));
         sendCameraWriteResult(request, result);
@@ -2020,7 +1980,7 @@ void WebConsole::handleCamerasRestorePost(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleCamerasPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2037,13 +1997,7 @@ void WebConsole::handleCamerasPost(AsyncWebServerRequest *request) {
         sendCameraWriteResult(request, result);
         return;
     }
-    AsyncWebServerResponse *response = request->beginResponse(
-        200,
-        "application/json",
-        cameraStore->cameraFullJson(created, true)
-    );
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, cameraStore->cameraFullJson(created, true));
 }
 
 void WebConsole::handleCameraGet(AsyncWebServerRequest *request) {
@@ -2063,17 +2017,11 @@ void WebConsole::handleCameraGet(AsyncWebServerRequest *request) {
         request->send(404, "text/plain", "Camera not found");
         return;
     }
-    AsyncWebServerResponse *response = request->beginResponse(
-        200,
-        "application/json",
-        cameraStore->cameraFullJson(camera, true)
-    );
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, cameraStore->cameraFullJson(camera, true));
 }
 
 void WebConsole::handleCameraPut(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2100,7 +2048,7 @@ void WebConsole::handleCameraPut(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleCameraDelete(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2168,14 +2116,7 @@ void WebConsole::handleScenesGet(AsyncWebServerRequest *request) {
         request->send(500, "text/plain", "Scenes unavailable");
         return;
     }
-    String json = sceneStore->listJson();
-    if (json.length() == 0) {
-        request->send(507, "text/plain", "Out of memory");
-        return;
-    }
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, sceneStore->listJson());
 }
 
 void WebConsole::handleScenesStoreGet(AsyncWebServerRequest *request) {
@@ -2186,18 +2127,11 @@ void WebConsole::handleScenesStoreGet(AsyncWebServerRequest *request) {
         request->send(500, "text/plain", "Scenes unavailable");
         return;
     }
-    String json = sceneStore->exportJson();
-    if (json.length() == 0) {
-        request->send(507, "text/plain", "Out of memory");
-        return;
-    }
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, sceneStore->exportJson());
 }
 
 void WebConsole::handleScenesRestorePost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2208,9 +2142,8 @@ void WebConsole::handleScenesRestorePost(AsyncWebServerRequest *request) {
         request->send(500, "text/plain", "Scenes unavailable");
         return;
     }
-    String trimmed = body;
-    trimmed.trim();
-    if (trimmed.length() == 0 || trimmed.charAt(0) != '[') {
+    body.trim();
+    if (body.length() == 0 || body.charAt(0) != '[') {
         request->send(400, "text/plain", "Need a scenes JSON array");
         return;
     }
@@ -2220,7 +2153,7 @@ void WebConsole::handleScenesRestorePost(AsyncWebServerRequest *request) {
         int added = 0;
         int skipped = 0;
         const SceneWriteResult result =
-            sceneStore->importOnlyNewFromJson(trimmed.c_str(), &added, &skipped);
+            sceneStore->importOnlyNewFromJson(body.c_str(), &added, &skipped);
         if (result != SceneWriteOk && !(result == SceneWriteFull && added > 0)) {
             sendSceneWriteResult(request, result);
             return;
@@ -2238,7 +2171,7 @@ void WebConsole::handleScenesRestorePost(AsyncWebServerRequest *request) {
         request->send(response);
         return;
     }
-    const SceneWriteResult result = sceneStore->replaceAllFromJson(trimmed);
+    const SceneWriteResult result = sceneStore->replaceAllFromJson(body.c_str());
     if (result != SceneWriteOk) {
         sendSceneWriteResult(request, result);
         return;
@@ -2247,7 +2180,7 @@ void WebConsole::handleScenesRestorePost(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleScenesPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2264,14 +2197,7 @@ void WebConsole::handleScenesPost(AsyncWebServerRequest *request) {
         sendSceneWriteResult(request, result);
         return;
     }
-    String json = sceneStore->sceneFullJson(created);
-    if (json.length() == 0) {
-        request->send(507, "text/plain", "Out of memory");
-        return;
-    }
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, sceneStore->sceneFullJson(created));
 }
 
 void WebConsole::handleSceneGet(AsyncWebServerRequest *request) {
@@ -2297,18 +2223,11 @@ void WebConsole::handleSceneGet(AsyncWebServerRequest *request) {
         request->send(404, "text/plain", "Scene not found");
         return;
     }
-    String json = sceneStore->sceneFullJson(scene);
-    if (json.length() == 0) {
-        request->send(507, "text/plain", "Out of memory");
-        return;
-    }
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, sceneStore->sceneFullJson(scene));
 }
 
 void WebConsole::handleScenePut(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2328,7 +2247,7 @@ void WebConsole::handleScenePut(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleSceneDelete(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2371,7 +2290,8 @@ void WebConsole::handleSceneViewGet(AsyncWebServerRequest *request) {
         request->send(404, "text/plain", "Scene not found");
         return;
     }
-    String json = "{\"id\":\"";
+    PsramJsonBuffer json;
+    json += "{\"id\":\"";
     appendJsonEscaped(json, scene->id, SCENE_ID_BUF);
     json += "\",\"name\":\"";
     appendJsonEscaped(json, scene->name, SCENE_NAME_MAX);
@@ -2380,9 +2300,7 @@ void WebConsole::handleSceneViewGet(AsyncWebServerRequest *request) {
     json += "\",\"pins\":";
     json += scene->pinsJson != nullptr ? scene->pinsJson : "[]";
     json += "}";
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, std::move(json));
 }
 
 void WebConsole::handleSceneBakeGet(AsyncWebServerRequest *request) {
@@ -2408,7 +2326,7 @@ void WebConsole::handleSceneBakeGet(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleSceneBakePost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2480,23 +2398,22 @@ void WebConsole::handleCamerasDiscoverGet(AsyncWebServerRequest *request) {
         request->send(500, "text/plain", "Cameras unavailable");
         return;
     }
-    String json = "{\"discovering\":";
+    PsramJsonBuffer json;
+    json += "{\"discovering\":";
     json += cameraStore->isDiscovering() ? "true" : "false";
     json += ",\"cameras\":";
-    String camerasJson = cameraStore->discoveredJson();
-    if (camerasJson.length() == 0) {
-        json += "[]";
-    } else {
-        json += camerasJson;
+    PsramJsonBuffer camerasJson = cameraStore->discoveredJson();
+    if (!camerasJson.ok()) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
     }
+    json += camerasJson.length() == 0 ? "[]" : camerasJson.c_str();
     json += "}";
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, std::move(json));
 }
 
 void WebConsole::handleCamerasDiscoverStartPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2524,7 +2441,7 @@ void WebConsole::handleCamerasDiscoverStartPost(AsyncWebServerRequest *request) 
 }
 
 void WebConsole::handleCamerasTestPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2536,7 +2453,7 @@ void WebConsole::handleCamerasTestPost(AsyncWebServerRequest *request) {
         return;
     }
     String errorText;
-    if (!queueCameraHeavyOp(CameraHeavyResolve, body, &errorText)) {
+    if (!queueCameraHeavyOp(CameraHeavyResolve, body.c_str(), &errorText)) {
         request->send(503, "text/plain", errorText.length() > 0 ? errorText : "Camera operation busy");
         return;
     }
@@ -2544,7 +2461,7 @@ void WebConsole::handleCamerasTestPost(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleCamerasTestSnapshotsPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2556,7 +2473,7 @@ void WebConsole::handleCamerasTestSnapshotsPost(AsyncWebServerRequest *request) 
         return;
     }
     String errorText;
-    if (!queueCameraHeavyOp(CameraHeavyTestSnapshots, body, &errorText)) {
+    if (!queueCameraHeavyOp(CameraHeavyTestSnapshots, body.c_str(), &errorText)) {
         request->send(503, "text/plain", errorText.length() > 0 ? errorText : "Camera operation busy");
         return;
     }
@@ -2594,19 +2511,18 @@ void WebConsole::handleCamerasTestStatusGet(AsyncWebServerRequest *request) {
     const char *payload =
         result != nullptr ? result : "{\"ok\":false,\"error\":\"out of memory\",\"done\":true}";
     // Wrap/ensure done:true for the UI — result JSON already has ok/error/channels.
-    String wrapped = "{\"done\":true,\"result\":";
+    PsramJsonBuffer wrapped;
+    wrapped += "{\"done\":true,\"result\":";
     wrapped += payload;
     wrapped += "}";
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", wrapped);
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, std::move(wrapped));
     if (result != nullptr) {
         free(result);
     }
 }
 
 void WebConsole::handleCamerasDiscoverStopPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2622,7 +2538,7 @@ void WebConsole::handleCamerasDiscoverStopPost(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleCamerasDiscoverClearPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2638,7 +2554,7 @@ void WebConsole::handleCamerasDiscoverClearPost(AsyncWebServerRequest *request) 
 }
 
 void WebConsole::handleUsersDelete(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2682,7 +2598,7 @@ void WebConsole::handleWifiGet(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleWifiPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2756,7 +2672,7 @@ void WebConsole::handleMqttGet(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleMqttPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2788,7 +2704,7 @@ void WebConsole::handleEmailGet(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleEmailPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -2824,21 +2740,26 @@ void WebConsole::appendRequestBody(
         collector->maxBytes = maxBytes;
         if (total > maxBytes) {
             collector->overflow = true;
-        } else if (total > 0) {
-            collector->text.reserve(total);
+        } else if (total > 0 && !collector->text.reserve(total + 1)) {
+            collector->allocFailed = true;
         }
         request->_tempObject = collector;
     }
     HttpRequestBody *collector = static_cast<HttpRequestBody *>(request->_tempObject);
-    if (collector == nullptr || collector->overflow || data == nullptr || len == 0) {
+    if (collector == nullptr || collector->overflow || collector->allocFailed || data == nullptr || len == 0) {
         return;
     }
     if (collector->text.length() + len > collector->maxBytes) {
         collector->overflow = true;
-        collector->text = "";
+        collector->text = PsramJsonBuffer();
+        collector->text.requireExternalMemory();
         return;
     }
-    collector->text.concat(reinterpret_cast<const char *>(data), len);
+    if (!collector->text.appendBytes(data, len)) {
+        collector->allocFailed = true;
+        collector->text = PsramJsonBuffer();
+        collector->text.requireExternalMemory();
+    }
 }
 
 void WebConsole::discardRequestBody(AsyncWebServerRequest *request) {
@@ -2849,10 +2770,10 @@ void WebConsole::discardRequestBody(AsyncWebServerRequest *request) {
     request->_tempObject = nullptr;
 }
 
-bool WebConsole::takeRequestBody(AsyncWebServerRequest *request, String *bodyOut) {
+bool WebConsole::takeRequestBody(AsyncWebServerRequest *request, PsramJsonBuffer *bodyOut) {
     if (request == nullptr) {
         if (bodyOut != nullptr) {
-            *bodyOut = "";
+            bodyOut->clear();
         }
         return true;
     }
@@ -2860,7 +2781,7 @@ bool WebConsole::takeRequestBody(AsyncWebServerRequest *request, String *bodyOut
     request->_tempObject = nullptr;
     if (collector == nullptr) {
         if (bodyOut != nullptr) {
-            *bodyOut = "";
+            bodyOut->clear();
         }
         return true;
     }
@@ -2869,11 +2790,62 @@ bool WebConsole::takeRequestBody(AsyncWebServerRequest *request, String *bodyOut
         request->send(413, "text/plain", "Request body too large");
         return false;
     }
+    if (collector->allocFailed || !collector->text.ok()) {
+        delete collector;
+        request->send(507, "text/plain", "Out of memory");
+        return false;
+    }
     if (bodyOut != nullptr) {
-        *bodyOut = collector->text;
+        *bodyOut = std::move(collector->text);
     }
     delete collector;
     return true;
+}
+
+void WebConsole::sendJsonDocument(AsyncWebServerRequest *request, PsramJsonBuffer json) {
+    if (request == nullptr) {
+        return;
+    }
+    if (!json.ok()) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
+    }
+    const size_t length = json.length();
+    char *ownedBytes = json.detach(nullptr);
+    if (ownedBytes == nullptr) {
+        AsyncWebServerResponse *empty = request->beginResponse(200, "application/json", "");
+        if (empty != nullptr) {
+            empty->addHeader("Cache-Control", "no-store");
+            request->send(empty);
+            return;
+        }
+        request->send(507, "text/plain", "Out of memory");
+        return;
+    }
+    std::shared_ptr<OwnedJsonBytes> payload = std::make_shared<OwnedJsonBytes>();
+    payload->bytes = ownedBytes;
+    payload->length = length;
+    AsyncWebServerResponse *response = request->beginResponse(
+        "application/json",
+        length,
+        [payload](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
+            if (payload->bytes == nullptr || index >= payload->length) {
+                return 0;
+            }
+            size_t chunk = payload->length - index;
+            if (chunk > maxLen) {
+                chunk = maxLen;
+            }
+            memcpy(buffer, payload->bytes + index, chunk);
+            return chunk;
+        }
+    );
+    if (response == nullptr) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
+    }
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
 }
 
 void WebConsole::handleZigbeeGet(AsyncWebServerRequest *request) {
@@ -2893,7 +2865,7 @@ void WebConsole::handleZigbeeGet(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleZigbeePost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -3033,7 +3005,7 @@ void WebConsole::handleHardwareGet(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -3735,87 +3707,106 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
     if (!requireAdmin(request, &user)) {
         return;
     }
-    String camerasJson = "[]";
+    PsramJsonBuffer camerasJson;
     if (cameraStore != nullptr) {
         camerasJson = cameraStore->listJson(true);
-        if (camerasJson.length() == 0) {
-            request->send(507, "text/plain", "Out of memory");
-            return;
-        }
+    } else {
+        camerasJson += "[]";
     }
-    String scenesJson = "[]";
+    PsramJsonBuffer scenesJson;
     if (sceneStore != nullptr) {
         scenesJson = sceneStore->exportJson();
-        if (scenesJson.length() == 0) {
-            request->send(507, "text/plain", "Out of memory");
-            return;
-        }
+    } else {
+        scenesJson += "[]";
+    }
+    PsramJsonBuffer devicesJson = settingsManager->deviceMap()->listStoreJson();
+    PsramJsonBuffer usersJson = userStore->listExportJson();
+    PsramJsonBuffer consolesJson;
+    if (consoleStore != nullptr) {
+        consolesJson = consoleStore->listFullJson();
+    } else {
+        consolesJson += "[]";
+    }
+    PsramJsonBuffer automationsJson;
+    if (automationStore != nullptr) {
+        automationsJson = automationStore->listFullJson();
+    } else {
+        automationsJson += "[]";
+    }
+    if (!camerasJson.ok() || !scenesJson.ok() || !devicesJson.ok() || !usersJson.ok()
+        || !consolesJson.ok() || !automationsJson.ok()) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
     }
     GlobalSettings *settings = settingsManager->getSettings();
-    AsyncResponseStream *response = request->beginResponseStream("application/json");
-    response->addHeader("Cache-Control", "no-store");
-    response->print("{\"version\":\"");
-    response->print(FIRMWARE_VERSION);
-    response->print("\",\"mqtt\":{");
+    PsramJsonBuffer json;
+    auto appendNumber = [](PsramJsonBuffer &out, unsigned long value) {
+        char digits[16];
+        snprintf(digits, sizeof(digits), "%lu", value);
+        out += digits;
+    };
+    json += "{\"version\":\"";
+    json += FIRMWARE_VERSION;
+    json += "\",\"mqtt\":{";
     String mqttSection;
     appendMqttSettingsJson(mqttSection);
-    response->print(mqttSection);
-    response->print("},\"email\":{");
+    json += mqttSection;
+    json += "},\"email\":{";
     String emailSection;
     appendEmailSettingsJson(emailSection, true);
-    response->print(emailSection);
-    response->print("},\"zigbee\":{\"channel\":");
-    response->print((unsigned)settings->zigbee.channel);
-    response->print(",\"permitJoinOnBootSec\":");
-    response->print((unsigned)settings->zigbee.permitJoinOnBootSec);
-    response->print("},\"hardware\":{\"spiSpeedHz\":");
-    response->print((unsigned long)settingsManager->spiSpeedHz());
-    response->print(",\"rfUpdateSpiSpeedHz\":");
-    response->print((unsigned long)settingsManager->rfUpdateSpiSpeedHz());
-    response->print(",\"blueLedBrightness\":");
-    response->print((unsigned)settingsManager->blueLedBrightness());
-    response->print(",\"greenLedBrightness\":");
-    response->print((unsigned)settingsManager->greenLedBrightness());
-    response->print(",\"useQueueForBaseDeviceCommand\":");
-    response->print(settingsManager->useQueueForBaseDeviceCommand() ? "true" : "false");
-    response->print(",\"historyMaxStoreDays\":");
-    response->print((unsigned)settingsManager->historyMaxStoreDays());
-    response->print(",\"historySweepIntervalMin\":");
-    response->print((unsigned)settingsManager->historySweepIntervalMin());
-    response->print(",\"historyMaxSizeKiB\":");
-    response->print((unsigned)settingsManager->historyMaxSizeKiB());
-    response->print(",\"historyEntrySize\":");
-    response->print((unsigned)settingsManager->historyEntrySize());
-    response->print(",\"historySdBackupIntervalMin\":");
-    response->print((unsigned)settingsManager->historySdBackupIntervalMin());
+    json += emailSection;
+    json += "},\"zigbee\":{\"channel\":";
+    appendNumber(json, settings->zigbee.channel);
+    json += ",\"permitJoinOnBootSec\":";
+    appendNumber(json, settings->zigbee.permitJoinOnBootSec);
+    json += "},\"hardware\":{\"spiSpeedHz\":";
+    appendNumber(json, settingsManager->spiSpeedHz());
+    json += ",\"rfUpdateSpiSpeedHz\":";
+    appendNumber(json, settingsManager->rfUpdateSpiSpeedHz());
+    json += ",\"blueLedBrightness\":";
+    appendNumber(json, settingsManager->blueLedBrightness());
+    json += ",\"greenLedBrightness\":";
+    appendNumber(json, settingsManager->greenLedBrightness());
+    json += ",\"useQueueForBaseDeviceCommand\":";
+    json += settingsManager->useQueueForBaseDeviceCommand() ? "true" : "false";
+    json += ",\"historyMaxStoreDays\":";
+    appendNumber(json, settingsManager->historyMaxStoreDays());
+    json += ",\"historySweepIntervalMin\":";
+    appendNumber(json, settingsManager->historySweepIntervalMin());
+    json += ",\"historyMaxSizeKiB\":";
+    appendNumber(json, settingsManager->historyMaxSizeKiB());
+    json += ",\"historyEntrySize\":";
+    appendNumber(json, settingsManager->historyEntrySize());
+    json += ",\"historySdBackupIntervalMin\":";
+    appendNumber(json, settingsManager->historySdBackupIntervalMin());
 #if !defined(BOARD_HOST_P4)
-    response->print(",\"historyPersistFlash\":");
-    response->print(settingsManager->historyPersistFlash() ? "true" : "false");
-    response->print(",\"historyFlashBackupIntervalMin\":");
-    response->print((unsigned)settingsManager->historyFlashBackupIntervalMin());
+    json += ",\"historyPersistFlash\":";
+    json += settingsManager->historyPersistFlash() ? "true" : "false";
+    json += ",\"historyFlashBackupIntervalMin\":";
+    appendNumber(json, settingsManager->historyFlashBackupIntervalMin());
 #endif
-    response->print(",\"lowMemoryThresholdKb\":");
-    response->print((unsigned)settingsManager->lowMemoryThresholdKb());
-    response->print("},\"ui\":{\"theme\":\"");
-    response->print(UserStore::themeJsonId(user->theme));
-    response->print("\"},\"devices\":");
-    response->print(settingsManager->deviceMap()->listStoreJson());
-    response->print(",\"users\":");
-    response->print(userStore->listExportJson());
-    response->print(",\"consoles\":");
-    response->print(consoleStore != nullptr ? consoleStore->listFullJson() : "[]");
-    response->print(",\"automations\":");
-    response->print(automationStore != nullptr ? automationStore->listFullJson() : "[]");
-    response->print(",\"cameras\":");
-    response->print(camerasJson);
-    response->print(",\"scenes\":");
-    response->print(scenesJson);
-    response->print('}');
-    request->send(response);
+    json += ",\"lowMemoryThresholdKb\":";
+    appendNumber(json, settingsManager->lowMemoryThresholdKb());
+    json += "},\"ui\":{\"theme\":\"";
+    json += UserStore::themeJsonId(user->theme);
+    json += "\"},\"devices\":";
+    json += devicesJson.c_str();
+    json += ",\"users\":";
+    json += usersJson.c_str();
+    json += ",\"consoles\":";
+    json += consolesJson.c_str();
+    json += ",\"automations\":";
+    json += automationsJson.c_str();
+    json += ",\"cameras\":";
+    json += camerasJson.c_str();
+    json += ",\"scenes\":";
+    json += scenesJson.c_str();
+    json += "}";
+    sendJsonDocument(request, std::move(json));
 }
 
 void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -3828,24 +3819,29 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
     String emailJson;
     String zigbeeJson;
     String hardwareJson;
-    String devicesJson;
+    PsramJsonBuffer devicesJson;
     String uiJson;
     const bool haveMqtt = extractJsonKeyedSlice(body.c_str(), "mqtt", '{', mqttJson);
     const bool haveEmail = extractJsonKeyedSlice(body.c_str(), "email", '{', emailJson);
     const bool haveZigbee = extractJsonKeyedSlice(body.c_str(), "zigbee", '{', zigbeeJson);
     const bool haveHardware = extractJsonKeyedSlice(body.c_str(), "hardware", '{', hardwareJson);
     const bool haveDevices = extractJsonKeyedSlice(body.c_str(), "devices", '[', devicesJson);
-    String usersJson;
-    String consolesJson;
-    String automationsJson;
-    String camerasJson;
-    String scenesJson;
+    PsramJsonBuffer usersJson;
+    PsramJsonBuffer consolesJson;
+    PsramJsonBuffer automationsJson;
+    PsramJsonBuffer camerasJson;
+    PsramJsonBuffer scenesJson;
     const bool haveUi = extractJsonKeyedSlice(body.c_str(), "ui", '{', uiJson);
     const bool haveUsers = extractJsonKeyedSlice(body.c_str(), "users", '[', usersJson);
     const bool haveConsoles = extractJsonKeyedSlice(body.c_str(), "consoles", '[', consolesJson);
     const bool haveAutomations = extractJsonKeyedSlice(body.c_str(), "automations", '[', automationsJson);
     const bool haveCameras = extractJsonKeyedSlice(body.c_str(), "cameras", '[', camerasJson);
     const bool haveScenes = extractJsonKeyedSlice(body.c_str(), "scenes", '[', scenesJson);
+    if (!devicesJson.ok() || !usersJson.ok() || !consolesJson.ok() || !automationsJson.ok()
+        || !camerasJson.ok() || !scenesJson.ok()) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
+    }
     if (haveMqtt && !applyMqttJson(mqttJson.c_str(), &errorText)) {
         request->send(400, "text/plain", errorText);
         return;
@@ -3869,7 +3865,7 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
     int removedUserCount = 0;
     if (haveUsers
         && !userStore->replaceFromExportJson(
-            usersJson,
+            usersJson.c_str(),
             removedUserNames,
             &removedUserCount,
             USER_STORE_MAX
@@ -3883,13 +3879,13 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
         return;
     }
     if (haveConsoles) {
-        if (consoleStore == nullptr || !consoleStore->replaceAllFromJson(consolesJson)) {
+        if (consoleStore == nullptr || !consoleStore->replaceAllFromJson(consolesJson.c_str())) {
             request->send(400, "text/plain", "Need a valid consoles list");
             return;
         }
     }
     if (haveAutomations) {
-        if (automationStore == nullptr || !automationStore->replaceAllFromJson(automationsJson)) {
+        if (automationStore == nullptr || !automationStore->replaceAllFromJson(automationsJson.c_str())) {
             LOGGER.error("Settings restore failed: automations list rejected");
             request->send(400, "text/plain", "Need a valid automations list");
             return;
@@ -3900,7 +3896,7 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
             request->send(500, "text/plain", "Cameras unavailable");
             return;
         }
-        const CameraWriteResult camerasResult = cameraStore->replaceAllFromJson(camerasJson);
+        const CameraWriteResult camerasResult = cameraStore->replaceAllFromJson(camerasJson.c_str());
         if (camerasResult != CameraWriteOk) {
             LOGGER.error(
                 String("Settings restore failed: cameras list rejected (")
@@ -3915,7 +3911,7 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
             request->send(500, "text/plain", "Scenes unavailable");
             return;
         }
-        const SceneWriteResult scenesResult = sceneStore->replaceAllFromJson(scenesJson);
+        const SceneWriteResult scenesResult = sceneStore->replaceAllFromJson(scenesJson.c_str());
         if (scenesResult != SceneWriteOk) {
             LOGGER.error(
                 String("Settings restore failed: scenes list rejected (")
@@ -3949,7 +3945,7 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
                 copied++;
             }
         }
-        deviceMap->replaceFromJson(devicesJson);
+        deviceMap->replaceFromJson(devicesJson.c_str());
         int removedCount = 0;
         uint8_t (*removedIeees)[8] = nullptr;
         if (previousCount > 0 && previousIeees != nullptr) {
@@ -4036,7 +4032,7 @@ void WebConsole::handleThemeGet(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleThemePost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -4071,10 +4067,7 @@ void WebConsole::handleDevicesGet(AsyncWebServerRequest *request) {
         return;
     }
     DeviceTopicMap *deviceMap = settingsManager->deviceMap();
-    String json = deviceMap->listJson(isDeviceOnline, lastDeviceRssi, appendDeviceTelemetry);
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, deviceMap->listJson(isDeviceOnline, lastDeviceRssi, appendDeviceTelemetry));
 }
 
 void WebConsole::handleDeviceTypesGet(AsyncWebServerRequest *request) {
@@ -4107,7 +4100,7 @@ void WebConsole::handleDeviceTypesGet(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -4360,7 +4353,7 @@ void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleDevicesDelete(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -4535,7 +4528,7 @@ void WebConsole::handleDevicesConfigureGet(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleDevicesConfigurePost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -4663,7 +4656,7 @@ void WebConsole::handleDevicesConfigurePost(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleDevicesCommandPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -4719,14 +4712,11 @@ void WebConsole::handleDevicesFoundGet(AsyncWebServerRequest *request) {
         request->send(200, "application/json", "[]");
         return;
     }
-    String json = foundDevices->listJson(settingsManager->deviceMap());
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    sendJsonDocument(request, foundDevices->listJson(settingsManager->deviceMap()));
 }
 
 void WebConsole::handleDevicesSearchPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -4751,10 +4741,13 @@ void WebConsole::handleDevicesStoreGet(AsyncWebServerRequest *request) {
     if (!requireAdmin(request, nullptr)) {
         return;
     }
-    String json = devicesFileJson != nullptr ? devicesFileJson() : String("[]");
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Cache-Control", "no-store");
-    request->send(response);
+    PsramJsonBuffer json;
+    if (devicesFileJson != nullptr) {
+        json = devicesFileJson();
+    } else {
+        json += "[]";
+    }
+    sendJsonDocument(request, std::move(json));
 }
 
 void WebConsole::handleGatewayStatusGet(AsyncWebServerRequest *request) {
@@ -4768,7 +4761,7 @@ void WebConsole::handleGatewayStatusGet(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleDevicesSearchStopPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -4787,7 +4780,7 @@ void WebConsole::handleDevicesSearchStopPost(AsyncWebServerRequest *request) {
 }
 
 void WebConsole::handleDevicesRebindPost(AsyncWebServerRequest *request) {
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         return;
     }
@@ -4928,7 +4921,7 @@ void WebConsole::handleSlaveResetPausePost(AsyncWebServerRequest *request) {
     if (!requireAdmin(request, nullptr)) {
         return;
     }
-    String body;
+    PsramJsonBuffer body;
     if (!takeRequestBody(request, &body)) {
         request->send(400, "text/plain", "Bad body");
         return;

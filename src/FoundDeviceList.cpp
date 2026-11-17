@@ -225,11 +225,14 @@ void FoundDeviceList::noteIdentity(
     slot->used = true;
 }
 
-String FoundDeviceList::listJson(DeviceTopicMap *formatter) {
+PsramJsonBuffer FoundDeviceList::listJson(DeviceTopicMap *formatter) {
     if (!joinsAccepted) {
-        return String("[]");
+        PsramJsonBuffer empty;
+        empty += "[]";
+        return empty;
     }
-    String json = "[";
+    PsramJsonBuffer json;
+    json += "[";
     bool first = true;
     for (const FoundDevice *device = foundHead; device != nullptr; device = device->next) {
         if (!device->used) {

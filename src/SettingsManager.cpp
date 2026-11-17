@@ -757,7 +757,7 @@ void SettingsManager::loadDeviceFile() {
     LOGGER.info("Host device list loaded " + String(topicMap.usedCount()) + " device(s)");
 }
 
-String SettingsManager::devicesJsonFile() {
+PsramJsonBuffer SettingsManager::devicesJsonFile() {
     return topicMap.listJson();
 }
 

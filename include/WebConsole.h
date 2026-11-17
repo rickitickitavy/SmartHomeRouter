@@ -25,7 +25,7 @@ public:
     using HardwareApplyFn = void (*)(uint32_t spiSpeedHz, uint8_t blueLedBrightness, uint8_t greenLedBrightness);
     using DeviceOnlineFn = bool (*)(const uint8_t ieee[8]);
     using DeviceRssiFn = bool (*)(const uint8_t ieee[8], int8_t *rssiDbm);
-    using DevicesFileFn = String (*)();
+    using DevicesFileFn = PsramJsonBuffer (*)();
     using GatewayStatusFn = String (*)();
     using DeviceTelemetryFn = void (*)(const uint8_t ieee[8], PsramJsonBuffer &json);
     using DeviceCommandFn = int (*)(const char *ieeeText, const char *payload, int channel);
@@ -218,7 +218,8 @@ private:
         CameraHeavyResolve,
         CameraHeavyTestSnapshots
     };
-    bool queueCameraHeavyOp(CameraHeavyOp op, const String &body, String *errorOut);
+    bool queueCameraHeavyOp(CameraHeavyOp op, const char *body, String *errorOut);
+    void sendJsonDocument(AsyncWebServerRequest *request, PsramJsonBuffer json);
     void clearCameraHeavyOp();
     static void cameraHeavyWorkerTask(void *param);
     CameraHeavyOp cameraHeavyOp = CameraHeavyNone;
@@ -261,7 +262,7 @@ private:
         size_t total,
         size_t maxBytes
     );
-    bool takeRequestBody(AsyncWebServerRequest *request, String *bodyOut);
+    bool takeRequestBody(AsyncWebServerRequest *request, PsramJsonBuffer *bodyOut);
     void discardRequestBody(AsyncWebServerRequest *request);
     void handleLogGet(AsyncWebServerRequest *request);
     void handleLogDownloadGet(AsyncWebServerRequest *request);
