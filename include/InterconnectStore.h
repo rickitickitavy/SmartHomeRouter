@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Defines.h"
+#include "DeviceTopicMap.h"
 #include "PsramJsonBuffer.h"
 #include <Arduino.h>
 #include <stddef.h>
@@ -103,6 +104,9 @@ public:
 
     uint32_t allocateRouterId() const;
     uint8_t allocateZigbeeChannel(uint8_t mainChannel) const;
+
+    /** Recount bound Zigbee devices per paired Repeater router id. */
+    void refreshDeviceCounts(DeviceTopicMap *topicMap);
 
     /** Operator/status JSON without secrets. */
     PsramJsonBuffer statusJson(uint32_t pairingWaitRemainingMs) const;

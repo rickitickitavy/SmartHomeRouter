@@ -1357,11 +1357,18 @@ static String hostGatewayStatusJson() {
         json += String((unsigned long)((fsScene + 512) / 1024));
     }
     json += ",\"interconnect\":";
-    if (interconnectStore != nullptr) {
-        const uint32_t waitMs = routerInterconnect != nullptr
-            ? routerInterconnect->pairingWaitRemainingMs()
-            : 0;
-        PsramJsonBuffer interconnectJson = interconnectStore->statusJson(waitMs);
+    if (interconnectStore != nullptr && topicMap != nullptr) {
+        interconnectStore->refreshDeviceCounts(topicMap);
+    }
+    if (routerInterconnect != nullptr) {
+        PsramJsonBuffer interconnectJson = routerInterconnect->statusJson();
+        if (interconnectJson.ok()) {
+            json += interconnectJson.c_str();
+        } else {
+            json += "null";
+        }
+    } else if (interconnectStore != nullptr) {
+        PsramJsonBuffer interconnectJson = interconnectStore->statusJson(0);
         if (interconnectJson.ok()) {
             json += interconnectJson.c_str();
         } else {
@@ -2368,6 +2375,11 @@ static void setupHost() {
         LOGGER.info("Device list skipped on Repeater");
     }
     sdCardStorage.beginBootProbe();
+    if (sdCardStorage.usable() && settingsManager->historyPersistFlash()) {
+        settingsManager->setHistoryPersistFlash(false);
+        settingsManager->saveMain(false);
+        LOGGER.info("History flash persist forced off because SD card is present");
+    }
     if (loadOperatorFeatureStores) {
         if (!historyStore.begin(
                 settingsManager->historyMaxSizeKiB(),
@@ -2618,6 +2630,7 @@ static void setupHost() {
         webConsole->setHistoryStore(&historyStore);
         ZIGBEE_SPI_PROXY.setHistoryStore(&historyStore);
     }
+    webConsole->setSdCardStorage(&sdCardStorage);
     webConsole->setRouterInterconnect(routerInterconnect);
     routerInterconnect->setLiveChangedHandler([]() {
         if (webConsole != nullptr) {

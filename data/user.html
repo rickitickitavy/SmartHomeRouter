@@ -1647,6 +1647,20 @@
                 return;
             }
             group.hidden = false;
+            var queueUsed = interconnect.queueUsed != null ? Number(interconnect.queueUsed) : 0;
+            var queueDepth = interconnect.queueDepth != null ? Number(interconnect.queueDepth) : 1024;
+            if (isNaN(queueUsed)) {
+                queueUsed = 0;
+            }
+            if (isNaN(queueDepth) || queueDepth <= 0) {
+                queueDepth = 1024;
+            }
+            appendInterconnectStatusRow(
+                host,
+                "Queue",
+                String(queueUsed) + " / " + String(queueDepth),
+                null
+            );
             var role = interconnect.role || "Main";
             if (role === "Repeater") {
                 var localName = interconnect.routerName || "Repeater";
@@ -1676,6 +1690,10 @@
                 var peer = peers[peerIndex] || {};
                 var peerLabel = (peer.name || "Router")
                     + (peer.ip ? " (" + peer.ip + ")" : "");
+                var peerVersion = peer.hostVersion ? String(peer.hostVersion) : "";
+                if (peerVersion) {
+                    peerLabel += " · " + peerVersion;
+                }
                 appendInterconnectStatusRow(host, peerLabel, null, !!peer.online);
             }
         }
@@ -1747,7 +1765,7 @@
             appendStatusGroup(stack, "General", [
                 ["Online time", "statusOnlineTime"],
                 ["Master", "statusMasterFirmwareVersion"],
-                ["Slave", "statusSlaveFirmwareVersion"]
+                ["RF firmware", "statusSlaveFirmwareVersion"]
             ]);
             appendStatusGroup(stack, "Interconnection", [], "statusInterconnectGroup");
             var interconnectGroup = stack.querySelector("#statusInterconnectGroup");
@@ -1765,13 +1783,13 @@
                 ["Host CPU0", "statusHostCpu0"],
                 ["Host CPU1", "statusHostCpu1"]
             ]);
-            appendStatusGroup(stack, "Historical storage", [
+            appendStatusGroup(stack, "Internal database", [
                 ["Entries", "statusHistoryEntries"],
                 ["Pages", "statusHistoryPages"],
                 ["PSRAM usage", "statusHistoryPsram"],
-                ["Values stored", "statusHistoryValues"],
+                ["rows stored", "statusHistoryValues"],
                 ["time before save", "statusHistoryTimeBeforeSave", "statusHistorySaveRow"],
-                ["on-SD history size", "statusHistorySdSize", "statusHistorySdSizeRow"],
+                ["on-SD size", "statusHistorySdSize", "statusHistorySdSizeRow"],
                 ["On-flash history size", "statusHistoryFlashSize", "statusHistoryFlashSizeRow"]
             ], "statusHistoryGroup");
             var historyGroupBuilt = stack.querySelector("#statusHistoryGroup");

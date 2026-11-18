@@ -440,6 +440,32 @@ uint8_t InterconnectStore::allocateZigbeeChannel(uint8_t mainChannel) const {
     return 0;
 }
 
+void InterconnectStore::refreshDeviceCounts(DeviceTopicMap *topicMap) {
+    for (int i = 0; i < INTERCONNECT_MAX_REPEATERS; i++) {
+        if (!peers[i].used) {
+            continue;
+        }
+        peers[i].deviceCount = 0;
+    }
+    if (topicMap == nullptr) {
+        return;
+    }
+    for (DeviceTopicEntry *entry = topicMap->first();
+         entry != nullptr;
+         entry = DeviceTopicMap::nextEntry(entry)) {
+        if (entry->routerId == 0) {
+            continue;
+        }
+        InterconnectPeer *peer = findByRouterId(entry->routerId);
+        if (peer == nullptr) {
+            continue;
+        }
+        if (peer->deviceCount < 0xFFFFu) {
+            peer->deviceCount = (uint16_t)(peer->deviceCount + 1u);
+        }
+    }
+}
+
 PsramJsonBuffer InterconnectStore::statusJson(uint32_t pairingWaitRemainingMs) const {
     PsramJsonBuffer json;
     json += "{\"routerName\":\"";
