@@ -33,6 +33,14 @@
             } else {
                 stopLogPolling();
             }
+            if (name == "interconnect") {
+                loadInterconnect();
+                startInterconnectLive();
+            } else {
+                stopInterconnectPairWaitPoll();
+                stopInterconnectRePairPoll();
+                stopInterconnectLive();
+            }
             if (name == "status") {
                 startStatusPolling();
             } else {
@@ -42,11 +50,15 @@
                 showNetworkTab("wifi");
             }
             if (name == "devices") {
-                ensureDeviceTypeCatalog();
-                startDevicesLive();
+                if (!isInterconnectRepeater()) {
+                    ensureDeviceTypeCatalog();
+                    startDevicesLive();
+                }
             } else if (name == "place") {
-                startDevicesLive();
-                loadPlaceConsoles();
+                if (!isInterconnectRepeater()) {
+                    startDevicesLive();
+                    loadPlaceConsoles();
+                }
             } else {
                 stopDevicesLive();
                 var searchDialog = document.getElementById("searchDialog");
@@ -54,21 +66,21 @@
                     closeSearchDialog(true);
                 }
             }
-            if (name == "security") {
+            if (name == "security" && !isInterconnectRepeater()) {
                 loadUsers();
             }
-            if (name == "consoles") {
+            if (name == "consoles" && !isInterconnectRepeater()) {
                 loadConsoles();
             }
-            if (name == "automation") {
+            if (name == "automation" && !isInterconnectRepeater()) {
                 startAutomationsLive();
             } else {
                 stopAutomationsLive();
             }
-            if (name == "cameras") {
+            if (name == "cameras" && !isInterconnectRepeater()) {
                 loadCameras();
             }
-            if (name == "scenes") {
+            if (name == "scenes" && !isInterconnectRepeater()) {
                 loadScenes();
             }
         }
@@ -131,10 +143,10 @@
             if (name == "wifi") {
                 loadWifi();
             }
-            if (name == "mqtt") {
+            if (name == "mqtt" && !isInterconnectRepeater()) {
                 loadMqtt();
             }
-            if (name == "email") {
+            if (name == "email" && !isInterconnectRepeater()) {
                 loadEmail();
             }
             if (name == "zigbee") {
@@ -499,6 +511,98 @@
                 "statusEmailQueue",
                 payload && payload.emailQueue != null ? String(payload.emailQueue) : "—"
             );
+            applyInterconnectStatusWidget(payload && payload.interconnect);
+            if (payload && payload.interconnect) {
+                rememberInterconnectPeers(payload.interconnect.peers);
+            }
+            var isRepeaterRole = !!(
+                payload
+                && payload.interconnect
+                && payload.interconnect.role === "Repeater"
+            );
+            var emailGroup = document.getElementById("statusEmailGroup");
+            if (emailGroup) {
+                emailGroup.hidden = isRepeaterRole;
+            }
+            var mqttGroup = document.getElementById("statusMqttGroup");
+            if (mqttGroup) {
+                mqttGroup.hidden = isRepeaterRole;
+            }
+            var historyGroup = document.getElementById("statusHistoryGroup");
+            if (historyGroup) {
+                historyGroup.hidden = isRepeaterRole;
+            }
+        }
+
+        function appendInterconnectStatusRow(host, labelText, valueText, online) {
+            if (!host) {
+                return;
+            }
+            var row = document.createElement("div");
+            row.className = "status-row";
+            var label = document.createElement("span");
+            label.className = "status-row-label";
+            label.textContent = labelText;
+            row.appendChild(label);
+            var value = document.createElement("p");
+            value.className = "status-value";
+            if (online === true || online === false) {
+                value.className = "status-value status-value-with-dot";
+                var dot = document.createElement("span");
+                dot.className = online
+                    ? "device-online-dot is-online"
+                    : "device-online-dot is-offline";
+                value.appendChild(dot);
+            } else {
+                value.textContent = valueText != null && valueText !== "" ? valueText : "—";
+            }
+            row.appendChild(value);
+            host.appendChild(row);
+        }
+
+        function applyInterconnectStatusWidget(interconnect) {
+            var group = document.getElementById("statusInterconnectGroup");
+            var host = document.getElementById("statusInterconnectRows");
+            if (!group || !host) {
+                return;
+            }
+            host.innerHTML = "";
+            if (!interconnect) {
+                group.hidden = true;
+                return;
+            }
+            group.hidden = false;
+            var role = interconnect.role || "Main";
+            if (role === "Repeater") {
+                var localName = interconnect.routerName || "Repeater";
+                appendInterconnectStatusRow(
+                    host,
+                    "This router",
+                    localName + " (Repeater)",
+                    null
+                );
+                var main = interconnect.main;
+                if (main) {
+                    var mainLabel = (main.name || "Main")
+                        + (main.ip ? " (" + main.ip + ")" : "");
+                    appendInterconnectStatusRow(host, mainLabel, null, !!main.online);
+                } else {
+                    appendInterconnectStatusRow(host, "Main", "Not paired", null);
+                }
+                return;
+            }
+            var peers = interconnect.peers || [];
+            if (!peers.length) {
+                appendInterconnectStatusRow(host, "Paired routers", "None", null);
+                return;
+            }
+            var peerIndex;
+            for (peerIndex = 0; peerIndex < peers.length; peerIndex++) {
+                var peer = peers[peerIndex] || {};
+                var peerLabel = (peer.name || "Router")
+                    + (peer.ip ? " (" + peer.ip + ")" : "");
+                appendInterconnectStatusRow(host, peerLabel, null, !!peer.online);
+            }
         }
 
         function formatElapsedHhMmSs(ageSec) {
@@ -639,17 +743,26 @@
                 typeof consolesLiveSocket !== "undefined" ? consolesLiveSocket : null,
                 typeof consolesLiveReconnectTimer !== "undefined" ? consolesLiveReconnectTimer : null
             );
+            var interconnectState = wantedLiveSocketState(
+                typeof interconnectLiveWanted !== "undefined" && interconnectLiveWanted,
+                typeof interconnectLiveSocket !== "undefined" ? interconnectLiveSocket : null,
+                typeof interconnectLiveReconnectTimer !== "undefined"
+                    ? interconnectLiveReconnectTimer
+                    : null
+            );
             var anyConnecting = devicesState === "connecting"
-                || consolesState === "connecting";
+                || consolesState === "connecting"
+                || interconnectState === "connecting";
             var anyDown = httpDown
                 || devicesState === "down"
-                || consolesState === "down";
+                || consolesState === "down"
+                || interconnectState === "down";
             if (!anyDown && !anyConnecting) {
                 hideConnectionOverlay();
                 return;
             }
             if (anyConnecting || (httpDown && navigator.onLine !== false && devicesState !== "down"
-                && consolesState !== "down")) {
+                && consolesState !== "down" && interconnectState !== "down")) {
                 if (connectionOverlayGraceTimer != null) {
                     window.clearTimeout(connectionOverlayGraceTimer);
                     connectionOverlayGraceTimer = null;
@@ -784,6 +897,7 @@
             setHidden(document.querySelector('.sidebar-btn[data-section="network"]'), !admin);
             setHidden(document.querySelector('.sidebar-btn[data-section="automation"]'), !admin);
             setHidden(document.querySelector('.sidebar-btn[data-section="cameras"]'), !admin);
+            setHidden(document.querySelector('.sidebar-btn[data-section="interconnect"]'), !admin);
             setHidden(document.querySelector('.system-tab-btn[data-tab="update"]'), !admin);
             setHidden(document.querySelector('.system-tab-btn[data-tab="hardware"]'), !admin);
             setHidden(document.querySelector('.sidebar-btn[data-section="security"]'), !canEditUsers);
@@ -848,6 +962,8 @@
             stopLogPolling();
             stopDevicesLive();
             stopConsolesLive();
+            stopInterconnectLive();
+            stopInterconnectRePairPoll();
             focusLoginDefaultField();
         }
 
@@ -877,6 +993,7 @@
             setHidden(document.getElementById("loginOverlay"), true);
             setHidden(document.getElementById("appShell"), false);
             applyChromeForRoles();
+            refreshInterconnectRoleChrome();
             applyThemeToDocument(user && user.theme);
             var accountBtn = document.getElementById("sidebarAccountBtn");
             var accountTitle = document.getElementById("accountSectionTitle");
@@ -2677,6 +2794,16 @@
                 return;
             }
             var persistHint = document.getElementById("historyPersistFlashHint");
+            if (isInterconnectRepeater()) {
+                persistField.hidden = true;
+                if (persistHint) {
+                    persistHint.hidden = true;
+                }
+                if (intervalField) {
+                    intervalField.hidden = true;
+                }
+                return;
+            }
             var s3FlashSettings = hardwareSettings && hardwareSettings.historyPersistFlash != null;
             persistField.hidden = !s3FlashSettings;
             if (persistHint) {
@@ -2703,6 +2830,14 @@
         function onHistoryFlashPersistUiChanged() {
             var persistInput = document.getElementById("historyPersistFlash");
             var intervalField = document.getElementById("historyFlashBackupIntervalField");
+            if (isInterconnectRepeater()) {
+                setHidden(document.getElementById("historyPersistFlashField"), true);
+                setHidden(document.getElementById("historyPersistFlashHint"), true);
+                if (intervalField) {
+                    intervalField.hidden = true;
+                }
+                return;
+            }
             var sizeInput = document.getElementById("historyMaxSizeKiB");
             var sizeKiB = sizeInput ? parseInt(sizeInput.value, 10) : 4096;
             var sizeAllowsPersist = !isNaN(sizeKiB) && sizeKiB <= 4096;
@@ -5749,6 +5884,12 @@
                 nameCell.textContent = rows[index].name || rows[index].friendlyName || "";
                 var typeCell = document.createElement("td");
                 typeCell.textContent = zigbeeDeviceTypeLabel(rows[index].type);
+                var routerCell = document.createElement("td");
+                var routerId = rows[index].routerId || 0;
+                routerCell.textContent = routerId ? ("#" + String(routerId)) : "local";
+                if (!rows[index].online) {
+                    row.classList.add("is-offline");
+                }
                 var statusCell = document.createElement("td");
                 statusCell.className = "device-status-cell";
                 fillDeviceStatusCell(statusCell, rows[index]);
@@ -5765,6 +5906,7 @@
                 row.appendChild(onlineCell);
                 row.appendChild(nameCell);
                 row.appendChild(typeCell);
+                row.appendChild(routerCell);
                 row.appendChild(statusCell);
                 row.appendChild(batteryCell);
                 row.appendChild(rssiCell);
@@ -6159,12 +6301,16 @@
                 ieeeCell.textContent = rows[index].ieee || "";
                 var typeCell = document.createElement("td");
                 typeCell.textContent = zigbeeDeviceTypeLabel(rows[index].type);
+                var routerCell = document.createElement("td");
+                var foundRouterId = rows[index].routerId || 0;
+                routerCell.textContent = foundRouterId ? ("#" + String(foundRouterId)) : "local";
                 var manufacturerCell = document.createElement("td");
                 manufacturerCell.textContent = rows[index].manufacturer || "";
                 var modelCell = document.createElement("td");
                 modelCell.textContent = rows[index].model || "";
                 row.appendChild(ieeeCell);
                 row.appendChild(typeCell);
+                row.appendChild(routerCell);
                 row.appendChild(manufacturerCell);
                 row.appendChild(modelCell);
                 body.appendChild(row);
@@ -6335,6 +6481,31 @@
             return "nwk 0x" + Math.floor(nwkValue).toString(16);
         }
 
+        var interconnectPeersCache = [];
+
+        function rememberInterconnectPeers(peers) {
+            interconnectPeersCache = Array.isArray(peers) ? peers.slice() : [];
+        }
+
+        function deviceRouterDisplayLabel(routerId) {
+            var id = Number(routerId) || 0;
+            if (id === 0) {
+                return "Main router";
+            }
+            var index;
+            for (index = 0; index < interconnectPeersCache.length; index++) {
+                var peer = interconnectPeersCache[index] || {};
+                if ((Number(peer.routerId) || 0) === id) {
+                    var name = String(peer.name || "").trim();
+                    if (name) {
+                        return name;
+                    }
+                    break;
+                }
+            }
+            return "#" + String(id);
+        }
+
         function fillParameterDialog(device, title) {
             var heading = document.getElementById("parameterDialogTitle");
             if (heading) {
@@ -6376,6 +6547,27 @@
                     channelsValue = 1;
                 }
                 channelsSelect.value = String(channelsValue);
+            }
+            var routerInput = document.getElementById("deviceRouter");
+            if (routerInput) {
+                var deviceRouterId = Number(device.routerId) || 0;
+                routerInput.value = deviceRouterDisplayLabel(deviceRouterId);
+                if (deviceRouterId !== 0 && interconnectPeersCache.length === 0) {
+                    fetch("/api/interconnect", { credentials: "same-origin", cache: "no-store" })
+                        .then(function (response) {
+                            if (!response.ok) {
+                                throw new Error("HTTP " + response.status);
+                            }
+                            return response.json();
+                        })
+                        .then(function (data) {
+                            rememberInterconnectPeers(data && data.peers);
+                            if (routerInput) {
+                                routerInput.value = deviceRouterDisplayLabel(deviceRouterId);
+                            }
+                        })
+                        .catch(function () {});
+                }
             }
             var fullControlInput = document.getElementById("deviceFullControl");
             if (fullControlInput) {
@@ -7574,6 +7766,1142 @@
             if (typeof action === "function") {
                 action();
             }
+        }
+
+        var interconnectLoadedRole = "Main";
+        var interconnectPairWaitTimer = null;
+
+        function stopInterconnectPairWaitPoll() {
+            if (interconnectPairWaitTimer != null) {
+                window.clearInterval(interconnectPairWaitTimer);
+                interconnectPairWaitTimer = null;
+            }
+        }
+
+        function setInterconnectMessages(errorText, successText) {
+            var err = document.getElementById("interconnectSaveError");
+            var ok = document.getElementById("interconnectSaveSuccess");
+            if (err) {
+                err.hidden = !errorText;
+                err.textContent = errorText || "";
+            }
+            if (ok) {
+                ok.hidden = !successText;
+                ok.textContent = successText || "";
+            }
+        }
+
+        var interconnectLiveWanted = false;
+        var interconnectLiveSocket = null;
+        var interconnectLiveReconnectTimer = null;
+        var interconnectLiveLiveness = createLiveSocketLiveness(function () {
+            return interconnectLiveWanted && !firmwareRebootWaitActive;
+        });
+
+        function applyInterconnectLiveMessage(text) {
+            var message;
+            try {
+                message = JSON.parse(text);
+            } catch (parseError) {
+                return;
+            }
+            if (!message || !message.op) {
+                return;
+            }
+            if (message.op === "pong") {
+                interconnectLiveLiveness.notePong();
+                return;
+            }
+            if (message.op !== "update" || !message.interconnect) {
+                return;
+            }
+            var section = document.getElementById("section-interconnect");
+            if (!section || !section.classList.contains("active")) {
+                return;
+            }
+            var data = message.interconnect;
+            rememberInterconnectPeers(data.peers);
+            renderInterconnectPeers(data.peers);
+            renderInterconnectMainStatus(data.main);
+            renderInterconnectQueueStatus(data);
+            if (interconnectPeerDialogMac) {
+                var openPeer = null;
+                var peers = data.peers || [];
+                var peerIndex;
+                for (peerIndex = 0; peerIndex < peers.length; peerIndex++) {
+                    if ((peers[peerIndex].mac || "") === interconnectPeerDialogMac) {
+                        openPeer = peers[peerIndex];
+                        break;
+                    }
+                }
+                if (openPeer) {
+                    fillInterconnectPeerDialog(openPeer);
+                }
+            }
+        }
+
+        function stopInterconnectLive() {
+            interconnectLiveWanted = false;
+            interconnectLiveLiveness.stop();
+            if (interconnectLiveReconnectTimer != null) {
+                window.clearTimeout(interconnectLiveReconnectTimer);
+                interconnectLiveReconnectTimer = null;
+            }
+            if (interconnectLiveSocket != null) {
+                interconnectLiveSocket.onclose = null;
+                interconnectLiveSocket.close();
+                interconnectLiveSocket = null;
+            }
+            refreshConnectionOverlay();
+        }
+
+        function openInterconnectLiveSocket() {
+            if (!interconnectLiveWanted || firmwareRebootWaitActive) {
+                return;
+            }
+            if (interconnectLiveSocket != null
+                && (interconnectLiveSocket.readyState === WebSocket.OPEN
+                    || interconnectLiveSocket.readyState === WebSocket.CONNECTING)) {
+                return;
+            }
+            var protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+            var socket = new WebSocket(protocol + "//" + window.location.host + "/ws/interconnect");
+            interconnectLiveSocket = socket;
+            refreshConnectionOverlay();
+            socket.onopen = function () {
+                if (interconnectLiveSocket === socket) {
+                    interconnectLiveLiveness.bind(socket);
+                }
+                refreshConnectionOverlay();
+            };
+            socket.onmessage = function (event) {
+                applyInterconnectLiveMessage(event.data);
+            };
+            socket.onclose = function () {
+                interconnectLiveLiveness.stop();
+                interconnectLiveSocket = null;
+                if (!interconnectLiveWanted || firmwareRebootWaitActive) {
+                    refreshConnectionOverlay();
+                    return;
+                }
+                interconnectLiveReconnectTimer = window.setTimeout(function () {
+                    interconnectLiveReconnectTimer = null;
+                    openInterconnectLiveSocket();
+                }, 2000);
+                refreshConnectionOverlay();
+            };
+        }
+
+        function startInterconnectLive() {
+            interconnectLiveWanted = true;
+            openInterconnectLiveSocket();
+            refreshConnectionOverlay();
+        }
+
+        var interconnectPeerDialogMac = "";
+
+        function renderInterconnectPeers(peers) {
+            var body = document.getElementById("interconnectPeersBody");
+            if (!body) {
+                return;
+            }
+            body.innerHTML = "";
+            rememberInterconnectPeers(peers);
+            var list = peers || [];
+            var index;
+            for (index = 0; index < list.length; index++) {
+                var peer = list[index] || {};
+                var row = document.createElement("tr");
+                row.className = "interconnect-peer-row";
+                row.style.cursor = "pointer";
+                row.setAttribute("data-mac", peer.mac || "");
+                row.onclick = (function (peerRow) {
+                    return function () {
+                        openInterconnectPeerDialog(peerRow);
+                    };
+                })(peer);
+                var cells = [
+                    peer.name || "",
+                    peer.mac || "",
+                    peer.ip || "",
+                    String(peer.port || ""),
+                    peer.hostVersion || "—",
+                    "",
+                    String(peer.deviceCount != null ? peer.deviceCount : 0),
+                    String(peer.packetsIn != null ? peer.packetsIn : 0),
+                    String(peer.packetsOut != null ? peer.packetsOut : 0)
+                ];
+                var cellIndex;
+                for (cellIndex = 0; cellIndex < cells.length; cellIndex++) {
+                    var td = document.createElement("td");
+                    if (cellIndex === 5) {
+                        var dot = document.createElement("span");
+                        dot.className = peer.online
+                            ? "device-online-dot is-online"
+                            : "device-online-dot is-offline";
+                        td.appendChild(dot);
+                    } else {
+                        td.textContent = cells[cellIndex];
+                    }
+                    row.appendChild(td);
+                }
+                body.appendChild(row);
+            }
+        }
+
+        function fillInterconnectPeerDialog(peer) {
+            var setText = function (id, value) {
+                var el = document.getElementById(id);
+                if (el) {
+                    el.value = value != null && value !== "" ? String(value) : "—";
+                }
+            };
+            setText("interconnectPeerName", peer.name || "");
+            setText("interconnectPeerMac", peer.mac || "");
+            setText("interconnectPeerIp", peer.ip || "");
+            setText("interconnectPeerPort", peer.port != null ? peer.port : "");
+            setText("interconnectPeerVersion", peer.hostVersion || "—");
+            setText("interconnectPeerRouterId", peer.routerId != null ? peer.routerId : "");
+            setText(
+                "interconnectPeerChannel",
+                peer.zigbeeChannel != null ? peer.zigbeeChannel : ""
+            );
+            setText(
+                "interconnectPeerOnline",
+                peer.online ? "Online" : "Offline"
+            );
+            setText(
+                "interconnectPeerDevices",
+                peer.deviceCount != null ? peer.deviceCount : 0
+            );
+            interconnectPeerDialogMac = peer.mac || "";
+        }
+
+        function openInterconnectPeerDialog(peer) {
+            if (!peer || !peer.mac) {
+                return;
+            }
+            stopInterconnectRePairPoll();
+            setInterconnectPeerDialogBusy(false);
+            setInterconnectPeerDialogMessages("", "");
+            fillInterconnectPeerDialog(peer);
+            var dialog = document.getElementById("interconnectPeerDialog");
+            if (dialog) {
+                dialog.hidden = false;
+            }
+        }
+
+        function closeInterconnectPeerDialog() {
+            stopInterconnectRePairPoll();
+            setInterconnectPeerDialogBusy(false);
+            setInterconnectPeerDialogMessages("", "");
+            interconnectPeerDialogMac = "";
+            interconnectReplaceRouterId = 0;
+            var dialog = document.getElementById("interconnectPeerDialog");
+            if (dialog) {
+                dialog.hidden = true;
+            }
+        }
+
+        function deleteInterconnectPeerFromDialog() {
+            var mac = interconnectPeerDialogMac;
+            if (!mac) {
+                return;
+            }
+            openAppConfirmDialog({
+                title: "Delete paired router",
+                message: "Remove this Repeater from Interconnection? Bound devices keep their router id until you change them.",
+                confirmLabel: "Delete",
+                onConfirm: function () {
+                    postInterconnectJson({ action: "deletePeer", mac: mac })
+                        .then(function () {
+                            closeInterconnectPeerDialog();
+                            return loadInterconnect();
+                        })
+                        .catch(function (error) {
+                            var err = document.getElementById("interconnectPeerDialogError");
+                            if (err) {
+                                err.hidden = false;
+                                err.textContent = String(error.message || error);
+                            }
+                        });
+                }
+            });
+        }
+
+        var interconnectReplaceRouterId = 0;
+        var interconnectRePairPollTimer = null;
+        var interconnectPeerDialogBusy = false;
+
+        function setInterconnectPeerDialogMessages(errorText, statusText) {
+            var err = document.getElementById("interconnectPeerDialogError");
+            var status = document.getElementById("interconnectPeerDialogStatus");
+            if (err) {
+                err.hidden = !errorText;
+                err.textContent = errorText || "";
+            }
+            if (status) {
+                status.hidden = !statusText;
+                status.textContent = statusText || "";
+            }
+        }
+
+        function setInterconnectPairDialogMessages(errorText, statusText) {
+            var err = document.getElementById("interconnectPairDialogError");
+            var status = document.getElementById("interconnectPairDialogStatus");
+            if (err) {
+                err.hidden = !errorText;
+                err.textContent = errorText || "";
+            }
+            if (status) {
+                status.hidden = !statusText;
+                status.textContent = statusText || "";
+            }
+        }
+
+        function setInterconnectPeerDialogBusy(busy) {
+            interconnectPeerDialogBusy = !!busy;
+            var rePairBtn = document.getElementById("interconnectPeerRePairBtn");
+            var rePairNewBtn = document.getElementById("interconnectPeerRePairNewBtn");
+            var deleteBtn = document.getElementById("interconnectPeerDeleteBtn");
+            if (rePairBtn) {
+                rePairBtn.disabled = interconnectPeerDialogBusy;
+            }
+            if (rePairNewBtn) {
+                rePairNewBtn.disabled = interconnectPeerDialogBusy;
+            }
+            if (deleteBtn) {
+                deleteBtn.disabled = interconnectPeerDialogBusy;
+            }
+        }
+
+        function refreshOpenInterconnectPeerDialog(data) {
+            if (!interconnectPeerDialogMac) {
+                return;
+            }
+            var peers = (data && data.peers) || interconnectPeersCache || [];
+            var peer = null;
+            var index;
+            for (index = 0; index < peers.length; index++) {
+                if ((peers[index].mac || "") === interconnectPeerDialogMac) {
+                    peer = peers[index];
+                    break;
+                }
+            }
+            if (!peer && data && data.peers) {
+                // Re-pair with new may change MAC; match by open router id field.
+                var routerIdEl = document.getElementById("interconnectPeerRouterId");
+                var openRouterId = routerIdEl ? String(routerIdEl.value || "") : "";
+                for (index = 0; index < peers.length; index++) {
+                    if (String(peers[index].routerId != null ? peers[index].routerId : "") === openRouterId) {
+                        peer = peers[index];
+                        interconnectPeerDialogMac = peer.mac || interconnectPeerDialogMac;
+                        break;
+                    }
+                }
+            }
+            if (peer) {
+                fillInterconnectPeerDialog(peer);
+            }
+        }
+
+        function stopInterconnectRePairPoll() {
+            if (interconnectRePairPollTimer != null) {
+                window.clearInterval(interconnectRePairPollTimer);
+                interconnectRePairPollTimer = null;
+            }
+        }
+
+        function startInterconnectRePairPoll() {
+            stopInterconnectRePairPoll();
+            interconnectRePairPollTimer = window.setInterval(function () {
+                fetch("/api/interconnect", { credentials: "same-origin", cache: "no-store" })
+                    .then(function (response) {
+                        return response.json();
+                    })
+                    .then(function (data) {
+                        var status = data && data.rePairStatus ? String(data.rePairStatus) : "idle";
+                        var replacing = interconnectReplaceRouterId > 0;
+                        if (status === "scanning") {
+                            setInterconnectPeerDialogMessages(
+                                "",
+                                replacing
+                                    ? "Scanning subnet for replacement Repeater…"
+                                    : "Scanning subnet for stored MAC…"
+                            );
+                            setInterconnectPairDialogMessages(
+                                "",
+                                replacing
+                                    ? "Scanning subnet for replacement Repeater…"
+                                    : "Scanning subnet for stored MAC…"
+                            );
+                            return;
+                        }
+                        if (status === "trying" || status === "pairing") {
+                            setInterconnectPeerDialogMessages(
+                                "",
+                                replacing ? "Re-pair with new in progress…" : "Re-pair in progress…"
+                            );
+                            setInterconnectPairDialogMessages(
+                                "",
+                                replacing ? "Re-pair with new in progress…" : "Re-pair in progress…"
+                            );
+                            return;
+                        }
+                        stopInterconnectRePairPoll();
+                        setInterconnectPeerDialogBusy(false);
+                        setInterconnectPairDialogBusy(false);
+                        if (status === "ok") {
+                            setInterconnectPeerDialogMessages(
+                                "",
+                                replacing ? "Re-pair with new succeeded." : "Re-pair succeeded."
+                            );
+                            setInterconnectPairDialogMessages("", "");
+                            hideInterconnectPairDialogOnly();
+                            interconnectReplaceRouterId = 0;
+                            rememberInterconnectPeers(data.peers);
+                            renderInterconnectPeers(data.peers);
+                            refreshOpenInterconnectPeerDialog(data);
+                            return;
+                        }
+                        if (status === "failed") {
+                            setInterconnectPeerDialogMessages(
+                                replacing ? "Re-pair with new failed." : "Re-pairing failed.",
+                                ""
+                            );
+                            setInterconnectPairDialogMessages(
+                                replacing ? "Re-pair with new failed." : "Re-pairing failed.",
+                                ""
+                            );
+                            return;
+                        }
+                        refreshOpenInterconnectPeerDialog(data);
+                    })
+                    .catch(function () {
+                    });
+            }, 1000);
+        }
+
+        function hideInterconnectPairDialogOnly() {
+            var dialog = document.getElementById("interconnectPairDialog");
+            if (dialog) {
+                dialog.hidden = true;
+            }
+            stopInterconnectScanPoll();
+            setInterconnectPairDialogBusy(false);
+            updateInterconnectScanUi(null);
+            setInterconnectPairDialogMessages("", "");
+        }
+
+        function rePairInterconnectPeerFromDialog() {
+            var mac = interconnectPeerDialogMac;
+            if (!mac || interconnectPeerDialogBusy) {
+                return;
+            }
+            setInterconnectPeerDialogMessages("", "");
+            setInterconnectPeerDialogBusy(true);
+            postInterconnectJson({ action: "rePair", mac: mac })
+                .then(function () {
+                    setInterconnectPeerDialogMessages(
+                        "",
+                        "Re-pair started — tries stored IP, then scans for this MAC. Repeater must be waiting (Pair to host)."
+                    );
+                    startInterconnectRePairPoll();
+                })
+                .catch(function (error) {
+                    setInterconnectPeerDialogBusy(false);
+                    setInterconnectPeerDialogMessages(String(error.message || error), "");
+                });
+        }
+
+        function rePairInterconnectPeerWithNewFromDialog() {
+            var mac = interconnectPeerDialogMac;
+            if (!mac || interconnectPeerDialogBusy) {
+                return;
+            }
+            var peer = null;
+            var index;
+            for (index = 0; index < interconnectPeersCache.length; index++) {
+                if ((interconnectPeersCache[index].mac || "") === mac) {
+                    peer = interconnectPeersCache[index];
+                    break;
+                }
+            }
+            if (!peer || peer.routerId == null) {
+                setInterconnectPeerDialogMessages("Router id missing for replace", "");
+                return;
+            }
+            interconnectReplaceRouterId = Number(peer.routerId) || 0;
+            setInterconnectPeerDialogMessages(
+                "",
+                "Re-pair with new: enter IP or scan. Router id "
+                    + String(interconnectReplaceRouterId)
+                    + " and device binds stay."
+            );
+            openInterconnectPairDialog();
+            setInterconnectPairDialogMessages(
+                "",
+                "Replacement Repeater must be waiting (Pair to host)."
+            );
+        }
+
+        function applyInterconnectRoleVisibility(role) {
+            var isMain = role !== "Repeater";
+            setHidden(document.getElementById("interconnectMainBlock"), !isMain);
+            setHidden(document.getElementById("interconnectRepeaterBlock"), isMain);
+            setHidden(document.getElementById("interconnectCheckAliveField"), false);
+            var aliveInput = document.getElementById("interconnectCheckAliveSec");
+            if (aliveInput) {
+                aliveInput.readOnly = !isMain;
+            }
+        }
+
+        function renderInterconnectQueueStatus(data) {
+            var el = document.getElementById("interconnectQueueStatus");
+            if (!el) {
+                return;
+            }
+            var used = data && data.queueUsed != null ? Number(data.queueUsed) : 0;
+            var depth = data && data.queueDepth != null ? Number(data.queueDepth) : 1024;
+            if (isNaN(used)) {
+                used = 0;
+            }
+            if (isNaN(depth) || depth <= 0) {
+                depth = 1024;
+            }
+            el.textContent = "Queue: " + String(used) + " / " + String(depth);
+        }
+
+        function renderInterconnectMainStatus(main) {
+            var el = document.getElementById("interconnectMainStatus");
+            if (!el) {
+                return;
+            }
+            el.innerHTML = "";
+            el.className = "interconnect-main-status-card";
+            if (!main) {
+                el.textContent = "Not paired";
+                return;
+            }
+            var head = document.createElement("div");
+            head.className = "interconnect-main-status-head";
+            var dot = document.createElement("span");
+            dot.className = main.online
+                ? "device-online-dot is-online"
+                : "device-online-dot is-offline";
+            head.appendChild(dot);
+            var name = document.createElement("span");
+            name.className = "interconnect-main-status-name";
+            name.textContent = main.name || "Main";
+            head.appendChild(name);
+            el.appendChild(head);
+            var meta = document.createElement("div");
+            meta.className = "interconnect-main-status-meta";
+            meta.textContent = (main.ip || "—") + (main.mac ? "  ·  " + main.mac : "");
+            el.appendChild(meta);
+            var state = document.createElement("div");
+            state.className = "interconnect-main-status-state";
+            state.textContent = main.online ? "Online" : "Offline";
+            el.appendChild(state);
+        }
+
+        var interconnectNetworkRole = "Main";
+
+        function isInterconnectRepeater() {
+            return interconnectNetworkRole === "Repeater";
+        }
+
+        function loadInterconnect() {
+            setInterconnectMessages("", "");
+            return fetch("/api/interconnect", { credentials: "same-origin" })
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error("HTTP " + response.status);
+                    }
+                    return response.json();
+                })
+                .then(function (data) {
+                    interconnectLoadedRole = data.role || "Main";
+                    var nameInput = document.getElementById("interconnectRouterName");
+                    var roleSelect = document.getElementById("interconnectRole");
+                    var portInput = document.getElementById("interconnectPort");
+                    var aliveInput = document.getElementById("interconnectCheckAliveSec");
+                    if (nameInput) {
+                        nameInput.value = data.routerName || "";
+                    }
+                    if (roleSelect) {
+                        roleSelect.value = interconnectLoadedRole;
+                    }
+                    if (portInput) {
+                        portInput.value = String(data.port || 10241);
+                    }
+                    if (aliveInput) {
+                        aliveInput.value = String(data.checkAliveSec || 60);
+                    }
+                    applyInterconnectRoleVisibility(interconnectLoadedRole);
+                    interconnectNetworkRole = interconnectLoadedRole;
+                    applyChromeForRoles();
+                    applyInterconnectChrome(data);
+                    rememberInterconnectPeers(data.peers);
+                    renderInterconnectPeers(data.peers);
+                    renderInterconnectMainStatus(data.main);
+                    renderInterconnectQueueStatus(data);
+                    if (data.pairingWaitActive) {
+                        openInterconnectPairWaitDialog(data.pairingWaitRemainingMs || 0);
+                    }
+                })
+                .catch(function (error) {
+                    setInterconnectMessages(String(error.message || error), "");
+                });
+        }
+
+        function postInterconnectJson(body) {
+            return fetch("/api/interconnect", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body)
+            }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    return text;
+                });
+            });
+        }
+
+        function saveInterconnectSettings(role) {
+            var nameInput = document.getElementById("interconnectRouterName");
+            var portInput = document.getElementById("interconnectPort");
+            var aliveInput = document.getElementById("interconnectCheckAliveSec");
+            var payload = {
+                routerName: nameInput ? nameInput.value.trim() : "",
+                role: role,
+                port: portInput ? parseInt(portInput.value, 10) : 10241,
+                checkAliveSec: aliveInput ? parseInt(aliveInput.value, 10) : 60
+            };
+            return postInterconnectJson(payload).then(function (text) {
+                var message = text && text.trim() ? text.trim() : "Saved";
+                setInterconnectMessages("", message);
+                if (message.indexOf("restart") >= 0) {
+                    return;
+                }
+                return loadInterconnect();
+            });
+        }
+
+        function saveInterconnect() {
+            var roleSelect = document.getElementById("interconnectRole");
+            var role = roleSelect ? roleSelect.value : "Main";
+            setInterconnectMessages("", "");
+            if (role === interconnectLoadedRole) {
+                saveInterconnectSettings(role).catch(function (error) {
+                    setInterconnectMessages(String(error.message || error), "");
+                });
+                return;
+            }
+            openAppConfirmDialog({
+                title: "Change network role",
+                message: "Changing role clears all paired routers and secrets, then reboots this device. Continue?",
+                confirmLabel: "Continue",
+                onConfirm: function () {
+                    openAppConfirmDialog({
+                        title: "Confirm role change",
+                        message: "Clear paired routers, switch to " + role + ", and reboot?",
+                        confirmLabel: "Change role",
+                        onConfirm: function () {
+                            saveInterconnectSettings(role).catch(function (error) {
+                                setInterconnectMessages(String(error.message || error), "");
+                            });
+                        }
+                    });
+                }
+            });
+        }
+
+        function openInterconnectPairDialog() {
+            var dialog = document.getElementById("interconnectPairDialog");
+            var ipInput = document.getElementById("interconnectPairIp");
+            var portInput = document.getElementById("interconnectPairPort");
+            var title = dialog ? dialog.querySelector(".upload-title") : null;
+            if (ipInput) {
+                ipInput.value = "";
+            }
+            if (portInput) {
+                portInput.value = "10241";
+            }
+            if (title) {
+                title.textContent = interconnectReplaceRouterId
+                    ? "Re-pair with new Repeater"
+                    : "Pair Repeater";
+            }
+            setInterconnectPairDialogBusy(false);
+            setInterconnectPairDialogMessages("", "");
+            updateInterconnectScanUi(null);
+            if (dialog) {
+                dialog.hidden = false;
+            }
+        }
+
+        function closeInterconnectPairDialog() {
+            var wasReplace = interconnectReplaceRouterId > 0;
+            interconnectReplaceRouterId = 0;
+            hideInterconnectPairDialogOnly();
+            if (wasReplace && interconnectPeerDialogMac) {
+                setInterconnectPeerDialogBusy(false);
+                setInterconnectPeerDialogMessages("", "Re-pair with new cancelled.");
+            }
+        }
+
+        function cancelInterconnectScanAndClose() {
+            stopInterconnectScanPoll();
+            stopInterconnectRePairPoll();
+            postInterconnectJson({ action: "cancelScan" })
+                .catch(function () {})
+                .then(function () {
+                    closeInterconnectPairDialog();
+                });
+        }
+
+        var interconnectScanTimer = null;
+
+        function stopInterconnectScanPoll() {
+            if (interconnectScanTimer != null) {
+                window.clearInterval(interconnectScanTimer);
+                interconnectScanTimer = null;
+            }
+        }
+
+        function updateInterconnectScanUi(data) {
+            var status = document.getElementById("interconnectScanStatus");
+            if (!status) {
+                return;
+            }
+            if (data && data.scanActive) {
+                status.hidden = false;
+                status.textContent = "Scanning subnet… " + String(data.scanProgressPercent || 0) + "%";
+            } else if (data && data.scanHasCandidate && data.scanCandidate) {
+                status.hidden = false;
+                status.textContent = "Found candidate";
+            } else {
+                status.hidden = true;
+                status.textContent = "";
+            }
+        }
+
+        function maybePromptScanCandidate(data) {
+            if (!data || !data.scanHasCandidate || !data.scanCandidate) {
+                return;
+            }
+            var candidate = data.scanCandidate;
+            var detail = document.getElementById("interconnectScanConfirmDetail");
+            if (detail) {
+                detail.textContent =
+                    "Pair with \"" + (candidate.name || "") + "\" at " + (candidate.ip || "")
+                    + " (" + (candidate.mac || "")
+                    + (candidate.hostVersion ? ", " + candidate.hostVersion : "")
+                    + ")?";
+            }
+            var dialog = document.getElementById("interconnectScanConfirmDialog");
+            if (dialog) {
+                dialog.hidden = false;
+            }
+        }
+
+        function acceptInterconnectScanCandidate() {
+            var dialog = document.getElementById("interconnectScanConfirmDialog");
+            if (dialog) {
+                dialog.hidden = true;
+            }
+            var replacing = interconnectReplaceRouterId > 0;
+            postInterconnectJson({ action: "acceptScanCandidate" })
+                .then(function () {
+                    if (replacing) {
+                        setInterconnectPeerDialogBusy(true);
+                        setInterconnectPeerDialogMessages("", "Re-pair with new queued…");
+                        setInterconnectPairDialogMessages("", "Re-pair with new queued…");
+                        setInterconnectPairDialogBusy(true);
+                        startInterconnectRePairPoll();
+                    } else {
+                        setInterconnectMessages("", "Pair queued");
+                        startInterconnectScanPoll();
+                        window.setTimeout(loadInterconnect, 1500);
+                    }
+                })
+                .catch(function (error) {
+                    if (replacing) {
+                        setInterconnectPeerDialogMessages(String(error.message || error), "");
+                        setInterconnectPairDialogMessages(String(error.message || error), "");
+                    } else {
+                        setInterconnectMessages(String(error.message || error), "");
+                    }
+                });
+        }
+
+        function rejectInterconnectScanCandidate() {
+            var dialog = document.getElementById("interconnectScanConfirmDialog");
+            if (dialog) {
+                dialog.hidden = true;
+            }
+            postInterconnectJson({ action: "rejectScanCandidate" })
+                .then(function () {
+                    startInterconnectScanPoll();
+                })
+                .catch(function () {
+                    startInterconnectScanPoll();
+                });
+        }
+
+        function startInterconnectScanPoll() {
+            stopInterconnectScanPoll();
+            setInterconnectPairDialogBusy(true);
+            interconnectScanTimer = window.setInterval(function () {
+                fetch("/api/interconnect", { credentials: "same-origin" })
+                    .then(function (response) {
+                        return response.json();
+                    })
+                    .then(function (data) {
+                        updateInterconnectScanUi(data);
+                        if (data.scanHasCandidate) {
+                            stopInterconnectScanPoll();
+                            maybePromptScanCandidate(data);
+                            return;
+                        }
+                        if (!data.scanActive) {
+                            stopInterconnectScanPoll();
+                            setInterconnectPairDialogBusy(false);
+                            var status = document.getElementById("interconnectScanStatus");
+                            if (status) {
+                                status.hidden = false;
+                                status.textContent = "Scan finished";
+                            }
+                            if (interconnectReplaceRouterId > 0) {
+                                setInterconnectPeerDialogBusy(false);
+                                setInterconnectPeerDialogMessages(
+                                    "Re-pair with new failed: no Repeater found.",
+                                    ""
+                                );
+                                setInterconnectPairDialogMessages(
+                                    "No Repeater found on subnet.",
+                                    ""
+                                );
+                            } else {
+                                loadInterconnect();
+                            }
+                        }
+                    })
+                    .catch(function () {
+                        stopInterconnectScanPoll();
+                        setInterconnectPairDialogBusy(false);
+                    });
+            }, 700);
+        }
+
+        function setInterconnectPairDialogBusy(busy) {
+            var startBtn = document.querySelector("#interconnectPairDialog .btn-primary");
+            var ipInput = document.getElementById("interconnectPairIp");
+            var portInput = document.getElementById("interconnectPairPort");
+            if (startBtn) {
+                startBtn.disabled = !!busy;
+            }
+            if (ipInput) {
+                ipInput.readOnly = !!busy;
+            }
+            if (portInput) {
+                portInput.readOnly = !!busy;
+            }
+        }
+
+        function startInterconnectPairTo() {
+            var ipInput = document.getElementById("interconnectPairIp");
+            var portInput = document.getElementById("interconnectPairPort");
+            var ip = ipInput ? ipInput.value.trim() : "";
+            var port = portInput ? parseInt(portInput.value, 10) : 10241;
+            var replacing = interconnectReplaceRouterId > 0;
+            var payload = { action: "pairTo", port: port };
+            if (ip) {
+                payload.ip = ip;
+            }
+            if (replacing) {
+                payload.replaceRouterId = interconnectReplaceRouterId;
+            }
+            setInterconnectPairDialogMessages("", "");
+            postInterconnectJson(payload)
+                .then(function (text) {
+                    var scanning = false;
+                    try {
+                        scanning = !!(JSON.parse(text || "{}").scanning);
+                    } catch (parseError) {
+                        scanning = !ip;
+                    }
+                    if (scanning) {
+                        setInterconnectPairDialogBusy(true);
+                        updateInterconnectScanUi({ scanActive: true, scanProgressPercent: 0 });
+                        var scanMsg = replacing
+                            ? "Scanning for replacement Repeater (router id kept)…"
+                            : "Subnet scan started";
+                        setInterconnectPairDialogMessages("", scanMsg);
+                        if (replacing) {
+                            setInterconnectPeerDialogBusy(true);
+                            setInterconnectPeerDialogMessages("", scanMsg);
+                        } else {
+                            setInterconnectMessages("", scanMsg);
+                        }
+                        startInterconnectScanPoll();
+                    } else if (replacing) {
+                        setInterconnectPeerDialogBusy(true);
+                        setInterconnectPeerDialogMessages("", "Re-pair with new queued…");
+                        setInterconnectPairDialogMessages("", "Re-pair with new queued…");
+                        setInterconnectPairDialogBusy(true);
+                        startInterconnectRePairPoll();
+                    } else {
+                        hideInterconnectPairDialogOnly();
+                        setInterconnectMessages("", "Pair queued");
+                        window.setTimeout(loadInterconnect, 1500);
+                    }
+                })
+                .catch(function (error) {
+                    var message = String(error.message || error);
+                    setInterconnectPairDialogMessages(message, "");
+                    if (replacing) {
+                        setInterconnectPeerDialogMessages(message, "");
+                    } else {
+                        setInterconnectMessages(message, "");
+                    }
+                });
+        }
+
+        function openInterconnectPairWaitDialog(remainingMs) {
+            var dialog = document.getElementById("interconnectPairWaitDialog");
+            var countdown = document.getElementById("interconnectPairWaitCountdown");
+            if (countdown) {
+                countdown.textContent = String(Math.max(0, Math.ceil((remainingMs || 0) / 1000)));
+            }
+            if (dialog) {
+                dialog.hidden = false;
+            }
+            stopInterconnectPairWaitPoll();
+            interconnectPairWaitTimer = window.setInterval(function () {
+                fetch("/api/interconnect", { credentials: "same-origin" })
+                    .then(function (response) {
+                        return response.json();
+                    })
+                    .then(function (data) {
+                        var left = data.pairingWaitRemainingMs || 0;
+                        if (countdown) {
+                            countdown.textContent = String(Math.max(0, Math.ceil(left / 1000)));
+                        }
+                        if (!data.pairingWaitActive) {
+                            closeInterconnectPairWaitDialog();
+                            loadInterconnect();
+                        }
+                    })
+                    .catch(function () {
+                        closeInterconnectPairWaitDialog();
+                    });
+            }, 1000);
+        }
+
+        function closeInterconnectPairWaitDialog() {
+            stopInterconnectPairWaitPoll();
+            var dialog = document.getElementById("interconnectPairWaitDialog");
+            if (dialog) {
+                dialog.hidden = true;
+            }
+        }
+
+        function startInterconnectPairWait() {
+            postInterconnectJson({ action: "startPairWait" })
+                .then(function () {
+                    openInterconnectPairWaitDialog(120000);
+                })
+                .catch(function (error) {
+                    setInterconnectMessages(String(error.message || error), "");
+                });
+        }
+
+        function cancelInterconnectPairWait() {
+            postInterconnectJson({ action: "cancelPairWait" })
+                .then(function () {
+                    closeInterconnectPairWaitDialog();
+                    loadInterconnect();
+                })
+                .catch(function (error) {
+                    closeInterconnectPairWaitDialog();
+                    setInterconnectMessages(String(error.message || error), "");
+                });
+        }
+
+        function applyInterconnectChrome(interconnectData) {
+            var isRepeater = interconnectNetworkRole === "Repeater";
+            var repeaterPaired = isRepeater && !!(interconnectData && interconnectData.main);
+            var nameInput = document.getElementById("interconnectRouterName");
+            var portInput = document.getElementById("interconnectPort");
+            if (nameInput) {
+                nameInput.readOnly = repeaterPaired;
+            }
+            if (portInput) {
+                portInput.readOnly = repeaterPaired;
+            }
+            setHidden(document.querySelector('.sidebar-btn[data-section="place"]'), isRepeater);
+            setHidden(document.querySelector('.sidebar-btn[data-section="devices"]'), isRepeater);
+            setHidden(document.querySelector('.sidebar-btn[data-section="automation"]'), isRepeater);
+            setHidden(document.querySelector('.sidebar-btn[data-section="cameras"]'), isRepeater);
+            setHidden(document.querySelector('.sidebar-btn[data-section="scenes"]'), isRepeater);
+            setHidden(document.querySelector('.sidebar-btn[data-section="consoles"]'), isRepeater);
+            setHidden(document.querySelector('.sidebar-btn[data-section="security"]'), isRepeater);
+            setHidden(document.querySelector('.network-tab-btn[data-tab="email"]'), isRepeater);
+            setHidden(document.getElementById("network-tab-email"), isRepeater);
+            setHidden(document.getElementById("statusEmailGroup"), isRepeater);
+            setHidden(document.querySelector('.network-tab-btn[data-tab="mqtt"]'), isRepeater);
+            setHidden(document.getElementById("network-tab-mqtt"), isRepeater);
+            setHidden(document.getElementById("statusMqttGroup"), isRepeater);
+            setHidden(document.getElementById("statusHistoryGroup"), isRepeater);
+            if (isRepeater) {
+                var emailPanel = document.getElementById("network-tab-email");
+                var mqttPanel = document.getElementById("network-tab-mqtt");
+                if ((emailPanel && emailPanel.classList.contains("active"))
+                    || (mqttPanel && mqttPanel.classList.contains("active"))) {
+                    showNetworkTab("wifi");
+                }
+                stopAutomationsLive();
+                stopDevicesLive();
+            }
+            // Hide non-Reboot maintenance cards on Repeater (Settings/Devices/Consoles/Automations/Scenes/Interconnect).
+            var maintenanceCards = document.querySelectorAll("#maintenanceAdminContent > .upload-card");
+            var cardIndex;
+            for (cardIndex = 0; cardIndex < maintenanceCards.length; cardIndex++) {
+                var card = maintenanceCards[cardIndex];
+                if (card.id === "maintenanceRebootCard") {
+                    setHidden(card, false);
+                } else {
+                    setHidden(card, isRepeater);
+                }
+            }
+            var channelInput = document.getElementById("zigbeeChannel");
+            var searchInput = document.getElementById("zigbeePermitJoinOnBootSec");
+            if (channelInput) {
+                channelInput.readOnly = isRepeater;
+            }
+            if (searchInput) {
+                searchInput.readOnly = isRepeater;
+            }
+            var zigbeeSaveBtn = document.querySelector("#network-tab-zigbee .btn-primary");
+            if (zigbeeSaveBtn) {
+                zigbeeSaveBtn.disabled = isRepeater;
+            }
+            // Hardware allow-list on Repeater: keep SPI / RF SPI / LED / queue / low-memory; hide history groups.
+            var historyFields = [
+                "historyMaxStoreDays",
+                "historySweepIntervalMin",
+                "historyMaxSizeKiB",
+                "historyEntrySize",
+                "historySdBackupIntervalMin",
+                "historyFlashBackupIntervalMin"
+            ];
+            var fieldIndex;
+            for (fieldIndex = 0; fieldIndex < historyFields.length; fieldIndex++) {
+                var fieldEl = document.getElementById(historyFields[fieldIndex]);
+                if (fieldEl && fieldEl.closest) {
+                    setHidden(fieldEl.closest(".field"), isRepeater);
+                }
+            }
+            setHidden(document.getElementById("historyPersistFlashField"), isRepeater);
+            setHidden(document.getElementById("historyPersistFlashHint"), isRepeater);
+            setHidden(document.getElementById("historyFlashBackupIntervalField"), isRepeater);
+            setHidden(document.getElementById("historySdBackupIntervalField"), isRepeater);
+        }
+
+        function refreshInterconnectRoleChrome() {
+            return fetch("/api/interconnect", { credentials: "same-origin" })
+                .then(function (response) {
+                    if (!response.ok) {
+                        return null;
+                    }
+                    return response.json();
+                })
+                .then(function (data) {
+                    if (data && data.role) {
+                        interconnectNetworkRole = data.role;
+                    }
+                    applyChromeForRoles();
+                    applyInterconnectChrome(data);
+                })
+                .catch(function () {
+                    applyChromeForRoles();
+                    applyInterconnectChrome(null);
+                });
+        }
+
+        function exportInterconnectFile() {
+            return fetch("/api/interconnect/export", { credentials: "same-origin" })
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error("HTTP " + response.status);
+                    }
+                    return response.json();
+                })
+                .then(function (data) {
+                    var blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+                    var link = document.createElement("a");
+                    link.href = URL.createObjectURL(blob);
+                    link.download = "interconnect.json";
+                    link.click();
+                    URL.revokeObjectURL(link.href);
+                })
+                .catch(function (error) {
+                    setMaintenanceStoreError(String(error.message || error));
+                });
+        }
+
+        function chooseInterconnectImportFile() {
+            var input = document.getElementById("interconnectImportFile");
+            if (input) {
+                input.value = "";
+                input.click();
+            }
+        }
+
+        function onInterconnectImportFileSelected(event) {
+            var file = event && event.target && event.target.files && event.target.files[0];
+            if (!file) {
+                return;
+            }
+            openAppConfirmDialog({
+                title: "Import interconnect",
+                message: "Import paired routers from this file? Existing peers matched by MAC stay authoritative.",
+                confirmLabel: "Import",
+                onConfirm: function () {
+                    var reader = new FileReader();
+                    reader.onload = function () {
+                        fetch("/api/interconnect/import", {
+                            method: "POST",
+                            credentials: "same-origin",
+                            headers: { "Content-Type": "application/json" },
+                            body: String(reader.result || "")
+                        })
+                            .then(function (response) {
+                                return response.text().then(function (text) {
+                                    if (!response.ok) {
+                                        throw new Error(text || ("HTTP " + response.status));
+                                    }
+                                });
+                            })
+                            .then(function () {
+                                refreshInterconnectRoleChrome();
+                                var interconnectSection = document.getElementById("section-interconnect");
+                                if (interconnectSection && interconnectSection.classList.contains("active")) {
+                                    loadInterconnect();
+                                }
+                            })
+                            .catch(function (error) {
+                                setMaintenanceStoreError(String(error.message || error));
+                            });
+                    };
+                    reader.readAsText(file);
+                }
+            });
         }
 
         function openDeleteConfirmDialog() {
@@ -19996,6 +21324,22 @@
                 closeSettingsRestoreConfirmDialog();
                 return true;
             }
+            if (dialogId === "interconnectPeerDialog") {
+                closeInterconnectPeerDialog();
+                return true;
+            }
+            if (dialogId === "interconnectPairDialog") {
+                closeInterconnectPairDialog();
+                return true;
+            }
+            if (dialogId === "interconnectPairWaitDialog") {
+                cancelInterconnectPairWait();
+                return true;
+            }
+            if (dialogId === "interconnectScanConfirmDialog") {
+                rejectInterconnectScanCandidate();
+                return true;
+            }
             if (dialogId === "historyChartOverlay") {
                 closeHistoryChart();
                 return true;
@@ -20112,6 +21456,7 @@
         <button type="button" class="sidebar-btn" data-section="scenes" onclick="showMainSection('scenes')">Scenes</button>
         <button type="button" class="sidebar-btn" data-section="consoles" onclick="showMainSection('consoles')">Consoles</button>
         <button type="button" class="sidebar-btn" data-section="security" onclick="showMainSection('security')">Security</button>
+        <button type="button" class="sidebar-btn" data-section="interconnect" onclick="showMainSection('interconnect')">Interconnection</button>
         <button type="button" class="sidebar-btn" data-section="system" onclick="showMainSection('system')">System</button>
         <button type="button" class="sidebar-btn sidebar-account" data-section="account" id="sidebarAccountBtn" onclick="showMainSection('account')">Account</button>
     </nav>
@@ -20135,6 +21480,10 @@
                                 <span class="status-row-label">Slave</span>
                                 <p id="statusSlaveFirmwareVersion" class="status-value">—</p>
                             </div>
+                        </div>
+                        <div class="status-group" id="statusInterconnectGroup" hidden>
+                            <h3 class="group-title">Interconnection</h3>
+                            <div id="statusInterconnectRows"></div>
                         </div>
                         <div class="status-group">
                             <h3 class="group-title">Free memory</h3>
@@ -20162,7 +21511,7 @@
                                 <p id="statusHostCpu1" class="status-value">—</p>
                             </div>
                         </div>
-                        <div class="status-group">
+                        <div class="status-group" id="statusHistoryGroup">
                             <h3 class="group-title">Historical storage</h3>
                             <div class="status-row">
                                 <span class="status-row-label">Entries</span>
@@ -20252,7 +21601,7 @@
                                 <p id="statusMqttOnline" class="status-value">—</p>
                             </div>
                         </div>
-                        <div class="status-group">
+                        <div class="status-group" id="statusMqttGroup">
                             <h3 class="group-title">MQTT</h3>
                             <div class="status-row">
                                 <span class="status-row-label">Current mode</span>
@@ -20313,7 +21662,7 @@
                                 <p id="statusTotalOutboundConnections" class="status-value">—</p>
                             </div>
                         </div>
-                        <div class="status-group">
+                        <div class="status-group" id="statusEmailGroup">
                             <h3 class="group-title">E-mail</h3>
                             <div class="status-row">
                                 <span class="status-row-label">Status</span>
@@ -20556,9 +21905,9 @@
                             <p class="field-hint">2.4 GHz Zigbee channel 11–26. Applied on the radio slave without restarting the router.</p>
                         </div>
                         <div class="field">
-                            <label for="zigbeePermitJoinOnBootSec">PERMIT_JOIN_ON_BOOT_SEC</label>
+                            <label for="zigbeePermitJoinOnBootSec">Zigbee search window (sec)</label>
                             <input id="zigbeePermitJoinOnBootSec" type="number" min="0" max="254" autocomplete="off">
-                            <p class="field-hint">Seconds the coordinator allows joins after it starts. 0 keeps the network closed.</p>
+                            <p class="field-hint">Seconds allowed for Zigbee search / join. 0 keeps the network closed. On Repeater this is Main-owned and read-only.</p>
                         </div>
                     </div>
                     <div class="page-footer">
@@ -20583,6 +21932,7 @@
                             <th class="device-online-cell" aria-label="Online"></th>
                             <th>Name</th>
                             <th>Type</th>
+                            <th>Router</th>
                             <th>Status</th>
                             <th>Battery</th>
                             <th>RSSI</th>
@@ -20751,6 +22101,71 @@
                 </div>
                 <div class="field" style="margin-top:1rem;">
                     <button type="button" class="btn btn-secondary" onclick="openSignOutConfirm()">Sign out</button>
+                </div>
+            </div>
+        </section>
+
+        <section id="section-interconnect" class="section-panel" aria-label="Interconnection">
+            <h2 class="section-title">Interconnection</h2>
+            <p id="interconnectSaveError" class="save-error" hidden></p>
+            <p id="interconnectSaveSuccess" class="save-success" hidden></p>
+            <div class="settings-scroll">
+                <div class="field">
+                    <label for="interconnectRouterName">Router name</label>
+                    <input id="interconnectRouterName" type="text" maxlength="32" autocomplete="off">
+                </div>
+                <div class="field">
+                    <label for="interconnectRole">Network role</label>
+                    <select id="interconnectRole">
+                        <option value="Main">Main</option>
+                        <option value="Repeater">Repeater</option>
+                    </select>
+                    <p class="field-hint">Changing role clears paired routers after two confirms.</p>
+                </div>
+                <div class="field">
+                    <label for="interconnectPort">Interconnect port</label>
+                    <input id="interconnectPort" type="number" min="1" max="65535" autocomplete="off">
+                </div>
+                <div class="field" id="interconnectCheckAliveField">
+                    <label for="interconnectCheckAliveSec">checkAlive (sec)</label>
+                    <input id="interconnectCheckAliveSec" type="number" min="5" max="600" autocomplete="off">
+                    <p class="field-hint">Main owns this interval and pushes it to Repeaters. Repeater marks Main dead after checkAlive + 30 s without a check, then holds outbound traffic in the interconnect queue.</p>
+                </div>
+                <p id="interconnectQueueStatus" class="field-hint">Queue: —</p>
+                <div class="dialog-actions interconnect-settings-actions">
+                    <button type="button" class="btn btn-primary btn-inline" onclick="saveInterconnect()">Save</button>
+                    <button type="button" class="btn btn-secondary btn-inline" onclick="loadInterconnect()">Reset</button>
+                </div>
+                <div id="interconnectMainBlock">
+                    <h3 class="upload-title">Paired routers</h3>
+                    <div class="table-wrap">
+                        <table class="data-table" id="interconnectPeersTable">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>MAC</th>
+                                    <th>IP</th>
+                                    <th>Port</th>
+                                    <th>VERSION</th>
+                                    <th></th>
+                                    <th>Devices</th>
+                                    <th>In</th>
+                                    <th>Out</th>
+                                </tr>
+                            </thead>
+                            <tbody id="interconnectPeersBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="dialog-actions interconnect-pair-actions">
+                        <button type="button" class="btn btn-primary btn-inline" onclick="openInterconnectPairDialog()">Pair</button>
+                    </div>
+                </div>
+                <div id="interconnectRepeaterBlock" hidden>
+                    <h3 class="upload-title">Main router</h3>
+                    <div id="interconnectMainStatus" class="interconnect-main-status-card">Not paired</div>
+                    <div class="dialog-actions">
+                        <button type="button" class="btn btn-primary btn-inline" onclick="startInterconnectPairWait()">Pair to host</button>
+                    </div>
                 </div>
             </div>
         </section>
@@ -20924,7 +22339,7 @@
                         <p id="maintenanceStoreError" class="save-error" hidden></p>
                         <div id="maintenanceSettingsCard" class="upload-card">
                             <h3 class="upload-title">Settings</h3>
-                            <p class="field-hint">Export MQTT, Zigbee, hardware (including low memory threshold, SD history backup interval on P4, and S3 flash history persist plus its interval), devices, users, consoles, automations, cameras, and scenes. Restore replaces those groups when present in the file. Wi-Fi is never included. E-mail password is exported empty (restore keeps the current password when blank).</p>
+                            <p class="field-hint">Export MQTT, Zigbee, hardware (including low memory threshold, SD history backup interval on P4, and S3 flash history persist plus its interval), devices, users, consoles, automations, cameras, scenes, and interconnect. Restore replaces those groups when present in the file. Wi-Fi is never included. E-mail password is exported empty (restore keeps the current password when blank).</p>
                             <p id="settingsRestoreError" class="save-error" hidden></p>
                             <input id="settingsRestoreFile" type="file" accept="application/json,.json" hidden onchange="onSettingsRestoreFileSelected(event)">
                             <div class="dialog-actions">
@@ -20967,7 +22382,17 @@
                                 <button type="button" class="btn btn-primary btn-inline" onclick="chooseScenesImportOnlyNewFile()">Import only new</button>
                             </div>
                         </div>
-                        <div class="upload-card">
+                        <div id="maintenanceInterconnectCard" class="upload-card">
+                            <h3 class="upload-title">Interconnection</h3>
+                            <p class="field-hint">Export or import paired-router interconnect settings (MAC-authoritative import). Hidden on Repeater.</p>
+                            <input id="interconnectImportFile" type="file" accept="application/json,.json" hidden
+                                   onchange="onInterconnectImportFileSelected(event)">
+                            <div class="dialog-actions">
+                                <button type="button" class="btn btn-secondary btn-inline" onclick="exportInterconnectFile()">Export</button>
+                                <button type="button" class="btn btn-primary btn-inline" onclick="chooseInterconnectImportFile()">Import</button>
+                            </div>
+                        </div>
+                        <div class="upload-card" id="maintenanceRebootCard">
                             <h3 class="upload-title">Router</h3>
                             <p class="field-hint">Restart the host router. Requires two confirmations.</p>
                             <p id="maintenanceRebootError" class="save-error" hidden></p>
@@ -21015,6 +22440,7 @@
                             <tr>
                                 <th>IEEE</th>
                                 <th>Type</th>
+                                <th>Router</th>
                                 <th>Manufacturer</th>
                                 <th>Model</th>
                             </tr>
@@ -21109,6 +22535,10 @@
                                 <option value="15">15</option>
                                 <option value="16">16</option>
                             </select>
+                        </div>
+                        <div class="field">
+                            <label for="deviceRouter">ROUTER</label>
+                            <input id="deviceRouter" type="text" readonly autocomplete="off">
                         </div>
                         <div id="deviceUserDataFieldsSection" class="form-section" hidden>
                             <h3 class="group-title">User data fields</h3>
@@ -21308,10 +22738,105 @@
             </div>
         </div>
 
+        <div id="interconnectPeerDialog" class="dialog-overlay" hidden>
+            <div class="dialog-panel" role="dialog" aria-label="Paired router">
+                <h3 class="upload-title">Paired router</h3>
+                <div class="field">
+                    <label for="interconnectPeerName">Name</label>
+                    <input id="interconnectPeerName" type="text" readonly>
+                </div>
+                <div class="field">
+                    <label for="interconnectPeerMac">MAC</label>
+                    <input id="interconnectPeerMac" type="text" readonly>
+                </div>
+                <div class="field">
+                    <label for="interconnectPeerIp">IP</label>
+                    <input id="interconnectPeerIp" type="text" readonly>
+                </div>
+                <div class="field">
+                    <label for="interconnectPeerPort">Port</label>
+                    <input id="interconnectPeerPort" type="text" readonly>
+                </div>
+                <div class="field">
+                    <label for="interconnectPeerVersion">VERSION</label>
+                    <input id="interconnectPeerVersion" type="text" readonly>
+                </div>
+                <div class="field">
+                    <label for="interconnectPeerRouterId">Router id</label>
+                    <input id="interconnectPeerRouterId" type="text" readonly>
+                </div>
+                <div class="field">
+                    <label for="interconnectPeerChannel">Zigbee channel</label>
+                    <input id="interconnectPeerChannel" type="text" readonly>
+                </div>
+                <div class="field">
+                    <label for="interconnectPeerOnline">Online</label>
+                    <input id="interconnectPeerOnline" type="text" readonly>
+                </div>
+                <div class="field">
+                    <label for="interconnectPeerDevices">Devices</label>
+                    <input id="interconnectPeerDevices" type="text" readonly>
+                </div>
+                <p class="field-hint">Re pair tries the stored IP, then scans for this MAC. Re-pair with new swaps hardware but keeps router id and device binds. Target Repeater must be in Pair to host.</p>
+                <p id="interconnectPeerDialogStatus" class="field-hint" hidden></p>
+                <p id="interconnectPeerDialogError" class="save-error" hidden></p>
+                <div class="dialog-actions">
+                    <button type="button" id="interconnectPeerRePairBtn" class="btn btn-primary" onclick="rePairInterconnectPeerFromDialog()">Re pair</button>
+                    <button type="button" id="interconnectPeerRePairNewBtn" class="btn btn-primary" onclick="rePairInterconnectPeerWithNewFromDialog()">Re-pair with new</button>
+                    <button type="button" id="interconnectPeerDeleteBtn" class="btn btn-secondary" onclick="deleteInterconnectPeerFromDialog()">Delete</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeInterconnectPeerDialog()">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="interconnectPairDialog" class="dialog-overlay dialog-overlay-front" hidden>
+            <div class="dialog-panel" role="dialog" aria-label="Pair router">
+                <h3 class="upload-title">Pair Repeater</h3>
+                <p id="interconnectPairDialogStatus" class="field-hint" hidden></p>
+                <p id="interconnectPairDialogError" class="save-error" hidden></p>
+                <div class="field">
+                    <label for="interconnectPairIp">IP</label>
+                    <input id="interconnectPairIp" type="text" autocomplete="off" placeholder="Leave empty to scan subnet">
+                </div>
+                <div class="field">
+                    <label for="interconnectPairPort">Port</label>
+                    <input id="interconnectPairPort" type="number" min="1" max="65535" value="10241" autocomplete="off">
+                </div>
+                <p id="interconnectScanStatus" class="field-hint" hidden></p>
+                <div class="dialog-actions">
+                    <button type="button" class="btn btn-primary" onclick="startInterconnectPairTo()">Start</button>
+                    <button type="button" class="btn btn-secondary" onclick="cancelInterconnectScanAndClose()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="interconnectPairWaitDialog" class="dialog-overlay dialog-overlay-front" hidden>
+            <div class="dialog-panel interconnect-pair-wait-panel" role="dialog" aria-label="Pair to host">
+                <h3 class="upload-title">Pair to host</h3>
+                <p class="interconnect-pair-wait-label">Waiting for Main…</p>
+                <p id="interconnectPairWaitCountdown" class="interconnect-pair-wait-countdown">120</p>
+                <p class="interconnect-pair-wait-unit">seconds remaining</p>
+                <div class="dialog-actions">
+                    <button type="button" class="btn btn-secondary" onclick="cancelInterconnectPairWait()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="interconnectScanConfirmDialog" class="dialog-overlay dialog-overlay-front" hidden>
+            <div class="dialog-panel" role="dialog" aria-label="Confirm found router">
+                <h3 class="upload-title">Found router</h3>
+                <p id="interconnectScanConfirmDetail" class="field-hint">Pair with this router?</p>
+                <div class="dialog-actions">
+                    <button type="button" class="btn btn-primary" onclick="acceptInterconnectScanCandidate()">Yes, pair</button>
+                    <button type="button" class="btn btn-secondary" onclick="rejectInterconnectScanCandidate()">No, continue</button>
+                </div>
+            </div>
+        </div>
+
         <div id="settingsRestoreConfirmDialog" class="dialog-overlay dialog-overlay-front" hidden>
             <div class="dialog-panel" role="dialog" aria-label="Confirm restore settings">
                 <h3 class="upload-title">Restore settings</h3>
-                <p class="field-hint">MQTT, Zigbee, hardware, devices, users, consoles, automations, cameras, and scenes will match this file when those sections are present (cameras include username and password). Devices, consoles, automations, cameras, or scenes missing from the file are removed for those sections. Wi-Fi is not changed. Continue?</p>
+                <p class="field-hint">MQTT, Zigbee, hardware, devices, users, consoles, automations, cameras, scenes, and interconnect will match this file when those sections are present (cameras include username and password). Devices, consoles, automations, cameras, or scenes missing from the file are removed for those sections. Wi-Fi is not changed. Continue?</p>
                 <div class="dialog-actions">
                     <button type="button" class="btn btn-primary" onclick="confirmSettingsRestore()">Restore</button>
                     <button type="button" class="btn btn-secondary" onclick="closeSettingsRestoreConfirmDialog()">Cancel</button>

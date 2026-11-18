@@ -19,6 +19,8 @@ public:
     void setUpdateBlinkManual(bool enabled);
     void serviceManualUpdateLed6();
     void setPairingHeld(bool enabled);
+    /** Host LED6: 2 Hz blink during interconnect Pair-to-host wait. */
+    void setInterconnectPairingBlink(bool enabled);
     void setMqttConnected(bool enabled);
     void setMqttBrokerListening(bool enabled);
     void setReadyGreen(bool enabled);
@@ -55,6 +57,10 @@ private:
     volatile bool updateHeld = false;
     volatile bool pairingHeld = false;
     volatile bool pairingPhaseOn = false;
+    volatile bool interconnectPairingBlink = false;
+    bool interconnectPairingBlinkOn = true;
+    unsigned long interconnectPairingBlinkToggleMs = 0;
+    static constexpr unsigned long kInterconnectPairBlinkHalfMs = 250UL;
     volatile bool mqttConnected = false;
     volatile bool mqttBrokerListening = false;
     volatile bool readyGreen = false;

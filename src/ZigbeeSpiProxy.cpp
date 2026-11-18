@@ -735,6 +735,14 @@ bool ZigbeeSpiProxy::rebindDevice(const uint8_t ieee[8], uint8_t *outcomeOut, un
         *outcomeOut = SPI_REBIND_OUTCOME_FAILED;
         return false;
     }
+#if defined(BOARD_ROLE_HOST)
+    if (registryMap != nullptr && remoteRebindHandler != nullptr) {
+        DeviceTopicEntry *entry = registryMap->findByIeee(ieee);
+        if (entry != nullptr && entry->used && entry->routerId != 0) {
+            return remoteRebindHandler(entry->routerId, ieee, outcomeOut, timeoutMs);
+        }
+    }
+#endif
     uint8_t payload[SPI_REBIND_CMD_LEN];
     if (!spiPackRebindDevice(payload, sizeof(payload), ieee)) {
         *outcomeOut = SPI_REBIND_OUTCOME_FAILED;
@@ -766,6 +774,74 @@ bool ZigbeeSpiProxy::rebindDevice(const uint8_t ieee[8], uint8_t *outcomeOut, un
     return true;
 }
 
+bool ZigbeeSpiProxy::enqueueDeviceSpiCommand(
+    const uint8_t ieee[8],
+    uint8_t spiCmd,
+    const uint8_t *payload,
+    uint16_t payloadLen
+) {
+#if defined(BOARD_ROLE_HOST)
+    DeviceTopicEntry *entry = nullptr;
+    if (ieee != nullptr && registryMap != nullptr) {
+        entry = registryMap->findByIeee(ieee);
+    }
+    const bool debugDevice = entry != nullptr && entry->used && entry->debug != 0;
+    auto logDebugSend = [&](bool queued, const char *pathLabel) {
+        if (!debugDevice || ieee == nullptr) {
+            return;
+        }
+        char ieeeText[24];
+        snprintf(
+            ieeeText,
+            sizeof(ieeeText),
+            "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
+            ieee[7],
+            ieee[6],
+            ieee[5],
+            ieee[4],
+            ieee[3],
+            ieee[2],
+            ieee[1],
+            ieee[0]
+        );
+        String line = String("Zigbee send cmd=0x") + String(spiCmd, HEX);
+        line += queued ? " ok" : " fail";
+        line += " ";
+        line += pathLabel;
+        if (entry->friendlyName != nullptr && entry->friendlyName[0] != '\0') {
+            line += " name=";
+            line += entry->friendlyName;
+        }
+        line += " ieee=";
+        line += ieeeText;
+        if (queued) {
+            LOGGER.info(line);
+        } else {
+            LOGGER.warning(line);
+        }
+    };
+    if (ieee != nullptr && entry != nullptr && entry->used && entry->routerId != 0
+        && remoteSpiCommandHandler != nullptr) {
+        const bool queued =
+            remoteSpiCommandHandler(entry->routerId, spiCmd, payload, payloadLen);
+        logDebugSend(queued, "via router");
+        return queued;
+    }
+    const bool queued = INTER_CHIP_HOST.tryEnqueue(spiCmd, payload, payloadLen);
+    if (queued) {
+        packetsTx++;
+    }
+    logDebugSend(queued, "local");
+    return queued;
+#else
+    const bool queued = INTER_CHIP_HOST.tryEnqueue(spiCmd, payload, payloadLen);
+    if (queued) {
+        packetsTx++;
+    }
+    return queued;
+#endif
+}
+
 bool ZigbeeSpiProxy::controlOnOff(const uint8_t ieee[8], const char *command, uint8_t endpoint) {
     const char *body = command != nullptr ? command : "";
     uint8_t payload[9 + SPI_DEVICE_MESSAGE_MAX];
@@ -774,11 +850,7 @@ bool ZigbeeSpiProxy::controlOnOff(const uint8_t ieee[8], const char *command, ui
     strncpy((char *)payload + 9, body, SPI_DEVICE_MESSAGE_MAX - 1);
     payload[8 + SPI_DEVICE_MESSAGE_MAX] = 0;
     const uint16_t length = (uint16_t)(9 + strlen((char *)payload + 9) + 1);
-    const bool queued = INTER_CHIP_HOST.tryEnqueue(SpiCmdZclOnOff, payload, length);
-    if (queued) {
-        packetsTx++;
-    }
-    return queued;
+    return enqueueDeviceSpiCommand(ieee, SpiCmdZclOnOff, payload, length);
 }
 
 bool ZigbeeSpiProxy::writeAttribute(
@@ -802,11 +874,7 @@ bool ZigbeeSpiProxy::writeAttribute(
         )) {
         return false;
     }
-    const bool queued = INTER_CHIP_HOST.tryEnqueue(SpiCmdZclWriteAttr, payload, SPI_ZCL_WRITE_ATTR_LEN);
-    if (queued) {
-        packetsTx++;
-    }
-    return queued;
+    return enqueueDeviceSpiCommand(ieee, SpiCmdZclWriteAttr, payload, SPI_ZCL_WRITE_ATTR_LEN);
 }
 
 bool ZigbeeSpiProxy::readAttribute(
@@ -819,11 +887,7 @@ bool ZigbeeSpiProxy::readAttribute(
     if (!spiPackZclReadAttr(payload, sizeof(payload), ieee, endpoint, clusterId, attributeId)) {
         return false;
     }
-    const bool queued = INTER_CHIP_HOST.tryEnqueue(SpiCmdZclReadAttr, payload, SPI_ZCL_READ_ATTR_LEN);
-    if (queued) {
-        packetsTx++;
-    }
-    return queued;
+    return enqueueDeviceSpiCommand(ieee, SpiCmdZclReadAttr, payload, SPI_ZCL_READ_ATTR_LEN);
 }
 
 void ZigbeeSpiProxy::clearConfigReads() {
@@ -952,15 +1016,12 @@ bool ZigbeeSpiProxy::sendClusterCommand(
         )) {
         return false;
     }
-    const bool queued = INTER_CHIP_HOST.tryEnqueue(
+    return enqueueDeviceSpiCommand(
+        ieee,
         SpiCmdZclCommand,
         frame,
         spiZclCommandFrameLength(payloadLength)
     );
-    if (queued) {
-        packetsTx++;
-    }
-    return queued;
 }
 
 void ZigbeeSpiProxy::clearPendingDeleteIeees() {
@@ -1434,6 +1495,7 @@ void ZigbeeSpiProxy::requestRegistryPull(DeviceTopicMap *topicMap) {
 
 void ZigbeeSpiProxy::publishHostStores(DeviceTopicMap *topicMap, UserStore *store) {
     retainRegisteredTelemetry(topicMap);
+    registryMap = topicMap;
     userMap = store;
     registryPullRequested = false;
     registryPullActive = false;
@@ -1445,9 +1507,26 @@ void ZigbeeSpiProxy::publishHostStores(DeviceTopicMap *topicMap, UserStore *stor
     userPullStartedMs = 0;
     registryReady = true;
     userReady = true;
-    queueDeletedIeeesAndPushAll(nullptr, 0);
+    const int deviceCount = topicMap != nullptr ? topicMap->usedCount() : 0;
+    if (deviceCount == 0) {
+        // Authoritative empty list (Repeater): clear leftover slave rows; slave stays
+        // not-ready so RX/TX work with no device list (no markRegistryReady on RESET).
+        const uint8_t resetFlags = SPI_DEVICE_SYNC_RESET;
+        if (!INTER_CHIP_HOST.tryEnqueue(SpiCmdSetDevice, &resetFlags, 1)) {
+            LOGGER.warning("Failed to queue slave device registry clear");
+        }
+        fullPushActive = false;
+        clearPendingDeleteIeees();
+        pendingUpsertWalk = 0;
+    } else {
+        queueDeletedIeeesAndPushAll(nullptr, 0);
+    }
     queueDeletedUserNamesAndPushAll(nullptr, 0);
-    LOGGER.info("Publishing host device and user stores to slave");
+    if (deviceCount == 0) {
+        LOGGER.info("Publishing host user store to slave (device list empty)");
+    } else {
+        LOGGER.info("Publishing host device and user stores to slave");
+    }
 }
 
 void ZigbeeSpiProxy::requestUsersPull(UserStore *store) {
@@ -1496,6 +1575,10 @@ bool ZigbeeSpiProxy::enqueueDeviceUpsert(const DeviceTopicEntry *entry) {
         ensureChannelCapacity(slot, channelCapacityForIeee(entry->ieee));
     }
     if (entry->transport == DeviceTransportMqtt) {
+        return true;
+    }
+    if (entry->routerId != 0) {
+        // Remote interconnect devices stay host-only; slave radio is local.
         return true;
     }
     return queueDeviceChange(SPI_DEVICE_SYNC_ENTRY, entry);
@@ -1593,7 +1676,8 @@ void ZigbeeSpiProxy::pumpPendingChanges() {
         return;
     }
     DeviceTopicEntry *entry = registryMap->slotAt(nextIndex);
-    if (entry != nullptr && entry->transport == DeviceTransportMqtt) {
+    if (entry != nullptr
+        && (entry->transport == DeviceTransportMqtt || entry->routerId != 0)) {
         pendingUpsertWalk = nextIndex + 1;
         return;
     }
@@ -1604,8 +1688,8 @@ void ZigbeeSpiProxy::pumpPendingChanges() {
 
 bool ZigbeeSpiProxy::enqueueRegistryFrame(uint8_t flags, const DeviceTopicEntry *entry) {
     if ((flags & SPI_DEVICE_SYNC_RESET) != 0) {
-        LOGGER.warning("Host cannot replace the full device store");
-        return false;
+        const uint8_t resetFlags = SPI_DEVICE_SYNC_RESET;
+        return INTER_CHIP_HOST.tryEnqueue(SpiCmdSetDevice, &resetFlags, 1);
     }
     const bool isUpsert = (flags & SPI_DEVICE_SYNC_ENTRY) != 0;
     const bool isDelete = (flags & SPI_DEVICE_SYNC_DELETE) != 0;
@@ -1957,6 +2041,39 @@ void ZigbeeSpiProxy::onSpiEvent(const SpiFrame &frame) {
             notifyDeviceLiveChanged(ieee);
         }
         packetsRx++;
+#if defined(BOARD_ROLE_HOST)
+        if (registryMap != nullptr) {
+            const DeviceTopicEntry *debugEntry = registryMap->findByIeee(ieee);
+            if (debugEntry != nullptr && debugEntry->debug != 0) {
+                char ieeeText[24];
+                snprintf(
+                    ieeeText,
+                    sizeof(ieeeText),
+                    "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
+                    ieee[7],
+                    ieee[6],
+                    ieee[5],
+                    ieee[4],
+                    ieee[3],
+                    ieee[2],
+                    ieee[1],
+                    ieee[0]
+                );
+                String line = String("Device event ") + message;
+                if (debugEntry->friendlyName != nullptr && debugEntry->friendlyName[0] != '\0') {
+                    line += " name=";
+                    line += debugEntry->friendlyName;
+                }
+                line += " ieee=";
+                line += ieeeText;
+                line += " nwk=0x";
+                line += String(shortAddr, HEX);
+                line += " ep=";
+                line += String(endpoint);
+                LOGGER.info(line);
+            }
+        }
+#endif
         if (lightStateHandler != nullptr) {
             // Publish plain comparable values (no "BATTERY " / trailing '%').
             char normalizedMessage[SPI_DEVICE_MESSAGE_MAX];

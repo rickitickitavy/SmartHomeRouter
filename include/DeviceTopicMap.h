@@ -32,6 +32,7 @@ struct DeviceTopicEntry {
     uint8_t manufacturer;
     uint8_t transport;
     uint8_t used;
+    uint32_t routerId;
     float historyEpsilon;
     DeviceTopicEntry *next;
 };

@@ -117,6 +117,7 @@ public:
     void upsertRegisteredDevice(const DeviceTopicEntry *entry);
     void removeRegisteredDevice(const uint8_t ieee[8]);
     void markRegistryReady();
+    bool isRegistryReady() const { return registryReady; }
     bool isRegistered(const uint8_t ieee[8]) const;
     const char *registeredName(const uint8_t ieee[8]) const;
 

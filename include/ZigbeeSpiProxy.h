@@ -97,6 +97,13 @@ public:
         );
     void setStatusValueChangedHandler(StatusValueChangedFn handler);
 #if defined(BOARD_ROLE_HOST)
+    /** Route SPI device commands to a paired Repeater when device routerId != 0. */
+    using RemoteSpiCommandFn =
+        bool (*)(uint32_t routerId, uint8_t spiCmd, const uint8_t *payload, uint16_t payloadLen);
+    using RemoteRebindFn =
+        bool (*)(uint32_t routerId, const uint8_t ieee[8], uint8_t *outcomeOut, unsigned long timeoutMs);
+    void setRemoteSpiCommandHandler(RemoteSpiCommandFn handler) { remoteSpiCommandHandler = handler; }
+    void setRemoteRebindHandler(RemoteRebindFn handler) { remoteRebindHandler = handler; }
     void setHistoryStore(HistoryStore *store);
 #endif
     bool copyEndpointState(const uint8_t ieee[8], uint8_t endpoint, char *out, size_t outLen) const;
@@ -195,6 +202,8 @@ private:
     StatusValueChangedFn statusValueChanged = nullptr;
 #if defined(BOARD_ROLE_HOST)
     HistoryStore *historyStore = nullptr;
+    RemoteSpiCommandFn remoteSpiCommandHandler = nullptr;
+    RemoteRebindFn remoteRebindHandler = nullptr;
 #endif
     DeviceTopicMap *registryMap = nullptr;
     DeviceTopicMap pullMap;
@@ -284,6 +293,12 @@ private:
     );
     void clearReportableValues(CachedDevice *slot);
     void notifyDeviceLiveChanged(const uint8_t ieee[8]);
+    bool enqueueDeviceSpiCommand(
+        const uint8_t ieee[8],
+        uint8_t spiCmd,
+        const uint8_t *payload,
+        uint16_t payloadLen
+    );
     bool enqueueRegistryFrame(uint8_t flags, const DeviceTopicEntry *entry);
     bool queueDeviceChange(uint8_t flags, const DeviceTopicEntry *entry);
     void applyPendingChangeToMap(const PendingDeviceChange *change);

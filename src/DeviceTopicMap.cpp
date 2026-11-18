@@ -132,6 +132,7 @@ bool DeviceTopicMap::cloneEntry(DeviceTopicEntry *destination, const DeviceTopic
     destination->zigbeeType = source->zigbeeType;
     destination->manufacturer = source->manufacturer;
     destination->transport = source->transport;
+    destination->routerId = source->routerId;
     destination->historyEpsilon = source->historyEpsilon;
     if (!userDataCopyFieldDefs(
             &destination->userDataFields,
@@ -194,6 +195,7 @@ DeviceTopicEntry *DeviceTopicMap::allocateEntry() {
         return nullptr;
     }
     entry->historyEpsilon = -1.0f;
+    entry->routerId = 0;
     entry->next = head;
     head = entry;
     return entry;
@@ -1132,6 +1134,7 @@ DeviceTopicEntry *DeviceTopicMap::upsertFromEntry(const DeviceTopicEntry *source
         entry->manufacturer = source->manufacturer;
     }
     entry->transport = clampDeviceTransport(source->transport);
+    entry->routerId = source->routerId;
     if (isUsableShortAddr(source->shortAddr)) {
         applyLastKnownShort(entry->ieee, source->shortAddr);
     }
@@ -1462,6 +1465,11 @@ void DeviceTopicMap::replaceFromJson(const char *json) {
                 if (extractJsonDouble(object.c_str(), "historyEpsilon", historyEpsilonValue)) {
                     entry->historyEpsilon = (float)historyEpsilonValue;
                 }
+                entry->routerId = 0;
+                int parsedRouterId = 0;
+                if (extractJsonInt(object.c_str(), "routerId", parsedRouterId) && parsedRouterId >= 0) {
+                    entry->routerId = (uint32_t)parsedRouterId;
+                }
             }
         }
         cursor = objectEnd + 1;
@@ -1738,6 +1746,8 @@ static void appendDeviceListEntryJson(
     json += deviceCustomCommandsToJson(deviceEntry->customCommands, deviceEntry->customCommandCount);
     json += ",\"reportableData\":";
     json += reportableDataToJson(deviceEntry->reportableData, deviceEntry->reportableDataCount);
+    json += ",\"routerId\":";
+    json += String((unsigned long)deviceEntry->routerId);
     json += ",\"historyEpsilon\":";
     {
         char historyEpsilonText[32];

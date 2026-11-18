@@ -1589,6 +1589,95 @@
                 "statusEmailQueue",
                 payload && payload.emailQueue != null ? String(payload.emailQueue) : "—"
             );
+            applyInterconnectStatusWidget(payload && payload.interconnect);
+            var isRepeaterRole = !!(
+                payload
+                && payload.interconnect
+                && payload.interconnect.role === "Repeater"
+            );
+            var emailGroup = document.getElementById("statusEmailGroup");
+            if (emailGroup) {
+                emailGroup.hidden = isRepeaterRole;
+            }
+            var mqttGroup = document.getElementById("statusMqttGroup");
+            if (mqttGroup) {
+                mqttGroup.hidden = isRepeaterRole;
+            }
+            var historyGroup = document.getElementById("statusHistoryGroup");
+            if (historyGroup) {
+                historyGroup.hidden = isRepeaterRole;
+            }
+        }
+
+        function appendInterconnectStatusRow(host, labelText, valueText, online) {
+            if (!host) {
+                return;
+            }
+            var row = document.createElement("div");
+            row.className = "status-row";
+            var label = document.createElement("span");
+            label.className = "status-row-label";
+            label.textContent = labelText;
+            row.appendChild(label);
+            var value = document.createElement("p");
+            value.className = "status-value";
+            if (online === true || online === false) {
+                value.className = "status-value status-value-with-dot";
+                var dot = document.createElement("span");
+                dot.className = online
+                    ? "device-online-dot is-online"
+                    : "device-online-dot is-offline";
+                value.appendChild(dot);
+            } else {
+                value.textContent = valueText != null && valueText !== "" ? valueText : "—";
+            }
+            row.appendChild(value);
+            host.appendChild(row);
+        }
+
+        function applyInterconnectStatusWidget(interconnect) {
+            var group = document.getElementById("statusInterconnectGroup");
+            var host = document.getElementById("statusInterconnectRows");
+            if (!group || !host) {
+                return;
+            }
+            host.innerHTML = "";
+            if (!interconnect) {
+                group.hidden = true;
+                return;
+            }
+            group.hidden = false;
+            var role = interconnect.role || "Main";
+            if (role === "Repeater") {
+                var localName = interconnect.routerName || "Repeater";
+                appendInterconnectStatusRow(
+                    host,
+                    "This router",
+                    localName + " (Repeater)",
+                    null
+                );
+                var main = interconnect.main;
+                if (main) {
+                    var mainLabel = (main.name || "Main")
+                        + (main.ip ? " (" + main.ip + ")" : "");
+                    appendInterconnectStatusRow(host, mainLabel, null, !!main.online);
+                } else {
+                    appendInterconnectStatusRow(host, "Main", "Not paired", null);
+                }
+                return;
+            }
+            var peers = interconnect.peers || [];
+            if (!peers.length) {
+                appendInterconnectStatusRow(host, "Paired routers", "None", null);
+                return;
+            }
+            var peerIndex;
+            for (peerIndex = 0; peerIndex < peers.length; peerIndex++) {
+                var peer = peers[peerIndex] || {};
+                var peerLabel = (peer.name || "Router")
+                    + (peer.ip ? " (" + peer.ip + ")" : "");
+                appendInterconnectStatusRow(host, peerLabel, null, !!peer.online);
+            }
         }
 
         // Same Status poll algorithm as operator index.html Status section.
@@ -1660,6 +1749,13 @@
                 ["Master", "statusMasterFirmwareVersion"],
                 ["Slave", "statusSlaveFirmwareVersion"]
             ]);
+            appendStatusGroup(stack, "Interconnection", [], "statusInterconnectGroup");
+            var interconnectGroup = stack.querySelector("#statusInterconnectGroup");
+            if (interconnectGroup) {
+                var interconnectRows = document.createElement("div");
+                interconnectRows.id = "statusInterconnectRows";
+                interconnectGroup.appendChild(interconnectRows);
+            }
             appendStatusGroup(stack, "Free memory", [
                 ["Free RAM", "statusHeapUsage"],
                 ["Free PSRAM", "statusPsramUsage"],
@@ -1677,7 +1773,11 @@
                 ["time before save", "statusHistoryTimeBeforeSave", "statusHistorySaveRow"],
                 ["on-SD history size", "statusHistorySdSize", "statusHistorySdSizeRow"],
                 ["On-flash history size", "statusHistoryFlashSize", "statusHistoryFlashSizeRow"]
-            ]);
+            ], "statusHistoryGroup");
+            var historyGroupBuilt = stack.querySelector("#statusHistoryGroup");
+            if (historyGroupBuilt) {
+                historyGroupBuilt.hidden = false;
+            }
             appendStatusGroup(stack, "SD card", [
                 ["Status", "statusSdStatus"],
                 ["Capacity Mb", "statusSdCapacityMb"],
@@ -1701,7 +1801,11 @@
                 ["Status", "statusMqttStatus"],
                 ["Active topics", "statusMqttTopics"],
                 ["Connections", "statusMqttConnections"]
-            ]);
+            ], "statusMqttGroup");
+            var mqttGroupBuilt = stack.querySelector("#statusMqttGroup");
+            if (mqttGroupBuilt) {
+                mqttGroupBuilt.hidden = false;
+            }
             appendStatusGroup(stack, "Network", [
                 ["Zigbee packets sent", "statusZigbeePacketsTx"],
                 ["MQTT packets sent", "statusMqttPacketsTx"],
@@ -1720,7 +1824,11 @@
                 ["Time from last check", "statusEmailLastCheck"],
                 ["E-mails sent", "statusEmailSent"],
                 ["E-mails in queue", "statusEmailQueue"]
-            ]);
+            ], "statusEmailGroup");
+            var emailGroupBuilt = stack.querySelector("#statusEmailGroup");
+            if (emailGroupBuilt) {
+                emailGroupBuilt.hidden = false;
+            }
             appendStatusGroup(stack, "WiFi", [
                 ["WiFi mode", "statusWifiMode"],
                 ["BSSID", "statusWifiBssid"],

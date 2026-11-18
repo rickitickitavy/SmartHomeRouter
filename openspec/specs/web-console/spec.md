@@ -238,16 +238,16 @@ Add device SHALL open a search dialog that contains a table of found-but-unregis
 
 ### Requirement: ZigBee tab edits the Zigbee group
 
-The ZigBee tab MUST show and allow saving CHANNEL and PERMIT_JOIN_ON_BOOT_SEC from the Zigbee group record. CHANNEL MUST be 11–26. PERMIT_JOIN_ON_BOOT_SEC MUST be 0–254. The page MUST load those values from `GET /api/zigbee` when the tab opens and on first page load, and MUST persist them with `POST /api/zigbee`. Saving MUST write EEPROM and apply the radio settings without restarting the router. Reset MUST reload stored values and MUST NOT write settings.
+The ZigBee tab MUST show and allow saving CHANNEL and **Zigbee search window (sec)** (stored as `permitJoinOnBootSec`) from the Zigbee group record. CHANNEL MUST be 11–26. Zigbee search window MUST be 0–254 seconds. The page MUST load those values from `GET /api/zigbee` when the tab opens and on first page load, and MUST persist them with `POST /api/zigbee`. Saving MUST write EEPROM and apply the radio settings without restarting the router. Reset MUST reload stored values and MUST NOT write settings.
 
 #### Scenario: Load Zigbee settings
 
 - **WHEN** the operator opens the ZigBee section
-- **THEN** CHANNEL and PERMIT_JOIN_ON_BOOT_SEC show the values stored on the host
+- **THEN** CHANNEL and Zigbee search window (sec) show the values stored on the host
 
 #### Scenario: Save Zigbee settings
 
-- **WHEN** the operator sets a valid channel and permit-join duration and saves
+- **WHEN** the operator sets a valid channel and Zigbee search window duration and saves
 - **THEN** the Zigbee group is persisted and the radio settings are applied without a router restart
 
 ### Requirement: Settings are stored in groups
@@ -304,7 +304,7 @@ If BSSID is empty at boot, the device MUST start in AP mode using the default BS
 
 ### Requirement: System has Update and Log tabs
 
-When System is selected, the console MUST present nested folder-style tabs in this order: Log, devices.json, Update, Hardware. The default System panel MUST be Log. Selecting a tab MUST show that panel and hide the others without a full page reload.
+When System is selected, the console MUST present nested folder-style tabs in this order: Log, Interconnection, devices.json, Update, Hardware. The default System panel MUST be Log. Selecting a tab MUST show that panel and hide the others without a full page reload.
 
 #### Scenario: Nested System tabs
 
@@ -314,6 +314,10 @@ When System is selected, the console MUST present nested folder-style tabs in th
 #### Scenario: Default System tab is Log
 - **WHEN** the operator opens System
 - **THEN** the Log tab is selected first
+
+#### Scenario: Interconnection follows Log
+- **WHEN** the operator opens System and inspects nested tab order
+- **THEN** Interconnection appears immediately after Log
 
 ### Requirement: Firmware update uploads one package for both chips
 The Update tab MUST show the running firmware version and accept a **joined firmware package** upload over HTTP (ZIP containing `slave.bin` and `host.bin`). After a valid file is received, the host MUST program the slave from `slave.bin` over SPI first. Only after the slave reports a successful firmware commit MUST the host program itself from `host.bin` and restart. A failed HTTP receive, invalid package, failed slave transfer, or failed slave commit MUST leave the host’s running application unchanged, MUST NOT restart the host, and MUST show a failure on the page.
@@ -806,7 +810,7 @@ When the pointer is over a registered-device row that has type actions, the cons
 - **THEN** **…** is not shown
 
 ### Requirement: Maintenance exports settings without Wi-Fi
-System → Maintenance SHALL show **Export settings** above **Restore settings**. Both SHALL use compact inline buttons, not full-width bars. Export SHALL download a JSON file that includes MQTT settings, Zigbee settings, hardware SPI speed and blue/green LED brightness, **history retention/slab fields**, and on P4 the **SD history backup interval** when that setting exists, the signed-in user’s theme, the persisted device list (same device fields as Devices Export, no live telemetry), the users table, control consoles, automations (persisted fields only, no last-activation or TIMER runtime telemetry), cameras (same ONVIF fields as Cameras Export, including each camera’s username and password), and scenes (same fields as Scenes store export: id, name, sceneModel, pins, bakePath/hasBake — bake JPEG bytes are not embedded). Each exported user SHALL include user name, added-at, roles including `editConsoles`, `consoles`, `isBlocked`, theme, and password **hash and salt**. The file SHALL NOT contain a plaintext user password. The file SHALL NOT contain a Wi-Fi group (no BSSID, password, MODE, AP IP, hostname, or OTG). Only `isAdmin` SHALL see or use Export settings and Restore settings.
+System → Maintenance SHALL show **Export settings** above **Restore settings**. Both SHALL use compact inline buttons, not full-width bars. Export SHALL download a JSON file that includes MQTT settings, Zigbee settings, hardware SPI speed and blue/green LED brightness, **history retention/slab fields**, and on P4 the **SD history backup interval** when that setting exists, the signed-in user’s theme, the persisted device list (same device fields as Devices Export, no live telemetry), the users table, control consoles, automations (persisted fields only, no last-activation or TIMER runtime telemetry), cameras (same ONVIF fields as Cameras Export, including each camera’s username and password), scenes (same fields as Scenes store export: id, name, sceneModel, pins, bakePath/hasBake — bake JPEG bytes are not embedded), and **interconnect** settings (router name, network role, pairing port, checkAlive interval, zigbee search interval owned by this host, and paired-router identity fields needed to restore peering). Each exported user SHALL include user name, added-at, roles including `editConsoles`, `consoles`, `isBlocked`, theme, and password **hash and salt**. The file SHALL NOT contain a plaintext user password. The file SHALL NOT contain a Wi-Fi group (no BSSID, password, MODE, AP IP, hostname, or OTG). Only `isAdmin` SHALL see or use Export settings and Restore settings.
 
 #### Scenario: Export omits Wi-Fi
 - **WHEN** the operator clicks Export settings and the host has Wi-Fi, MQTT, Zigbee, hardware, a saved theme, and at least one registered device
@@ -844,6 +848,10 @@ System → Maintenance SHALL show **Export settings** above **Restore settings**
 - **WHEN** the host has a saved scene and an `isAdmin` operator exports settings
 - **THEN** the JSON `scenes` array includes that scene’s id, name, sceneModel, and pins
 
+#### Scenario: Export includes interconnect
+- **WHEN** an `isAdmin` operator exports settings on a host with interconnect role and paired peer data saved
+- **THEN** the JSON includes an interconnect slice with those persisted fields
+
 ### Requirement: Settings restore clamps bounded numerics to firmware min/max
 On settings restore, bounded numeric Hardware fields in the file SHALL clamp to this firmware’s declared min/max (`>` max → max; `<` min → min). Restore SHALL NOT fail solely for out-of-range. Invalid history Entry size SHALL map to the nearest allowed choice (tie → default). Not a PSRAM-safe slab cap.
 
@@ -860,7 +868,7 @@ On settings restore, bounded numeric Hardware fields in the file SHALL clamp to 
 - **THEN** the host stores the nearest allowed entry size among 128/256/384/512/768/1024/1536/2048 (or factory default on a tie)
 
 ### Requirement: Maintenance restores settings after confirm
-Restore settings SHALL ask the operator to confirm before applying a file. After confirm, the host SHALL replace MQTT, Zigbee, hardware SPI speed, blue/green LED brightness, **history retention/slab fields**, and on P4 the **SD history backup interval** when present in the file, and the registered device list from the file. When `ui.theme` is present, the host SHALL apply it to the **signed-in user** only. When a users list is present, the host SHALL replace the users table from that list (hashes and salts, never plaintext passwords). When a consoles list is present, the host SHALL replace control consoles from that list. When an automations list is present, the host SHALL replace automations from that list. When a cameras list is present, the host SHALL replace the camera registry from that list (including ONVIF username and password). When a scenes list is present, the host SHALL replace the scene registry from that list (model and pins; bake JPEGs kept only when id and bakePath still match). The host SHALL leave Wi-Fi unchanged even if the file contains a wifi object. A file that is not valid JSON, or that lacks a usable settings body, SHALL be rejected and SHALL NOT write settings. Only `isAdmin` SHALL restore settings. Devices Export/Restore on the Devices page SHALL remain. A restore file whose `hardware` object lacks brightness fields SHALL keep the host’s current brightness values. A restore file whose `hardware` object lacks the SD backup interval SHALL keep the host’s current interval (or factory default if never set). Bounded numeric Hardware fields present in the file SHALL be clamped to this firmware’s min/max (or discrete allowed set) rather than rejecting restore for being out of range.
+Restore settings SHALL ask the operator to confirm before applying a file. After confirm, the host SHALL replace MQTT, Zigbee, hardware SPI speed, blue/green LED brightness, **history retention/slab fields**, and on P4 the **SD history backup interval** when present in the file, and the registered device list from the file. When `ui.theme` is present, the host SHALL apply it to the **signed-in user** only. When a users list is present, the host SHALL replace the users table from that list (hashes and salts, never plaintext passwords). When a consoles list is present, the host SHALL replace control consoles from that list. When an automations list is present, the host SHALL replace automations from that list. When a cameras list is present, the host SHALL replace the camera registry from that list (including ONVIF username and password). When a scenes list is present, the host SHALL replace the scene registry from that list (model and pins; bake JPEGs kept only when id and bakePath still match). When an **interconnect** slice is present, the host SHALL replace interconnect settings and the paired-router table from that slice. The host SHALL leave Wi-Fi unchanged even if the file contains a wifi object. A file that is not valid JSON, or that lacks a usable settings body, SHALL be rejected and SHALL NOT write settings. Only `isAdmin` SHALL restore settings. Devices Export/Restore on the Devices page SHALL remain. A restore file whose `hardware` object lacks brightness fields SHALL keep the host’s current brightness values. A restore file whose `hardware` object lacks the SD backup interval SHALL keep the host’s current interval (or factory default if never set). Bounded numeric Hardware fields present in the file SHALL be clamped to this firmware’s min/max (or discrete allowed set) rather than rejecting restore for being out of range.
 
 #### Scenario: Confirm then apply
 - **WHEN** the operator chooses Restore settings, selects a valid export file, and confirms
@@ -906,6 +914,10 @@ Restore settings SHALL ask the operator to confirm before applying a file. After
 #### Scenario: Out-of-range brightness does not reject restore
 - **WHEN** the file’s hardware has `blueLedBrightness` 0 or 101 and the operator confirms
 - **THEN** restore succeeds and that brightness is stored as the factory default (100)
+
+#### Scenario: Restore applies interconnect
+- **WHEN** the file includes an interconnect slice with role Repeater and a paired Main identity and the operator confirms
+- **THEN** the host stores that interconnect configuration from the file
 
 ### Requirement: Maintenance theme picker
 System → Maintenance SHALL show a Theme control with options **Light** and **Dark**. Light SHALL be the current gray/white chrome. Dark SHALL use a cool slate-night dashboard: near-black blue-gray page and sidebar, slightly lighter cards, cool off-white body text, muted blue-gray secondary text, and steel-blue primary buttons with dark labels. No magenta, pink, or red-violet accents. Changing the picker SHALL apply that theme to the whole console immediately without a reload. The last **saved** theme for the **signed-in user** SHALL load after login; the login form SHALL use Dark. Changing the picker without Save SHALL NOT persist; a later reload with the same session SHALL restore that user’s last saved theme.
@@ -2516,3 +2528,81 @@ On the ESP32-S3 and ESP32-P4 hosts, if PSRAM cannot hold a JSON response larger 
 #### Scenario: PSRAM exhaustion on a response
 - **WHEN** an S3 or P4 host cannot allocate PSRAM for a JSON response larger than 4096 bytes
 - **THEN** the host responds with HTTP 507 and does not allocate that document on internal heap
+
+
+### Requirement: System Interconnection tab after Log
+When System is selected, the console MUST show an **Interconnection** nested tab immediately after **Log**. Only `isAdmin` MUST use Interconnection. The tab MUST load and save interconnect settings (router name, network role, interconnect TCP port) and MUST show role-specific controls (Main paired table and Pair; Repeater Pair to host and Main status). Changing network role MUST require two confirmation steps before the role is saved and paired peers are cleared.
+
+#### Scenario: Tab order places Interconnection after Log
+- **WHEN** an admin opens System
+- **THEN** the nested tabs include Interconnection immediately after Log
+
+#### Scenario: Admin opens Interconnection
+- **WHEN** an admin selects System → Interconnection
+- **THEN** router name, network role, and interconnect port controls are shown
+
+#### Scenario: Role change needs two confirms
+- **WHEN** an admin changes network role and dismisses the first confirm
+- **THEN** the role and paired table remain unchanged until a second confirm completes
+
+### Requirement: Interconnection Main paired table UI
+When network role is Main, Interconnection MUST show the paired-routers table (Name, MAC, IP, Port, online circle, devices, In, Out) and a **Pair** button beneath it that opens the IP/port pairing dialog (Start/Cancel; port default 10241).
+
+#### Scenario: Pair opens dialog
+- **WHEN** an admin on Main clicks Pair
+- **THEN** a dialog asks for IP (optional) and port with Start and Cancel
+
+### Requirement: Interconnection Repeater pair UI
+When network role is Repeater, Interconnection MUST show **Pair to host**, Main online status (green/gray circle), and after pairing the Main IP, name, and MAC. Pair to host MUST show a modal countdown (up to 120 s) with Cancel while waiting.
+
+#### Scenario: Pair to host shows countdown
+- **WHEN** an admin on Repeater clicks Pair to host
+- **THEN** a modal with countdown and Cancel is visible for the wait
+
+### Requirement: Repeater role hides blocked console sections
+When network role is Repeater, the console MUST hide sidebar sections Place, Devices, Automation, Cameras, Scenes, Consoles, and Security. System → Maintenance MUST hide all Maintenance cards except **Reboot**. System → Hardware MUST show only SPI SPEED, RF update SPI speed, BLUE LED brightness, GREEN LED brightness, use queue for base device commands, and Low memory threshold (and their Save/Reset as applicable). Other Hardware fields MUST be hidden on Repeater.
+
+#### Scenario: Repeater hides Devices
+- **WHEN** network role is Repeater and an admin is signed in
+- **THEN** Devices is not shown in the sidebar
+
+#### Scenario: Repeater keeps Reboot
+- **WHEN** network role is Repeater and an admin opens System → Maintenance
+- **THEN** Reboot remains available and export/restore settings are hidden
+
+#### Scenario: Repeater Hardware allow-list
+- **WHEN** network role is Repeater and an admin opens System → Hardware
+- **THEN** SPI speed, RF update SPI speed, blue/green LED brightness, use queue for base device commands, and low memory threshold are visible and other Hardware groups are hidden
+
+### Requirement: Found and device UI show non-local router
+When a found or registered Zigbee device has non-zero `router_id`, the Devices / found UI on Main MUST show which paired router owns that device (name or id) so the operator can see remote origin. When that Repeater is offline, the device row MUST show offline/gray interconnect state and MUST NOT offer a successful remote command path.
+
+#### Scenario: Found row shows repeater
+- **WHEN** Main’s found list includes a device with non-zero `router_id`
+- **THEN** that row identifies the source router
+
+#### Scenario: Offline repeater device looks offline
+- **WHEN** a registered device’s Repeater online indicator is gray
+- **THEN** that device row shows offline/gray for interconnect and commands are blocked or clearly fail as router offline
+
+### Requirement: Maintenance Interconnection export and import
+System → Maintenance SHALL show an **Interconnection** card with **Export** and **Import** for `isAdmin` on Main. Export SHALL download interconnect JSON matching the global interconnect slice. Import SHALL confirm then apply peers matching existing by **MAC** as authoritative. Hide the card on Repeater.
+
+#### Scenario: Export interconnect file
+- **WHEN** an admin exports Interconnection from Maintenance on a Main with one paired Repeater
+- **THEN** the downloaded JSON includes that peer’s persisted interconnect identity fields
+
+#### Scenario: Import keeps matched existing peers
+- **WHEN** an admin confirms Import listing two already-paired MACs plus new peers
+- **THEN** the two existing Repeaters stay authoritative and new peers are added within cap
+
+#### Scenario: Hidden on Repeater
+- **WHEN** network role is Repeater and an admin opens Maintenance
+- **THEN** the Interconnection export/import card is not shown
+
+### Requirement: Repeater shows read-only Main-owned Zigbee fields
+When network role is Repeater, Zigbee channel and Zigbee search window MUST remain visible and MUST be read-only (Main-owned via interconnect).
+
+#### Scenario: Repeater shows read-only channel and search window
+- **WHEN** network role is Repeater and an admin opens Zigbee settings
+- **THEN** Zigbee channel and Zigbee search window are visible and not editable

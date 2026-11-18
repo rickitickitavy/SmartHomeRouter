@@ -1265,6 +1265,98 @@ html, body {
     background: #1aaa4a;
 }
 
+.device-online-dot.is-offline {
+    background: #9a9a9a;
+}
+
+.status-value-with-dot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.35rem;
+    min-height: 1.25rem;
+}
+
+.interconnect-settings-actions {
+    margin-bottom: 1.75rem;
+}
+
+.interconnect-pair-actions {
+    margin-top: 1.5rem;
+}
+
+.interconnect-main-status-card {
+    margin: 0 0 1rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+    color: var(--text);
+}
+
+.interconnect-main-status-head {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    margin-bottom: 0.45rem;
+}
+
+.interconnect-main-status-head .device-online-dot {
+    width: 0.85rem;
+    height: 0.85rem;
+}
+
+.interconnect-main-status-name {
+    font-size: 1.2rem;
+    font-weight: 700;
+}
+
+.interconnect-main-status-meta {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin-bottom: 0.35rem;
+}
+
+.interconnect-main-status-state {
+    font-size: 0.9rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+
+.interconnect-pair-wait-panel {
+    text-align: center;
+    min-width: min(22rem, 92vw);
+}
+
+.interconnect-pair-wait-label {
+    margin: 0.5rem 0 0.25rem;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.interconnect-pair-wait-countdown {
+    margin: 0.35rem 0;
+    font-size: 3.5rem;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    color: var(--accent);
+}
+
+.interconnect-pair-wait-unit {
+    margin: 0 0 1rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--muted);
+}
+
+.data-table tbody tr.is-offline td {
+    color: var(--muted);
+}
+
 .data-table td.device-status-cell {
     white-space: nowrap;
 }

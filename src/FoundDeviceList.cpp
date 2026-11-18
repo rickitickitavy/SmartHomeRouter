@@ -110,7 +110,7 @@ uint16_t FoundDeviceList::shortAddrForIeee(const uint8_t ieee[8]) const {
     return device->shortAddr;
 }
 
-bool FoundDeviceList::noteJoin(const SpiFrame &frame, DeviceTopicMap *registered) {
+bool FoundDeviceList::noteJoin(const SpiFrame &frame, DeviceTopicMap *registered, uint32_t routerId) {
     if (frame.cmd != SpiEvtDeviceJoin || frame.length < SPI_DEVICE_JOIN_MIN_LEN) {
         return false;
     }
@@ -145,9 +145,18 @@ bool FoundDeviceList::noteJoin(const SpiFrame &frame, DeviceTopicMap *registered
         (const char *)frame.payload + SPI_DEVICE_JOIN_MANUFACTURER_OFFSET,
         (const char *)frame.payload + SPI_DEVICE_JOIN_MODEL_OFFSET,
         registered,
-        joinType
+        joinType,
+        routerId
     );
     return false;
+}
+
+uint32_t FoundDeviceList::routerIdForIeee(const uint8_t ieee[8]) const {
+    const FoundDevice *device = findByIeee(ieee);
+    if (device == nullptr) {
+        return 0;
+    }
+    return device->routerId;
 }
 
 void FoundDeviceList::noteIdentity(
@@ -157,7 +166,8 @@ void FoundDeviceList::noteIdentity(
     const char *manufacturer,
     const char *model,
     DeviceTopicMap *registered,
-    uint8_t zigbeeType
+    uint8_t zigbeeType,
+    uint32_t routerId
 ) {
     if (ieee == nullptr || registered == nullptr) {
         return;
@@ -222,6 +232,7 @@ void FoundDeviceList::noteIdentity(
     slot->shortAddr = shortAddr;
     slot->endpoint = endpoint;
     slot->zigbeeType = mergeZigbeeDeviceType(preservedType, zigbeeType);
+    slot->routerId = routerId;
     slot->used = true;
 }
 
@@ -259,7 +270,9 @@ PsramJsonBuffer FoundDeviceList::listJson(DeviceTopicMap *formatter) {
         appendJsonEscaped(json, device->model, device->model ? strlen(device->model) + 1 : 0);
         json += "\",\"type\":\"";
         json += zigbeeDeviceTypeJsonId(device->zigbeeType);
-        json += "\"}";
+        json += "\",\"routerId\":";
+        json += String((unsigned long)device->routerId);
+        json += "}";
     }
     json += "]";
     return json;
