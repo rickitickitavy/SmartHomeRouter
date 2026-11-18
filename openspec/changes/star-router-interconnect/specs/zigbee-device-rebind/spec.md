@@ -3,11 +3,15 @@
 ## ADDED Requirements
 
 ### Requirement: Rebind routes to the device router
-When rebind is requested for a registered Zigbee device, the host SHALL use that device’s `router_id`. Value `0` SHALL use the local slave rebind path. A non-zero value SHALL send interconnect `rebind` to the matching paired Repeater and wait for `rebind_result` with the same outcome classes as local rebind (immediate success, pairing fallback, failure). Rebind SHALL still not delete the registered record and SHALL still apply to all Zigbee device kinds on that path.
+When rebind is requested for a registered Zigbee device, the host SHALL use that device’s `router_id`. Value `0` SHALL use the local slave rebind path. A non-zero value SHALL send interconnect `rebind` only to the matching paired Repeater and wait for `rebind_result` with the same outcome classes as local rebind (immediate success, pairing fallback, failure). Rebind SHALL NOT open search or rebind on other interconnect peers. Rebind SHALL still not delete the registered record and SHALL still apply to all Zigbee device kinds on that path.
 
 #### Scenario: Remote device rebinds on repeater
 - **WHEN** the operator rebinds a registered Zigbee IEEE with router_id matching a paired Repeater
 - **THEN** that Repeater performs local rebind and Main reports the returned outcome without removing the registry entry
+
+#### Scenario: Other routers untouched
+- **WHEN** rebind is requested for a device on one paired Repeater
+- **THEN** Main does not send `rebind` or `search_start` to other paired Repeaters for that request
 
 #### Scenario: Local device unchanged path
 - **WHEN** the operator rebinds a registered Zigbee IEEE with router_id 0

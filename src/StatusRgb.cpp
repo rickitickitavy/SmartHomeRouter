@@ -188,6 +188,14 @@ void StatusRgb::setPairingHeld(bool enabled) {
     apply();
 }
 
+void StatusRgb::setInterconnectPairingBlink(bool enabled) {
+    interconnectPairingBlink = enabled;
+    if (!enabled) {
+        interconnectPairingBlinkOn = true;
+    }
+    apply();
+}
+
 void StatusRgb::setMqttConnected(bool enabled) {
     mqttConnected = enabled;
     apply();
@@ -290,6 +298,15 @@ void StatusRgb::service() {
         updateBlinkOn = true;
         updateBlinkToggleMs = nowMs;
     }
+    if (hostRole && interconnectPairingBlink && !criticalHeld && !updateHeld && !updateBlinkManual) {
+        if ((long)(nowMs - interconnectPairingBlinkToggleMs) >= (long)kInterconnectPairBlinkHalfMs) {
+            interconnectPairingBlinkToggleMs = nowMs;
+            interconnectPairingBlinkOn = !interconnectPairingBlinkOn;
+        }
+    } else {
+        interconnectPairingBlinkOn = true;
+        interconnectPairingBlinkToggleMs = nowMs;
+    }
     apply();
 }
 
@@ -323,6 +340,8 @@ void StatusRgb::apply() {
             levelOn[kLed6Index] = manualUpdateLed6On;
         } else if (updateHeld) {
             levelOn[kLed6Index] = updateBlinkOn;
+        } else if (interconnectPairingBlink) {
+            levelOn[kLed6Index] = interconnectPairingBlinkOn;
         }
         writeLevels(levelOn);
         return;

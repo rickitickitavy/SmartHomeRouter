@@ -182,11 +182,17 @@ static void logDeviceEvent(
     const char *deviceName,
     const DeviceTopicMap *registeredMap
 ) {
-    if (ieee != nullptr && registeredMap != nullptr) {
-        const DeviceTopicEntry *entry = registeredMap->findByIeee(ieee);
-        if (entry != nullptr && entry->debug == 0) {
-            return;
-        }
+    // No device list (Repeater radio): do not spam RX here; Main logs DEBUG devices.
+    if (coordinatorForDefaultResponse != nullptr
+        && !coordinatorForDefaultResponse->isRegistryReady()) {
+        return;
+    }
+    if (ieee == nullptr || registeredMap == nullptr) {
+        return;
+    }
+    const DeviceTopicEntry *entry = registeredMap->findByIeee(ieee);
+    if (entry == nullptr || entry->debug == 0) {
+        return;
     }
     String line = String("Device event ") + eventName;
     if (deviceName != nullptr && deviceName[0] != '\0') {
@@ -197,6 +203,50 @@ static void logDeviceEvent(
     line += " nwk=0x" + String(shortAddr, HEX);
     line += " ep=" + String(endpoint);
     LOGGER.info(line);
+}
+
+static void logZigbeeSend(
+    const char *eventName,
+    const uint8_t ieee[8],
+    uint16_t shortAddr,
+    uint8_t endpoint,
+    const char *deviceName,
+    const DeviceTopicMap *registeredMap,
+    bool ok,
+    int status
+) {
+    // Repeater (no device list / registry not ready): always log sends with result.
+    const bool repeaterRadio = coordinatorForDefaultResponse != nullptr
+        && !coordinatorForDefaultResponse->isRegistryReady();
+    if (!repeaterRadio) {
+        if (ieee == nullptr || registeredMap == nullptr) {
+            return;
+        }
+        const DeviceTopicEntry *entry = registeredMap->findByIeee(ieee);
+        if (entry == nullptr || entry->debug == 0) {
+            return;
+        }
+    }
+    String line = String("Zigbee send ") + (eventName != nullptr ? eventName : "command");
+    line += ok ? " ok" : " fail";
+    if (!ok) {
+        line += " status=";
+        line += String(status);
+    }
+    if (deviceName != nullptr && deviceName[0] != '\0') {
+        line += " name=";
+        line += deviceName;
+    }
+    line += " ieee=" + formatIeeeText(ieee);
+    if (shortAddr != 0 && shortAddr != 0xFFFF) {
+        line += " nwk=0x" + String(shortAddr, HEX);
+    }
+    line += " ep=" + String(endpoint);
+    if (ok) {
+        LOGGER.info(line);
+    } else {
+        LOGGER.warning(line);
+    }
 }
 
 static void addIasZoneClient(esp_zb_cluster_list_t *clusterList) {
@@ -2843,15 +2893,26 @@ bool ZigbeeCoordinator::transmitClusterCmd(
     }
     char commandLabel[80];
     snprintf(commandLabel, sizeof(commandLabel), "zcl cl=0x%04x cmd=0x%02x", clusterId, commandId);
-    logDeviceEvent(
+    const bool sent = sendZclToDevice(
+        device,
+        slot->endpoint,
+        clusterId,
+        true,
+        commandId,
+        payload,
+        payloadLength
+    );
+    logZigbeeSend(
         commandLabel,
         device->ieee,
         device->shortAddr,
         slot->endpoint,
         registeredName(device->ieee),
-        registeredMap
+        registeredMap,
+        sent,
+        sent ? 0 : -1
     );
-    if (!sendZclToDevice(device, slot->endpoint, clusterId, true, commandId, payload, payloadLength)) {
+    if (!sent) {
         if (!slot->hasNext) {
             stashNextClusterCmd(slot, clusterId, commandId, payload, payloadLength);
         }
@@ -2878,15 +2939,34 @@ bool ZigbeeCoordinator::transmitReadAttr(
     uint8_t readPayload[2];
     readPayload[0] = (uint8_t)(attributeId & 0xFF);
     readPayload[1] = (uint8_t)((attributeId >> 8) & 0xFF);
-    if (!sendZclToDevice(
-            device,
-            slot->endpoint,
-            clusterId,
-            false,
-            ZB_ZCL_CMD_READ_ATTRIB,
-            readPayload,
-            2
-        )) {
+    char commandLabel[80];
+    snprintf(
+        commandLabel,
+        sizeof(commandLabel),
+        "read cl=0x%04x attr=0x%04x",
+        clusterId,
+        attributeId
+    );
+    const bool sent = sendZclToDevice(
+        device,
+        slot->endpoint,
+        clusterId,
+        false,
+        ZB_ZCL_CMD_READ_ATTRIB,
+        readPayload,
+        2
+    );
+    logZigbeeSend(
+        commandLabel,
+        device->ieee,
+        device->shortAddr,
+        slot->endpoint,
+        registeredName(device->ieee),
+        registeredMap,
+        sent,
+        sent ? 0 : -1
+    );
+    if (!sent) {
         if (!slot->hasNext) {
             stashNextReadAttr(slot, clusterId, attributeId);
         }
@@ -2915,14 +2995,6 @@ bool ZigbeeCoordinator::transmitOnOff(DestCommandSlot *slot, const char *command
 
     char commandLabel[80];
     snprintf(commandLabel, sizeof(commandLabel), "command %s", action.c_str());
-    logDeviceEvent(
-        commandLabel,
-        device->ieee,
-        device->shortAddr,
-        slot->endpoint,
-        registeredName(device->ieee),
-        registeredMap
-    );
     uint8_t onOffCommandId = 0xFF;
     if (actionLower == "on" || actionLower == "1" || actionLower == "true") {
         onOffCommandId = ESP_ZB_ZCL_CMD_ON_OFF_ON_ID;
@@ -2933,15 +3005,26 @@ bool ZigbeeCoordinator::transmitOnOff(DestCommandSlot *slot, const char *command
     } else {
         return true;
     }
-    if (!sendZclToDevice(
-            device,
-            slot->endpoint,
-            ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
-            true,
-            onOffCommandId,
-            nullptr,
-            0
-        )) {
+    const bool sent = sendZclToDevice(
+        device,
+        slot->endpoint,
+        ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+        true,
+        onOffCommandId,
+        nullptr,
+        0
+    );
+    logZigbeeSend(
+        commandLabel,
+        device->ieee,
+        device->shortAddr,
+        slot->endpoint,
+        registeredName(device->ieee),
+        registeredMap,
+        sent,
+        sent ? 0 : -1
+    );
+    if (!sent) {
         if (!slot->hasNext) {
             stashNextOnOff(slot, action.c_str());
         }
@@ -3123,16 +3206,26 @@ bool ZigbeeCoordinator::transmitWriteAttr(
 
     char eventName[96];
     formatAttrEventName(eventName, sizeof(eventName), clusterId, attributeId, attributeValue);
-    logDeviceEvent(eventName, device->ieee, device->shortAddr, slot->endpoint, registeredName(device->ieee), registeredMap);
-    if (!sendZclToDevice(
-            device,
-            slot->endpoint,
-            clusterId,
-            false,
-            ZB_ZCL_CMD_WRITE_ATTRIB,
-            writePayload,
-            writeLength
-        )) {
+    const bool sent = sendZclToDevice(
+        device,
+        slot->endpoint,
+        clusterId,
+        false,
+        ZB_ZCL_CMD_WRITE_ATTRIB,
+        writePayload,
+        writeLength
+    );
+    logZigbeeSend(
+        eventName,
+        device->ieee,
+        device->shortAddr,
+        slot->endpoint,
+        registeredName(device->ieee),
+        registeredMap,
+        sent,
+        sent ? 0 : -1
+    );
+    if (!sent) {
         if (!slot->hasNext) {
             stashNextWriteAttr(slot, clusterId, attributeId, dataType, attributeValue);
         }
@@ -3262,11 +3355,12 @@ void ZigbeeCoordinator::noteApsSendFailed(
 
     const DeviceTopicEntry *entry =
         (!isZeroIeee(ieee) && registeredMap != nullptr) ? registeredMap->findByIeee(ieee) : nullptr;
-    // Only log for registered devices with Debug on (same gate as other device events).
-    if (entry != nullptr && entry->debug != 0) {
-        String line = "ZCL APS delivery failed status=" + String(sendStatus);
+    const bool repeaterRadio = !registryReady;
+    const bool debugDevice = entry != nullptr && entry->debug != 0;
+    if (repeaterRadio || debugDevice) {
+        String line = "Zigbee send APS fail status=" + String(sendStatus);
         line += " ep=" + String((unsigned)dstEndpoint);
-        if (entry->friendlyName != nullptr && entry->friendlyName[0] != '\0') {
+        if (entry != nullptr && entry->friendlyName != nullptr && entry->friendlyName[0] != '\0') {
             line += " name=";
             line += entry->friendlyName;
         }

@@ -16,6 +16,7 @@ public:
         char *manufacturer;
         char *model;
         uint8_t zigbeeType;
+        uint32_t routerId;
         bool used;
         FoundDevice *next;
     };
@@ -27,7 +28,7 @@ public:
     // Found list stays empty until Search starts; only then may joins appear.
     void setAcceptingJoins(bool accepting);
     bool acceptingJoins() const { return joinsAccepted; }
-    bool noteJoin(const SpiFrame &frame, DeviceTopicMap *registered);
+    bool noteJoin(const SpiFrame &frame, DeviceTopicMap *registered, uint32_t routerId = 0);
     void noteIdentity(
         const uint8_t ieee[8],
         uint16_t shortAddr,
@@ -35,8 +36,10 @@ public:
         const char *manufacturer,
         const char *model,
         DeviceTopicMap *registered,
-        uint8_t zigbeeType = 0
+        uint8_t zigbeeType = 0,
+        uint32_t routerId = 0
     );
+    uint32_t routerIdForIeee(const uint8_t ieee[8]) const;
     uint8_t zigbeeTypeForIeee(const uint8_t ieee[8]) const;
     const char *manufacturerForIeee(const uint8_t ieee[8]) const;
     const char *modelForIeee(const uint8_t ieee[8]) const;

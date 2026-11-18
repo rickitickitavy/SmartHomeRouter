@@ -18,15 +18,15 @@ The host SHALL persist an interconnect network role of `Main` or `Repeater` and 
 - **THEN** the host rejects the save or truncates consistently so the stored name never exceeds 32 characters
 
 ### Requirement: Role change clears peers after double confirmation
-Changing network role from Main to Repeater or Repeater to Main SHALL require two operator confirmations. After the second confirm, the host SHALL clear the paired-router table and peer secrets (including a Repeater’s stored Main peer).
+Changing network role from Main to Repeater or Repeater to Main SHALL require two operator confirmations. After the second confirm, the host SHALL clear the paired-router table and peer secrets (including a Repeater’s stored Main peer), then SHALL reboot to apply the new role.
 
 #### Scenario: First confirm alone does not clear
 - **WHEN** the operator changes role and accepts only the first confirm
 - **THEN** the paired table is unchanged
 
-#### Scenario: Second confirm clears peers
+#### Scenario: Second confirm clears peers and reboots
 - **WHEN** the operator completes both confirms for a role change
-- **THEN** all paired peer records and secrets are removed
+- **THEN** all paired peer records and secrets are removed and the host schedules a restart
 
 ### Requirement: One TCP port for pairing and exchange
 The host SHALL persist a single interconnect TCP port used for pairing and for all post-pair universal exchanges. Factory default SHALL be **10241**.
@@ -105,6 +105,10 @@ For non-zero `router_id`, Main SHALL send `rebind` to that Repeater; the Repeate
 - **WHEN** the operator rebinds a Zigbee device on a paired Repeater and local immediate bind succeeds
 - **THEN** Main receives rebind_result success and the operator API reports immediate success
 
+#### Scenario: Remote rebind targets only owning router
+- **WHEN** the operator rebinds a registered device whose `router_id` matches one paired Repeater
+- **THEN** Main sends `rebind` only to that Repeater and does not open search/rebind on other interconnect peers or the local radio
+
 #### Scenario: Remote rebind fallback
 - **WHEN** the Repeater falls back to pairing-window rebind for that IEEE
 - **THEN** Main receives rebind_result pairing fallback and keeps the registered record
@@ -112,6 +116,24 @@ For non-zero `router_id`, Main SHALL send `rebind` to that Repeater; the Repeate
 #### Scenario: Rebind timeout
 - **WHEN** no rebind_result arrives within 30 seconds
 - **THEN** Main reports rebind failure and keeps the registered record
+
+### Requirement: Re-pair same Repeater by stored IP then MAC scan
+Main SHALL offer **Re pair** for a paired Repeater. Re-pair SHALL first attempt pairing to the stored IP/port and SHALL require the answering host MAC to match the stored MAC. If that address has no matching Repeater, Main SHALL scan the subnet for the stored MAC and pair automatically when found. If neither path succeeds, re-pair SHALL fail and the peer row SHALL remain until the operator deletes it.
+
+#### Scenario: Stored IP answers with matching MAC
+- **WHEN** Re pair is started and the stored IP answers with the stored MAC while Pair to host is active
+- **THEN** pairing completes and the same router id is kept
+
+#### Scenario: Stored IP missing falls back to MAC scan
+- **WHEN** Re pair cannot reach a matching Repeater at the stored IP
+- **THEN** Main scans the subnet for the stored MAC and pairs that host, or reports re-pair failed if not found
+
+### Requirement: Re-pair with new keeps router id and device binds
+Main SHALL offer **Re-pair with new** on a paired Repeater card. That flow SHALL use the same Pair sequence (explicit IP or subnet scan with operator confirm). On success Main SHALL replace the peer’s MAC/IP/secret/name while keeping the same `router_id` and Zigbee channel so registered device binds to that router id stay valid.
+
+#### Scenario: Replacement hardware keeps binds
+- **WHEN** the operator completes Re-pair with new against a different MAC while Pair to host is active
+- **THEN** the peer row shows the new MAC/IP and devices that stored that router id remain bound to it
 
 ### Requirement: Main verifies connecting Repeater identity
 When a host connects to Main for universal exchange, Main SHALL accept the session only if the peer matches a paired Repeater (MAC/secret established at pairing).
@@ -147,11 +169,15 @@ On Main, **Pair** SHALL open a dialog with optional IP, port (default 10241), **
 - **THEN** Main continues scanning for the next candidate
 
 ### Requirement: Main shows paired routers table
-When role is Main, Interconnection SHALL show a table of paired routers with Name, MAC, IP, Port, online indicator (green or gray), device count, packets In, and packets Out, plus a **Pair** control below the table. The STAR SHALL allow at most **8** routers total (1 Main + at most **7** paired Repeaters).
+When role is Main, Interconnection SHALL show a table of paired routers with Name, MAC, IP, Port, online indicator (green or gray), device count, packets In, and packets Out, plus a **Pair** control below the table. The STAR SHALL allow at most **8** routers total (1 Main + at most **7** paired Repeaters). While the Interconnection section is open, the host SHALL push peer live fields (online, packets In/Out, and related status) over WebSocket `/ws/interconnect` so the table refreshes without a manual Reload.
 
 #### Scenario: Online indicator
 - **WHEN** a paired Repeater answered the latest checkAlive within the configured interval window
 - **THEN** its online indicator is green; otherwise it is gray
+
+#### Scenario: Live table refresh on packet counters
+- **WHEN** Interconnection is open on Main and a peer’s packets In or Out changes
+- **THEN** the Repeaters table updates those counts via `/ws/interconnect` without requiring Reset/Save
 
 #### Scenario: Eighth repeater rejected
 - **WHEN** Main already has 7 paired Repeaters and pairing would add another

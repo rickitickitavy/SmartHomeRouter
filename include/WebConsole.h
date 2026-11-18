@@ -14,6 +14,7 @@
 #include "PsramJsonBuffer.h"
 #if defined(BOARD_ROLE_HOST)
 #include "HistoryStore.h"
+#include "RouterInterconnect.h"
 #endif
 
 class WebConsole {
@@ -53,6 +54,9 @@ public:
     void broadcastDeviceRemoved(const uint8_t ieee[8]);
     void broadcastDevicesReload();
     void broadcastConsolesReload();
+#if defined(BOARD_ROLE_HOST)
+    void notifyInterconnectLiveChanged();
+#endif
     void setDeviceServices(
         FoundDeviceList *foundDevices,
         SearchStartFn startSearch,
@@ -75,6 +79,7 @@ public:
     void setActionRunner(ActionRunnerFn handler);
 #if defined(BOARD_ROLE_HOST)
     void setHistoryStore(HistoryStore *store);
+    void setRouterInterconnect(RouterInterconnect *interconnect);
 #endif
 
 private:
@@ -104,10 +109,16 @@ private:
     ActionRunnerFn runConsoleAction = nullptr;
 #if defined(BOARD_ROLE_HOST)
     HistoryStore *historyStore = nullptr;
+    RouterInterconnect *routerInterconnect = nullptr;
 #endif
     AsyncWebServer server;
     AsyncWebSocket devicesSocket;
     AsyncWebSocket consolesSocket;
+#if defined(BOARD_ROLE_HOST)
+    AsyncWebSocket interconnectSocket;
+    bool interconnectLiveDirty = false;
+    uint32_t interconnectLiveLastBroadcastMs = 0;
+#endif
     bool otaStarted = false;
     bool otaFailed = false;
     bool tornDown = false;
@@ -115,6 +126,10 @@ private:
 
     void bindDevicesSocket();
     void bindConsolesSocket();
+#if defined(BOARD_ROLE_HOST)
+    void bindInterconnectSocket();
+    void broadcastInterconnectLive();
+#endif
     void handleLiveSocketEvent(
         AsyncWebSocket *socket,
         AsyncWebSocketClient *client,
@@ -138,6 +153,10 @@ private:
     void handleHardwarePost(AsyncWebServerRequest *request);
 #if defined(BOARD_ROLE_HOST)
     void handleHistoryGet(AsyncWebServerRequest *request);
+    void handleInterconnectGet(AsyncWebServerRequest *request);
+    void handleInterconnectPost(AsyncWebServerRequest *request);
+    void handleInterconnectExportGet(AsyncWebServerRequest *request);
+    void handleInterconnectImportPost(AsyncWebServerRequest *request);
 #endif
     void handleSettingsExportGet(AsyncWebServerRequest *request);
     void handleSettingsRestorePost(AsyncWebServerRequest *request);

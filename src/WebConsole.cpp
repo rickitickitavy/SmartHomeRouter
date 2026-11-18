@@ -145,7 +145,12 @@ WebConsole::WebConsole(
       sceneStore(sceneStore),
       server(80),
       devicesSocket("/ws/devices"),
-      consolesSocket("/ws/consoles") {}
+      consolesSocket("/ws/consoles")
+#if defined(BOARD_ROLE_HOST)
+      ,
+      interconnectSocket("/ws/interconnect")
+#endif
+{}
 
 void WebConsole::begin() {
     server.on("/", HTTP_GET, [this](AsyncWebServerRequest *request) { handleRoot(request); });
@@ -207,6 +212,9 @@ void WebConsole::begin() {
     );
     bindDevicesSocket();
     bindConsolesSocket();
+#if defined(BOARD_ROLE_HOST)
+    bindInterconnectSocket();
+#endif
     server.on("/api/auth/me", HTTP_GET, [this](AsyncWebServerRequest *request) { handleAuthMeGet(request); });
     server.on("/api/auth/touch", HTTP_POST, [this](AsyncWebServerRequest *request) { handleAuthTouchPost(request); });
     // Child paths before collection; exact() so /api/users does not steal /api/users/update.
@@ -306,6 +314,34 @@ void WebConsole::begin() {
         "/api/history",
         HTTP_GET,
         [this](AsyncWebServerRequest *request) { handleHistoryGet(request); }
+    );
+    server.on(
+        "/api/interconnect",
+        HTTP_GET,
+        [this](AsyncWebServerRequest *request) { handleInterconnectGet(request); }
+    );
+    server.on(
+        "/api/interconnect",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleInterconnectPost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
+    server.on(
+        "/api/interconnect/export",
+        HTTP_GET,
+        [this](AsyncWebServerRequest *request) { handleInterconnectExportGet(request); }
+    );
+    server.on(
+        "/api/interconnect/import",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleInterconnectImportPost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
     );
 #endif
     server.on(
@@ -776,8 +812,14 @@ void WebConsole::tearDown() {
     clearCameraHeavyOp();
     devicesSocket.closeAll();
     consolesSocket.closeAll();
+#if defined(BOARD_ROLE_HOST)
+    interconnectSocket.closeAll();
+#endif
     devicesSocket.cleanupClients();
     consolesSocket.cleanupClients();
+#if defined(BOARD_ROLE_HOST)
+    interconnectSocket.cleanupClients();
+#endif
     server.end();
     LOGGER.info("Web console torn down for low-memory fail-safe");
 }
@@ -918,13 +960,28 @@ void WebConsole::loop() {
     serviceWebRequestLeds();
     devicesSocket.cleanupClients();
     consolesSocket.cleanupClients();
+#if defined(BOARD_ROLE_HOST)
+    interconnectSocket.cleanupClients();
+    if (interconnectLiveDirty) {
+        const uint32_t nowMs = millis();
+        if ((uint32_t)(nowMs - interconnectLiveLastBroadcastMs) >= 250UL) {
+            interconnectLiveDirty = false;
+            interconnectLiveLastBroadcastMs = nowMs;
+            broadcastInterconnectLive();
+        }
+    }
+#endif
     if (cameraStore != nullptr) {
         cameraStore->tickDiscovery();
     }
 }
 
 int WebConsole::activeWebSocketCount() const {
-    return (int)devicesSocket.count() + (int)consolesSocket.count();
+    int count = (int)devicesSocket.count() + (int)consolesSocket.count();
+#if defined(BOARD_ROLE_HOST)
+    count += (int)interconnectSocket.count();
+#endif
+    return count;
 }
 
 void WebConsole::handleLiveSocketEvent(
@@ -1003,6 +1060,47 @@ void WebConsole::bindConsolesSocket() {
     );
     server.addHandler(&consolesSocket);
 }
+
+#if defined(BOARD_ROLE_HOST)
+void WebConsole::bindInterconnectSocket() {
+    interconnectSocket.handleHandshake([this](AsyncWebServerRequest *request) {
+        return authenticatedUser(request, false) != nullptr;
+    });
+    interconnectSocket.onEvent(
+        [this](
+            AsyncWebSocket *socket,
+            AsyncWebSocketClient *client,
+            AwsEventType type,
+            void *arg,
+            uint8_t *data,
+            size_t len
+        ) { handleLiveSocketEvent(socket, client, type, arg, data, len); }
+    );
+    server.addHandler(&interconnectSocket);
+}
+
+void WebConsole::notifyInterconnectLiveChanged() {
+    interconnectLiveDirty = true;
+}
+
+void WebConsole::broadcastInterconnectLive() {
+    if (interconnectSocket.count() == 0 || routerInterconnect == nullptr) {
+        return;
+    }
+    PsramJsonBuffer status = routerInterconnect->statusJson();
+    if (!status.ok() || status.length() == 0) {
+        return;
+    }
+    PsramJsonBuffer message;
+    message += "{\"op\":\"update\",\"interconnect\":";
+    message += status.c_str();
+    message += "}";
+    if (!message.ok()) {
+        return;
+    }
+    interconnectSocket.textAll(message.c_str());
+}
+#endif
 
 void WebConsole::broadcastConsolesReload() {
     if (consolesSocket.count() == 0) {
@@ -2949,6 +3047,305 @@ void WebConsole::setDevicesFileHandler(WebConsole::DevicesFileFn handler) {
 void WebConsole::setHistoryStore(HistoryStore *store) {
     historyStore = store;
 }
+
+void WebConsole::setRouterInterconnect(RouterInterconnect *interconnect) {
+    routerInterconnect = interconnect;
+}
+
+void WebConsole::handleInterconnectGet(AsyncWebServerRequest *request) {
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (routerInterconnect == nullptr || routerInterconnect->store() == nullptr) {
+        request->send(503, "text/plain", "Interconnect unavailable");
+        return;
+    }
+    sendJsonDocument(request, routerInterconnect->statusJson());
+}
+
+void WebConsole::handleInterconnectPost(AsyncWebServerRequest *request) {
+    PsramJsonBuffer body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (routerInterconnect == nullptr || routerInterconnect->store() == nullptr) {
+        request->send(503, "text/plain", "Interconnect unavailable");
+        return;
+    }
+    InterconnectStore *store = routerInterconnect->store();
+
+    String action;
+    if (extractJsonString(body.c_str(), "action", action)) {
+        if (action == "startPairWait") {
+            if (store->settings().role != InterconnectRoleRepeater) {
+                request->send(400, "text/plain", "Pair wait is Repeater-only");
+                return;
+            }
+            if (!routerInterconnect->startPairingWait()) {
+                request->send(500, "text/plain", "Failed to start pair wait");
+                return;
+            }
+            request->send(200, "application/json", "{\"ok\":true}");
+            return;
+        }
+        if (action == "cancelPairWait") {
+            routerInterconnect->cancelPairingWait();
+            request->send(200, "application/json", "{\"ok\":true}");
+            return;
+        }
+        if (action == "pairTo") {
+            if (store->settings().role != InterconnectRoleMain) {
+                request->send(400, "text/plain", "pairTo is Main-only");
+                return;
+            }
+            String ip;
+            int port = INTERCONNECT_PORT_DEFAULT;
+            int replaceRouterId = 0;
+            extractJsonString(body.c_str(), "ip", ip);
+            extractJsonInt(body.c_str(), "port", port);
+            extractJsonInt(body.c_str(), "replaceRouterId", replaceRouterId);
+            if (port <= 0 || port > 65535) {
+                request->send(400, "text/plain", "port invalid");
+                return;
+            }
+            if (replaceRouterId > 0) {
+                if (!routerInterconnect->startPairReplace(
+                        ip.length() > 0 ? ip.c_str() : nullptr,
+                        (uint16_t)port,
+                        (uint32_t)replaceRouterId
+                    )) {
+                    request->send(503, "text/plain", "Replace pair busy or rejected");
+                    return;
+                }
+                request->send(
+                    200,
+                    "application/json",
+                    ip.length() > 0 ? "{\"ok\":true,\"queued\":true}" : "{\"ok\":true,\"scanning\":true}"
+                );
+                return;
+            }
+            if (ip.length() == 0) {
+                if (!routerInterconnect->startSubnetScan((uint16_t)port)) {
+                    request->send(503, "text/plain", "Scan could not start");
+                    return;
+                }
+                request->send(200, "application/json", "{\"ok\":true,\"scanning\":true}");
+                return;
+            }
+            if (!routerInterconnect->startPairTo(ip.c_str(), (uint16_t)port)) {
+                request->send(503, "text/plain", "Pair queue full or rejected");
+                return;
+            }
+            request->send(200, "application/json", "{\"ok\":true,\"queued\":true}");
+            return;
+        }
+        if (action == "cancelScan") {
+            routerInterconnect->cancelSubnetScan();
+            request->send(200, "application/json", "{\"ok\":true}");
+            return;
+        }
+        if (action == "acceptScanCandidate") {
+            if (!routerInterconnect->acceptScanCandidate()) {
+                request->send(400, "text/plain", "No scan candidate");
+                return;
+            }
+            request->send(200, "application/json", "{\"ok\":true,\"queued\":true}");
+            return;
+        }
+        if (action == "rejectScanCandidate") {
+            routerInterconnect->rejectScanCandidate();
+            request->send(200, "application/json", "{\"ok\":true}");
+            return;
+        }
+        if (action == "deletePeer") {
+            if (store->settings().role != InterconnectRoleMain) {
+                request->send(400, "text/plain", "deletePeer is Main-only");
+                return;
+            }
+            String macText;
+            if (!extractJsonString(body.c_str(), "mac", macText) || macText.length() == 0) {
+                request->send(400, "text/plain", "Need mac");
+                return;
+            }
+            InterconnectPeer *peer = store->findByMacText(macText.c_str());
+            if (peer == nullptr) {
+                request->send(404, "text/plain", "Peer not found");
+                return;
+            }
+            if (!store->removePeerByMac(peer->mac)) {
+                request->send(500, "text/plain", "Delete failed");
+                return;
+            }
+            notifyInterconnectLiveChanged();
+            request->send(200, "application/json", "{\"ok\":true}");
+            return;
+        }
+        if (action == "rePair") {
+            if (store->settings().role != InterconnectRoleMain) {
+                request->send(400, "text/plain", "rePair is Main-only");
+                return;
+            }
+            String macText;
+            if (!extractJsonString(body.c_str(), "mac", macText) || macText.length() == 0) {
+                request->send(400, "text/plain", "Need mac");
+                return;
+            }
+            uint8_t mac[6];
+            if (!InterconnectStore::parseMacText(macText.c_str(), mac)) {
+                request->send(400, "text/plain", "Bad mac");
+                return;
+            }
+            InterconnectPeer *peer = store->findByMac(mac);
+            if (peer == nullptr) {
+                request->send(404, "text/plain", "Peer not found");
+                return;
+            }
+            if (!routerInterconnect->startRePair(mac)) {
+                request->send(503, "text/plain", "Re-pair busy or rejected");
+                return;
+            }
+            request->send(200, "application/json", "{\"ok\":true,\"queued\":true}");
+            return;
+        }
+        if (action == "rePairWithNew") {
+            if (store->settings().role != InterconnectRoleMain) {
+                request->send(400, "text/plain", "rePairWithNew is Main-only");
+                return;
+            }
+            String macText;
+            if (!extractJsonString(body.c_str(), "mac", macText) || macText.length() == 0) {
+                request->send(400, "text/plain", "Need mac");
+                return;
+            }
+            InterconnectPeer *peer = store->findByMacText(macText.c_str());
+            if (peer == nullptr) {
+                request->send(404, "text/plain", "Peer not found");
+                return;
+            }
+            String ip;
+            int port = store->settings().port;
+            extractJsonString(body.c_str(), "ip", ip);
+            extractJsonInt(body.c_str(), "port", port);
+            if (port <= 0 || port > 65535) {
+                request->send(400, "text/plain", "port invalid");
+                return;
+            }
+            if (!routerInterconnect->startPairReplace(
+                    ip.length() > 0 ? ip.c_str() : nullptr,
+                    (uint16_t)port,
+                    peer->routerId
+                )) {
+                request->send(503, "text/plain", "Re-pair with new busy or rejected");
+                return;
+            }
+            request->send(
+                200,
+                "application/json",
+                ip.length() > 0 ? "{\"ok\":true,\"queued\":true}" : "{\"ok\":true,\"scanning\":true}"
+            );
+            return;
+        }
+        request->send(400, "text/plain", "Unknown action");
+        return;
+    }
+
+    String routerName;
+    String roleText;
+    int port = store->settings().port;
+    int checkAliveSec = store->settings().checkAliveSec;
+    if (!extractJsonString(body.c_str(), "routerName", routerName) || routerName.length() == 0
+        || routerName.length() > INTERCONNECT_NAME_MAX) {
+        request->send(400, "text/plain", "Need routerName (1-32)");
+        return;
+    }
+    if (!extractJsonString(body.c_str(), "role", roleText)) {
+        request->send(400, "text/plain", "Need role");
+        return;
+    }
+    InterconnectRole role = InterconnectRoleMain;
+    if (roleText == "Repeater") {
+        role = InterconnectRoleRepeater;
+    } else if (roleText != "Main") {
+        request->send(400, "text/plain", "role must be Main or Repeater");
+        return;
+    }
+    if (!extractJsonInt(body.c_str(), "port", port) || port <= 0 || port > 65535) {
+        request->send(400, "text/plain", "Need port");
+        return;
+    }
+    if (!extractJsonInt(body.c_str(), "checkAliveSec", checkAliveSec)
+        || checkAliveSec < INTERCONNECT_CHECK_ALIVE_MIN_SEC
+        || checkAliveSec > INTERCONNECT_CHECK_ALIVE_MAX_SEC) {
+        request->send(400, "text/plain", "checkAliveSec out of range");
+        return;
+    }
+
+    const bool roleChanged = role != store->settings().role;
+    const uint16_t previousPort = store->settings().port;
+    if (roleChanged) {
+        store->clearPeers();
+        routerInterconnect->cancelPairingWait();
+    }
+    if (!store->setLocalIdentity(routerName.c_str(), role, (uint16_t)port, (uint16_t)checkAliveSec)) {
+        request->send(400, "text/plain", "Invalid interconnect settings");
+        return;
+    }
+    if ((uint16_t)port != previousPort) {
+        routerInterconnect->begin();
+    }
+    if (role == InterconnectRoleMain) {
+        routerInterconnect->pushSharedVariablesToAllPeers();
+    }
+    notifyInterconnectLiveChanged();
+    if (roleChanged) {
+        settingsManager->requestRestart();
+        request->send(200, "text/plain", "Saved. Device will restart to apply router role.");
+        return;
+    }
+    request->send(200, "text/plain", "Saved");
+}
+
+void WebConsole::handleInterconnectExportGet(AsyncWebServerRequest *request) {
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (routerInterconnect == nullptr || routerInterconnect->store() == nullptr) {
+        request->send(503, "text/plain", "Interconnect unavailable");
+        return;
+    }
+    if (routerInterconnect->store()->settings().role == InterconnectRoleRepeater) {
+        request->send(403, "text/plain", "Interconnect export is Main-only");
+        return;
+    }
+    sendJsonDocument(request, routerInterconnect->store()->exportJson());
+}
+
+void WebConsole::handleInterconnectImportPost(AsyncWebServerRequest *request) {
+    PsramJsonBuffer body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    if (!requireAdmin(request, nullptr)) {
+        return;
+    }
+    if (routerInterconnect == nullptr || routerInterconnect->store() == nullptr) {
+        request->send(503, "text/plain", "Interconnect unavailable");
+        return;
+    }
+    if (routerInterconnect->store()->settings().role == InterconnectRoleRepeater) {
+        request->send(403, "text/plain", "Interconnect import is Main-only");
+        return;
+    }
+    if (!routerInterconnect->store()->importJson(body.c_str(), true)) {
+        request->send(400, "text/plain", "Invalid interconnect import");
+        return;
+    }
+    routerInterconnect->begin();
+    request->send(200, "text/plain", "Imported");
+}
 #endif
 
 void WebConsole::setHardwareApplyHandler(WebConsole::HardwareApplyFn handler) {
@@ -3863,6 +4260,17 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
     json += camerasJson.c_str();
     json += ",\"scenes\":";
     json += scenesJson.c_str();
+#if defined(BOARD_ROLE_HOST)
+    if (routerInterconnect != nullptr && routerInterconnect->store() != nullptr) {
+        PsramJsonBuffer interconnectJson = routerInterconnect->store()->exportJson();
+        if (!interconnectJson.ok()) {
+            request->send(507, "text/plain", "Out of memory");
+            return;
+        }
+        json += ",\"interconnect\":";
+        json += interconnectJson.c_str();
+    }
+#endif
     json += "}";
     sendJsonDocument(request, std::move(json));
 }
@@ -3899,6 +4307,12 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
     const bool haveAutomations = extractJsonKeyedSlice(body.c_str(), "automations", '[', automationsJson);
     const bool haveCameras = extractJsonKeyedSlice(body.c_str(), "cameras", '[', camerasJson);
     const bool haveScenes = extractJsonKeyedSlice(body.c_str(), "scenes", '[', scenesJson);
+    String interconnectJson;
+#if defined(BOARD_ROLE_HOST)
+    const bool haveInterconnect = extractJsonKeyedSlice(body.c_str(), "interconnect", '{', interconnectJson);
+#else
+    const bool haveInterconnect = false;
+#endif
     if (!devicesJson.ok() || !usersJson.ok() || !consolesJson.ok() || !automationsJson.ok()
         || !camerasJson.ok() || !scenesJson.ok()) {
         request->send(507, "text/plain", "Out of memory");
@@ -3983,6 +4397,19 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
             return;
         }
     }
+#if defined(BOARD_ROLE_HOST)
+    if (haveInterconnect) {
+        if (routerInterconnect == nullptr || routerInterconnect->store() == nullptr) {
+            request->send(503, "text/plain", "Interconnect unavailable");
+            return;
+        }
+        if (!routerInterconnect->store()->importJson(interconnectJson.c_str(), true)) {
+            request->send(400, "text/plain", "Need a valid interconnect section");
+            return;
+        }
+        routerInterconnect->begin();
+    }
+#endif
     if (haveUi && !applyThemeJson(uiJson.c_str(), userStore->findByName(actorName), &errorText)) {
         request->send(400, "text/plain", errorText);
         return;
@@ -4383,6 +4810,16 @@ void WebConsole::handleDevicesPost(AsyncWebServerRequest *request) {
         entry->historyEpsilon = -1.0f;
     } else if (existing != nullptr) {
         entry->historyEpsilon = existing->historyEpsilon;
+    }
+    int parsedRouterId = 0;
+    if (extractJsonInt(body.c_str(), "routerId", parsedRouterId) && parsedRouterId >= 0) {
+        entry->routerId = (uint32_t)parsedRouterId;
+    } else if (!isEdit && foundDevices != nullptr) {
+        entry->routerId = foundDevices->routerIdForIeee(ieee);
+    } else if (isEdit && existing != nullptr) {
+        entry->routerId = existing->routerId;
+    } else {
+        entry->routerId = 0;
     }
     if (transport != DeviceTransportMqtt) {
         int parsedNwk = 0;
@@ -4875,7 +5312,8 @@ void WebConsole::handleDevicesRebindPost(AsyncWebServerRequest *request) {
         return;
     }
     uint8_t outcome = SPI_REBIND_OUTCOME_FAILED;
-    const bool ok = ZIGBEE_SPI_PROXY.rebindDevice(ieee, &outcome, 4000UL);
+    // Local and remote rebind both wait up to 30s; remote targets only the device's routerId.
+    const bool ok = ZIGBEE_SPI_PROXY.rebindDevice(ieee, &outcome, INTERCONNECT_REBIND_WAIT_MS);
     String json = "{\"ieee\":\"";
     json += ieeeText;
     json += "\",\"outcome\":\"";

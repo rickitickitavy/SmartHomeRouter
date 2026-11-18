@@ -29,6 +29,8 @@
 #include "SdCardStorage.h"
 #include "InterChipHost.h"
 #include "CpuUsageSampler.h"
+#include "InterconnectStore.h"
+#include "RouterInterconnect.h"
 #endif
 #include "JsonField.h"
 #if defined(BOARD_ROLE_SLAVE)
@@ -87,6 +89,8 @@ static CameraStore *cameraStore = nullptr;
 static SceneStore *sceneStore = nullptr;
 static AutomationEngine *automationEngine = nullptr;
 static EmailSender *emailSender = nullptr;
+static InterconnectStore *interconnectStore = nullptr;
+static RouterInterconnect *routerInterconnect = nullptr;
 static HistoryStore historyStore;
 static SdCardStorage sdCardStorage;
 static CpuUsageSampler hostCpuUsageSampler;
@@ -153,6 +157,11 @@ static void pumpHostDeferredStoreWork() {
             );
             INTER_CHIP_HOST.resetSlaveSynchronous();
         }
+        if (routerInterconnect != nullptr
+            && interconnectStore != nullptr
+            && interconnectStore->settings().role == InterconnectRoleMain) {
+            routerInterconnect->pushSharedVariablesToAllPeers();
+        }
     }
 #endif
     if (userStore != nullptr) {
@@ -170,6 +179,9 @@ static void pumpHostDeferredStoreWork() {
     }
     if (sceneStore != nullptr) {
         sceneStore->persistIfDue();
+    }
+    if (interconnectStore != nullptr) {
+        interconnectStore->persistIfDue();
     }
 #endif
 }
@@ -807,7 +819,6 @@ static void onLightState(const char *message, const uint8_t ieee[8], uint8_t end
     (void)shortAddr;
     DeviceTopicEntry *entry = topicMap->findByIeee(ieee);
     if (entry == nullptr) {
-        LOGGER.info("Unmapped device state; assign topics via map or MQTT bridge/config/device");
         return;
     }
     if (deviceTopicEmpty(entry->stateTopic)) {
@@ -817,11 +828,13 @@ static void onLightState(const char *message, const uint8_t ieee[8], uint8_t end
     mqttClient->publishDeviceState(entry, message, endpoint);
 }
 
+static uint32_t hostSpiInjectRouterId = 0;
+
 static void onHostSpiEvent(const SpiFrame &frame) {
     FIRMWARE_OTA.onSpiFrame(frame);
     ZIGBEE_SPI_PROXY.onSpiEvent(frame);
     if (frame.cmd == SpiEvtDeviceJoin && foundDevices != nullptr && topicMap != nullptr) {
-        if (foundDevices->noteJoin(frame, topicMap)) {
+        if (foundDevices->noteJoin(frame, topicMap, hostSpiInjectRouterId)) {
             requestHostDeviceListPersist();
         }
         if (frame.length >= SPI_DEVICE_JOIN_MIN_LEN) {
@@ -849,7 +862,8 @@ static void onHostSpiEvent(const SpiFrame &frame) {
             "",
             "",
             topicMap,
-            zigbeeDeviceTypeFromAttrMessage(reportMessage)
+            zigbeeDeviceTypeFromAttrMessage(reportMessage),
+            hostSpiInjectRouterId
         );
         if (topicMap->applyLastKnownShort(ieee, shortAddr)) {
             requestHostDeviceListPersist();
@@ -866,6 +880,40 @@ static void onHostSpiEvent(const SpiFrame &frame) {
         }
 #endif
     }
+#if defined(BOARD_ROLE_HOST)
+    if (hostSpiInjectRouterId == 0 && routerInterconnect != nullptr) {
+        routerInterconnect->maybeForwardLocalSpiEvent(frame);
+    }
+#endif
+}
+
+static void interconnectBroadcastSearch(uint8_t seconds, bool start) {
+#if defined(BOARD_ROLE_HOST)
+    if (interconnectStore == nullptr || routerInterconnect == nullptr) {
+        return;
+    }
+    if (interconnectStore->settings().role != InterconnectRoleMain) {
+        return;
+    }
+    for (int peerIndex = 0; peerIndex < INTERCONNECT_MAX_REPEATERS; peerIndex++) {
+        InterconnectPeer *peer = interconnectStore->peerAt(peerIndex);
+        if (peer == nullptr || !peer->used) {
+            continue;
+        }
+        uint8_t payload[1] = {seconds};
+        routerInterconnect->enqueueExchange(
+            start ? InterconnectMsgSearchStart : InterconnectMsgSearchStop,
+            peer->mac,
+            peer->ip,
+            peer->port,
+            start ? payload : nullptr,
+            start ? (uint16_t)1 : (uint16_t)0
+        );
+    }
+#else
+    (void)seconds;
+    (void)start;
+#endif
 }
 
 static bool startDeviceSearch() {
@@ -885,6 +933,7 @@ static bool startDeviceSearch() {
         foundDevices->setAcceptingJoins(true);
     }
     LOGGER.info("Search permit join " + String(seconds) + "s");
+    interconnectBroadcastSearch(seconds, true);
     if (!ZIGBEE_SPI_PROXY.permitJoin(seconds)) {
         if (foundDevices != nullptr) {
             foundDevices->setAcceptingJoins(false);
@@ -900,6 +949,7 @@ static void stopDeviceSearch() {
         foundDevices->setAcceptingJoins(false);
         foundDevices->clear();
     }
+    interconnectBroadcastSearch(0, false);
     ZIGBEE_SPI_PROXY.closeJoin();
 }
 
@@ -907,6 +957,13 @@ static bool persistHostDeviceList() {
     if (settingsManager == nullptr) {
         return false;
     }
+#if defined(BOARD_ROLE_HOST)
+    // Repeater must not rewrite devices.json (list stays unloaded in RAM).
+    if (interconnectStore != nullptr
+        && interconnectStore->settings().role == InterconnectRoleRepeater) {
+        return true;
+    }
+#endif
     return settingsManager->saveDevicesJson();
 }
 
@@ -1299,6 +1356,20 @@ static String hostGatewayStatusJson() {
         json += ",\"fsSceneKb\":";
         json += String((unsigned long)((fsScene + 512) / 1024));
     }
+    json += ",\"interconnect\":";
+    if (interconnectStore != nullptr) {
+        const uint32_t waitMs = routerInterconnect != nullptr
+            ? routerInterconnect->pairingWaitRemainingMs()
+            : 0;
+        PsramJsonBuffer interconnectJson = interconnectStore->statusJson(waitMs);
+        if (interconnectJson.ok()) {
+            json += interconnectJson.c_str();
+        } else {
+            json += "null";
+        }
+    } else {
+        json += "null";
+    }
     json += "}";
     return json;
 }
@@ -1310,7 +1381,9 @@ static bool onDeviceUpserted(const DeviceTopicEntry *entry) {
     }
     persistHostDeviceList();
 #if defined(BOARD_ROLE_HOST)
-    historyStore.syncSeriesFromDevices(topicMap);
+    if (historyStore.available()) {
+        historyStore.syncSeriesFromDevices(topicMap);
+    }
 #endif
     return ZIGBEE_SPI_PROXY.enqueueDeviceUpsert(entry);
 }
@@ -1929,11 +2002,18 @@ static void onSlaveRebindResult(const uint8_t ieee[8], uint8_t outcome) {
 }
 
 static void onSlaveDeviceSync(uint8_t flags, const DeviceTopicEntry *entry) {
+    DeviceTopicMap *storeMap = deviceStore != nullptr ? deviceStore->deviceMap() : nullptr;
     if ((flags & SPI_DEVICE_SYNC_RESET) != 0) {
-        LOGGER.warning("Host cannot replace the full device store");
+        // Empty authoritative list (Repeater): clear leftovers and stay not-ready so
+        // bidirectional radio works with no device list (propose: no known-list on Repeater).
+        if (zigbeeCoordinator != nullptr) {
+            zigbeeCoordinator->clearRegisteredDevices();
+        } else if (storeMap != nullptr) {
+            storeMap->clearAll();
+        }
+        LOGGER.info("Device registry cleared (not ready; no device list)");
         return;
     }
-    DeviceTopicMap *storeMap = deviceStore != nullptr ? deviceStore->deviceMap() : nullptr;
     if ((flags & SPI_DEVICE_SYNC_DELETE) != 0 && entry != nullptr) {
         if (zigbeeCoordinator != nullptr) {
             zigbeeCoordinator->removeRegisteredDevice(entry->ieee);
@@ -2276,55 +2356,73 @@ static void setupHost() {
         settingsManager->saveMain(false);
         LOGGER.info("History flash persist forced off because max size is above 4096 KiB");
     }
-    settingsManager->loadDeviceFile();
-    sdCardStorage.beginBootProbe();
-    if (!historyStore.begin(
-            settingsManager->historyMaxSizeKiB(),
-            settingsManager->historyEntrySize()
-        )) {
-        LOGGER.warning("History store slab unavailable");
+    // Load interconnect early so Repeater can skip devices, history, and other configs.
+    interconnectStore = new InterconnectStore();
+    interconnectStore->begin(true);
+    const bool loadOperatorFeatureStores =
+        interconnectStore->settings().role != InterconnectRoleRepeater;
+    if (loadOperatorFeatureStores) {
+        settingsManager->loadDeviceFile();
     } else {
-        historyStore.setRetention(
-            settingsManager->historyMaxStoreDays(),
-            settingsManager->historySweepIntervalMin()
-        );
-        historyStore.setSdBackend(&sdCardStorage);
-        historyStore.setSdBackupIntervalMin(settingsManager->historySdBackupIntervalMin());
-        historyStore.setFlashPersist(
-            settingsManager->historyPersistFlash(),
-            settingsManager->historyFlashBackupIntervalMin()
-        );
-        if (historyStore.snapshotFilePresent()) {
-            if (historyStore.restoreSnapshot()) {
-                LOGGER.info(
-                    historyStore.persistOnSd()
-                        ? "History snapshot restored from SD"
-                        : "History snapshot restored from LittleFS"
-                );
-            } else {
-                LOGGER.warning("History snapshot restore failed; discarding");
-                historyStore.discardSnapshotFile();
-            }
-        }
-        historyStore.syncSeriesFromDevices(settingsManager->deviceMap());
-        // Bind registry before seed so multi-channel capacity matches device map.
-        ZIGBEE_SPI_PROXY.retainRegisteredTelemetry(settingsManager->deviceMap());
-        const uint32_t valuesBeforeSeed = historyStore.stats().valuesStored;
-        ZIGBEE_SPI_PROXY.seedLiveCacheFromHistory(&historyStore);
-        if (historyStore.stats().valuesStored != valuesBeforeSeed) {
-            LOGGER.warning("History seed unexpectedly changed valuesStored");
+        settingsManager->deviceMap()->clearAll();
+        LOGGER.info("Device list skipped on Repeater");
+    }
+    sdCardStorage.beginBootProbe();
+    if (loadOperatorFeatureStores) {
+        if (!historyStore.begin(
+                settingsManager->historyMaxSizeKiB(),
+                settingsManager->historyEntrySize()
+            )) {
+            LOGGER.warning("History store slab unavailable");
         } else {
-            LOGGER.info("History live-cache seed complete");
+            historyStore.setRetention(
+                settingsManager->historyMaxStoreDays(),
+                settingsManager->historySweepIntervalMin()
+            );
+            historyStore.setSdBackend(&sdCardStorage);
+            historyStore.setSdBackupIntervalMin(settingsManager->historySdBackupIntervalMin());
+            historyStore.setFlashPersist(
+                settingsManager->historyPersistFlash(),
+                settingsManager->historyFlashBackupIntervalMin()
+            );
+            if (historyStore.snapshotFilePresent()) {
+                if (historyStore.restoreSnapshot()) {
+                    LOGGER.info(
+                        historyStore.persistOnSd()
+                            ? "History snapshot restored from SD"
+                            : "History snapshot restored from LittleFS"
+                    );
+                } else {
+                    LOGGER.warning("History snapshot restore failed; discarding");
+                    historyStore.discardSnapshotFile();
+                }
+            }
+            historyStore.syncSeriesFromDevices(settingsManager->deviceMap());
+            // Bind registry before seed so multi-channel capacity matches device map.
+            ZIGBEE_SPI_PROXY.retainRegisteredTelemetry(settingsManager->deviceMap());
+            const uint32_t valuesBeforeSeed = historyStore.stats().valuesStored;
+            ZIGBEE_SPI_PROXY.seedLiveCacheFromHistory(&historyStore);
+            if (historyStore.stats().valuesStored != valuesBeforeSeed) {
+                LOGGER.warning("History seed unexpectedly changed valuesStored");
+            } else {
+                LOGGER.info("History live-cache seed complete");
+            }
+            LOGGER.info(
+                "History store ready pages="
+                + String((unsigned)historyStore.stats().pagesTotal)
+                + " entrySize="
+                + String((unsigned)settingsManager->historyEntrySize())
+                + (historyStore.persistOnSd() ? " persist=SD" : " persist=LittleFS")
+            );
         }
-        LOGGER.info(
-            "History store ready pages="
-            + String((unsigned)historyStore.stats().pagesTotal)
-            + " entrySize="
-            + String((unsigned)settingsManager->historyEntrySize())
-            + (historyStore.persistOnSd() ? " persist=SD" : " persist=LittleFS")
-        );
+    } else {
+        LOGGER.info("History store skipped on Repeater");
+        ZIGBEE_SPI_PROXY.retainRegisteredTelemetry(settingsManager->deviceMap());
     }
     settingsManager->setPreRestartHandler([]() {
+        if (!historyStore.available()) {
+            return;
+        }
         if (!historyStore.persistSnapshot()) {
             LOGGER.warning("History snapshot flush skipped or failed");
         } else {
@@ -2339,13 +2437,120 @@ static void setupHost() {
     userStore->begin(true);
     userStore->setChangedHandler(onHostUserChanged);
     consoleStore = new ConsoleStore();
-    consoleStore->begin(true);
+    consoleStore->begin(loadOperatorFeatureStores);
     automationStore = new AutomationStore();
-    automationStore->begin(true);
+    automationStore->begin(loadOperatorFeatureStores);
     cameraStore = new CameraStore();
-    cameraStore->begin(true);
+    cameraStore->begin(loadOperatorFeatureStores);
     sceneStore = new SceneStore();
-    sceneStore->begin(true);
+    sceneStore->begin(loadOperatorFeatureStores);
+    routerInterconnect = new RouterInterconnect(interconnectStore);
+    routerInterconnect->setLocalZigbeeChannelProvider([]() -> uint8_t {
+        if (settingsManager == nullptr) {
+            return (uint8_t)DEFAULT_ZIGBEE_CHANNEL;
+        }
+        return settingsManager->getSettings()->zigbee.channel;
+    });
+    routerInterconnect->setLocalPermitJoinSecProvider([]() -> uint8_t {
+        if (settingsManager == nullptr) {
+            return (uint8_t)DEFAULT_PERMIT_JOIN_SEC;
+        }
+        return settingsManager->getSettings()->zigbee.permitJoinOnBootSec;
+    });
+    routerInterconnect->setApplyZigbeeChannelHandler([](uint8_t channel) {
+        if (settingsManager == nullptr || channel < 11 || channel > 26) {
+            return;
+        }
+        settingsManager->getSettings()->zigbee.channel = channel;
+        settingsManager->saveMain(false);
+        hostZigbeeApplyPending = true;
+    });
+    routerInterconnect->setVariableApplyHandler([](const char *name, const char *value) {
+        if (name == nullptr || value == nullptr || settingsManager == nullptr) {
+            return;
+        }
+        if (strcmp(name, "zigbeeChannel") == 0) {
+            const int channel = atoi(value);
+            if (channel >= 11 && channel <= 26) {
+                settingsManager->getSettings()->zigbee.channel = (uint8_t)channel;
+                settingsManager->saveMain(false);
+                hostZigbeeApplyPending = true;
+            }
+            return;
+        }
+        if (strcmp(name, "checkAliveSec") == 0 && interconnectStore != nullptr) {
+            const int sec = atoi(value);
+            if (sec >= INTERCONNECT_CHECK_ALIVE_MIN_SEC && sec <= INTERCONNECT_CHECK_ALIVE_MAX_SEC) {
+                interconnectStore->settingsMutable().checkAliveSec = (uint16_t)sec;
+                interconnectStore->requestPersist();
+            }
+            return;
+        }
+        if (strcmp(name, "permitJoinOnBootSec") == 0) {
+            const int sec = atoi(value);
+            if (sec >= 0 && sec <= 254) {
+                settingsManager->getSettings()->zigbee.permitJoinOnBootSec = (uint8_t)sec;
+                settingsManager->saveMain(false);
+                // Keep slave permit-join source in sync without a full radio reset.
+                INTER_CHIP_HOST.setSettingsSource(
+                    settingsManager->getSettings()->zigbee.channel,
+                    (uint8_t)sec
+                );
+            }
+        }
+    });
+    routerInterconnect->setZigbeeInjectHandler([](const SpiFrame &frame, uint32_t routerId) {
+        if (frame.cmd < 0x80) {
+            INTER_CHIP_HOST.tryEnqueue(frame.cmd, frame.payload, frame.length);
+            return;
+        }
+        hostSpiInjectRouterId = routerId;
+        onHostSpiEvent(frame);
+        hostSpiInjectRouterId = 0;
+    });
+    ZIGBEE_SPI_PROXY.setRemoteRebindHandler(
+        [](uint32_t routerId, const uint8_t ieee[8], uint8_t *outcomeOut, unsigned long timeoutMs) -> bool {
+            if (routerInterconnect == nullptr) {
+                if (outcomeOut != nullptr) {
+                    *outcomeOut = SPI_REBIND_OUTCOME_FAILED;
+                }
+                return false;
+            }
+            return routerInterconnect->rebindRemote(routerId, ieee, outcomeOut, timeoutMs);
+        }
+    );
+    ZIGBEE_SPI_PROXY.setRemoteSpiCommandHandler(
+        [](uint32_t routerId, uint8_t spiCmd, const uint8_t *payload, uint16_t payloadLen) -> bool {
+            if (interconnectStore == nullptr || routerInterconnect == nullptr) {
+                return false;
+            }
+            InterconnectPeer *peer = interconnectStore->findByRouterId(routerId);
+            if (peer == nullptr || !peer->used) {
+                LOGGER.warning("Remote command: unknown routerId");
+                return false;
+            }
+            if (!peer->online) {
+                LOGGER.warning("Remote command blocked: Repeater offline");
+                return false;
+            }
+            if (1u + payloadLen > INTERCONNECT_AEAD_MAX_PAYLOAD) {
+                return false;
+            }
+            uint8_t body[INTERCONNECT_AEAD_MAX_PAYLOAD];
+            body[0] = spiCmd;
+            if (payloadLen > 0 && payload != nullptr) {
+                memcpy(body + 1, payload, payloadLen);
+            }
+            return routerInterconnect->enqueueExchange(
+                InterconnectMsgZigbeePacket,
+                peer->mac,
+                peer->ip,
+                peer->port,
+                body,
+                (uint16_t)(1u + payloadLen)
+            );
+        }
+    );
     automationEngine = new AutomationEngine();
     emailSender = new EmailSender(settingsManager);
     topicMap = settingsManager->deviceMap();
@@ -2382,6 +2587,15 @@ static void setupHost() {
         }
     });
     webConsole->setDeviceOnlineHandler([](const uint8_t ieee[8]) {
+        if (topicMap != nullptr && interconnectStore != nullptr) {
+            DeviceTopicEntry *entry = topicMap->findByIeee(ieee);
+            if (entry != nullptr && entry->used && entry->routerId != 0) {
+                InterconnectPeer *peer = interconnectStore->findByRouterId(entry->routerId);
+                if (peer == nullptr || !peer->online) {
+                    return false;
+                }
+            }
+        }
         return ZIGBEE_SPI_PROXY.isOnline(ieee);
     });
     webConsole->setDeviceRssiHandler(hostLastDeviceRssi);
@@ -2400,8 +2614,16 @@ static void setupHost() {
         }
         return settingsManager->devicesJsonFile();
     });
-    webConsole->setHistoryStore(&historyStore);
-    ZIGBEE_SPI_PROXY.setHistoryStore(&historyStore);
+    if (loadOperatorFeatureStores) {
+        webConsole->setHistoryStore(&historyStore);
+        ZIGBEE_SPI_PROXY.setHistoryStore(&historyStore);
+    }
+    webConsole->setRouterInterconnect(routerInterconnect);
+    routerInterconnect->setLiveChangedHandler([]() {
+        if (webConsole != nullptr) {
+            webConsole->notifyInterconnectLiveChanged();
+        }
+    });
     actionCommandQueue.begin();
     actionCommandQueue.setHandlers(
         applyManualDeviceCommandImmediate,
@@ -2433,6 +2655,9 @@ static void setupHost() {
         return 200;
     });
     webConsole->begin();
+    if (routerInterconnect != nullptr) {
+        routerInterconnect->begin();
+    }
 #if defined(BOARD_HOST_P4)
     dumpP4HeapMap("after-webConsole");
 #endif
@@ -2579,7 +2804,7 @@ static void runHostLowMemoryFailsafe() {
         delete webConsole;
         webConsole = nullptr;
     }
-    if (!historyStore.persistSnapshot()) {
+    if (historyStore.available() && !historyStore.persistSnapshot()) {
         LOGGER.error("Low-memory fail-safe: history snapshot persist failed");
     }
     delay(100);
@@ -2623,22 +2848,33 @@ void loop() {
     }
     wifiController->update();
     maybeStartNtp();
-    mqttBroker->dispatch(wifiController->hasUsableInterface());
-    mqttClient->dispatch(wifiController->isStaConnected());
+    const bool hostIsRepeater =
+        interconnectStore != nullptr
+        && interconnectStore->settings().role == InterconnectRoleRepeater;
+    if (!hostIsRepeater) {
+        mqttBroker->dispatch(wifiController->hasUsableInterface());
+        mqttClient->dispatch(wifiController->isStaConnected());
+    }
     pumpHostZigbeeStatusCollect();
     pumpWifiDeviceCommands();
     ZIGBEE_SPI_PROXY.pumpRegistrySync();
-    if (automationEngine != nullptr) {
+    if (automationEngine != nullptr && !hostIsRepeater) {
         automationEngine->tick();
     }
     actionCommandQueue.tick();
-    historyStore.loop();
+    if (!hostIsRepeater) {
+        historyStore.loop();
+    }
     hostCpuUsageSampler.sample();
-    if (emailSender != nullptr) {
+    if (emailSender != nullptr && !hostIsRepeater) {
         emailSender->tick();
     }
     if (webConsole != nullptr) {
         webConsole->loop();
+    }
+    if (routerInterconnect != nullptr && wifiController != nullptr
+        && wifiController->hasUsableInterface()) {
+        routerInterconnect->loop();
     }
     pumpHostDeferredStoreWork();
     // Boot LED ends when the host network is up so LED5 can show MQTT.
@@ -2648,7 +2884,9 @@ void loop() {
     }
     if (!hostPreparationLatched && wifiController->hasUsableInterface() && INTER_CHIP_HOST.isNormal()) {
         hostPreparationLatched = true;
-        if (emailSender != nullptr) {
+        if (emailSender != nullptr
+            && (interconnectStore == nullptr
+                || interconnectStore->settings().role != InterconnectRoleRepeater)) {
             emailSender->requestAccountCheck();
         }
     }
