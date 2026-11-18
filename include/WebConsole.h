@@ -15,6 +15,7 @@
 #if defined(BOARD_ROLE_HOST)
 #include "HistoryStore.h"
 #include "RouterInterconnect.h"
+#include "SdCardStorage.h"
 #endif
 
 class WebConsole {
@@ -79,6 +80,7 @@ public:
     void setActionRunner(ActionRunnerFn handler);
 #if defined(BOARD_ROLE_HOST)
     void setHistoryStore(HistoryStore *store);
+    void setSdCardStorage(SdCardStorage *storage);
     void setRouterInterconnect(RouterInterconnect *interconnect);
 #endif
 
@@ -109,6 +111,7 @@ private:
     ActionRunnerFn runConsoleAction = nullptr;
 #if defined(BOARD_ROLE_HOST)
     HistoryStore *historyStore = nullptr;
+    SdCardStorage *sdCardStorage = nullptr;
     RouterInterconnect *routerInterconnect = nullptr;
 #endif
     AsyncWebServer server;

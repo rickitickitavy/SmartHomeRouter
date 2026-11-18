@@ -109,7 +109,7 @@
             } else {
                 stopLogPolling();
             }
-            if (name == "hardware") {
+            if (name == "hardware" || name == "internal-db") {
                 loadHardware();
             }
             if (name == "update") {
@@ -572,6 +572,20 @@
                 return;
             }
             group.hidden = false;
+            var queueUsed = interconnect.queueUsed != null ? Number(interconnect.queueUsed) : 0;
+            var queueDepth = interconnect.queueDepth != null ? Number(interconnect.queueDepth) : 1024;
+            if (isNaN(queueUsed)) {
+                queueUsed = 0;
+            }
+            if (isNaN(queueDepth) || queueDepth <= 0) {
+                queueDepth = 1024;
+            }
+            appendInterconnectStatusRow(
+                host,
+                "Queue",
+                String(queueUsed) + " / " + String(queueDepth),
+                null
+            );
             var role = interconnect.role || "Main";
             if (role === "Repeater") {
                 var localName = interconnect.routerName || "Repeater";
@@ -601,6 +615,10 @@
                 var peer = peers[peerIndex] || {};
                 var peerLabel = (peer.name || "Router")
                     + (peer.ip ? " (" + peer.ip + ")" : "");
+                var peerVersion = peer.hostVersion ? String(peer.hostVersion) : "";
+                if (peerVersion) {
+                    peerLabel += " · " + peerVersion;
+                }
                 appendInterconnectStatusRow(host, peerLabel, null, !!peer.online);
             }
         }
@@ -900,6 +918,7 @@
             setHidden(document.querySelector('.sidebar-btn[data-section="interconnect"]'), !admin);
             setHidden(document.querySelector('.system-tab-btn[data-tab="update"]'), !admin);
             setHidden(document.querySelector('.system-tab-btn[data-tab="hardware"]'), !admin);
+            setHidden(document.querySelector('.system-tab-btn[data-tab="internal-db"]'), !admin);
             setHidden(document.querySelector('.sidebar-btn[data-section="security"]'), !canEditUsers);
             var canEditConsoles = admin || hasRole("editConsoles");
             var canEditScenes = admin || hasRole("editScenes");
@@ -2686,6 +2705,8 @@
         function loadHardware() {
             var saveError = document.getElementById("hardwareSaveError");
             var saveSuccess = document.getElementById("hardwareSaveSuccess");
+            var internalDbError = document.getElementById("internalDbSaveError");
+            var internalDbSuccess = document.getElementById("internalDbSaveSuccess");
             var speedSelect = document.getElementById("spiSpeedHz");
             var rfUpdateSpeedSelect = document.getElementById("rfUpdateSpiSpeedHz");
             var blueInput = document.getElementById("blueLedBrightness");
@@ -2704,6 +2725,12 @@
                 }
                 if (saveSuccess) {
                     saveSuccess.hidden = true;
+                }
+                if (internalDbError) {
+                    internalDbError.hidden = true;
+                }
+                if (internalDbSuccess) {
+                    internalDbSuccess.hidden = true;
                 }
                 if (speedSelect) {
                     speedSelect.value = String(hardwareSettings.spiSpeedHz || 500000);
@@ -2794,27 +2821,19 @@
                 return;
             }
             var persistHint = document.getElementById("historyPersistFlashHint");
-            if (isInterconnectRepeater()) {
-                persistField.hidden = true;
-                if (persistHint) {
-                    persistHint.hidden = true;
-                }
-                if (intervalField) {
-                    intervalField.hidden = true;
-                }
-                return;
-            }
+            var sdCardUsable = !!(hardwareSettings && hardwareSettings.sdCardUsable);
             var s3FlashSettings = hardwareSettings && hardwareSettings.historyPersistFlash != null;
-            persistField.hidden = !s3FlashSettings;
-            if (persistHint) {
-                persistHint.hidden = !s3FlashSettings;
-            }
-            if (!s3FlashSettings) {
-                if (intervalField) {
-                    intervalField.hidden = true;
+            if (!s3FlashSettings || sdCardUsable) {
+                setHidden(persistField, true);
+                setHidden(persistHint, true);
+                setHidden(intervalField, true);
+                if (sdCardUsable) {
+                    persistInput.checked = false;
                 }
                 return;
             }
+            setHidden(persistField, false);
+            setHidden(persistHint, false);
             var sizeKiB = sizeInput ? parseInt(sizeInput.value, 10) : 4096;
             var sizeAllowsPersist = !isNaN(sizeKiB) && sizeKiB <= 4096;
             persistInput.checked = !!hardwareSettings.historyPersistFlash && sizeAllowsPersist;
@@ -2822,22 +2841,12 @@
             if (intervalInput && hardwareSettings.historyFlashBackupIntervalMin != null) {
                 intervalInput.value = String(hardwareSettings.historyFlashBackupIntervalMin);
             }
-            if (intervalField) {
-                intervalField.hidden = !persistInput.checked;
-            }
+            setHidden(intervalField, !persistInput.checked);
         }
 
         function onHistoryFlashPersistUiChanged() {
             var persistInput = document.getElementById("historyPersistFlash");
             var intervalField = document.getElementById("historyFlashBackupIntervalField");
-            if (isInterconnectRepeater()) {
-                setHidden(document.getElementById("historyPersistFlashField"), true);
-                setHidden(document.getElementById("historyPersistFlashHint"), true);
-                if (intervalField) {
-                    intervalField.hidden = true;
-                }
-                return;
-            }
             var sizeInput = document.getElementById("historyMaxSizeKiB");
             var sizeKiB = sizeInput ? parseInt(sizeInput.value, 10) : 4096;
             var sizeAllowsPersist = !isNaN(sizeKiB) && sizeKiB <= 4096;
@@ -2852,11 +2861,7 @@
             }
         }
 
-        function saveHardware() {
-            var saveError = document.getElementById("hardwareSaveError");
-            var saveSuccess = document.getElementById("hardwareSaveSuccess");
-            saveError.hidden = true;
-            saveSuccess.hidden = true;
+        function buildHardwareSaveBody() {
             var queueInput = document.getElementById("useQueueForBaseDeviceCommand");
             var body = {
                 spiSpeedHz: parseInt(document.getElementById("spiSpeedHz").value, 10),
@@ -2887,25 +2892,57 @@
             if (lowMemoryInput) {
                 body.lowMemoryThresholdKb = parseInt(lowMemoryInput.value, 10);
             }
+            return body;
+        }
+
+        function postHardwareSave(saveErrorId, saveSuccessId, successFallback) {
+            var saveError = document.getElementById(saveErrorId);
+            var saveSuccess = document.getElementById(saveSuccessId);
+            if (saveError) {
+                saveError.hidden = true;
+            }
+            if (saveSuccess) {
+                saveSuccess.hidden = true;
+            }
             fetch("/api/hardware", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body)
+                body: JSON.stringify(buildHardwareSaveBody())
             }).then(function (response) {
                 return response.text().then(function (text) {
                     if (response.ok) {
-                        saveSuccess.hidden = false;
-                        saveSuccess.textContent = text || "Saved. Hardware settings are active now.";
+                        if (saveSuccess) {
+                            saveSuccess.hidden = false;
+                            saveSuccess.textContent = text || successFallback;
+                        }
                         loadHardware();
-                    } else {
+                    } else if (saveError) {
                         saveError.hidden = false;
                         saveError.textContent = text || ("Save failed (HTTP " + response.status + ")");
                     }
                 });
             }).catch(function () {
-                saveError.hidden = false;
-                saveError.textContent = "Save failed (network error)";
+                if (saveError) {
+                    saveError.hidden = false;
+                    saveError.textContent = "Save failed (network error)";
+                }
             });
+        }
+
+        function saveHardware() {
+            postHardwareSave(
+                "hardwareSaveError",
+                "hardwareSaveSuccess",
+                "Saved. Hardware settings are active now."
+            );
+        }
+
+        function saveInternalDb() {
+            postHardwareSave(
+                "internalDbSaveError",
+                "internalDbSaveSuccess",
+                "Saved. Internal DB settings are active now."
+            );
         }
 
         function normalizeIeeeText(text) {
@@ -7966,14 +8003,6 @@
                 "interconnectPeerChannel",
                 peer.zigbeeChannel != null ? peer.zigbeeChannel : ""
             );
-            setText(
-                "interconnectPeerOnline",
-                peer.online ? "Online" : "Offline"
-            );
-            setText(
-                "interconnectPeerDevices",
-                peer.deviceCount != null ? peer.deviceCount : 0
-            );
             interconnectPeerDialogMac = peer.mac || "";
         }
 
@@ -8791,26 +8820,8 @@
             if (zigbeeSaveBtn) {
                 zigbeeSaveBtn.disabled = isRepeater;
             }
-            // Hardware allow-list on Repeater: keep SPI / RF SPI / LED / queue / low-memory; hide history groups.
-            var historyFields = [
-                "historyMaxStoreDays",
-                "historySweepIntervalMin",
-                "historyMaxSizeKiB",
-                "historyEntrySize",
-                "historySdBackupIntervalMin",
-                "historyFlashBackupIntervalMin"
-            ];
-            var fieldIndex;
-            for (fieldIndex = 0; fieldIndex < historyFields.length; fieldIndex++) {
-                var fieldEl = document.getElementById(historyFields[fieldIndex]);
-                if (fieldEl && fieldEl.closest) {
-                    setHidden(fieldEl.closest(".field"), isRepeater);
-                }
-            }
-            setHidden(document.getElementById("historyPersistFlashField"), isRepeater);
-            setHidden(document.getElementById("historyPersistFlashHint"), isRepeater);
-            setHidden(document.getElementById("historyFlashBackupIntervalField"), isRepeater);
-            setHidden(document.getElementById("historySdBackupIntervalField"), isRepeater);
+            // Hardware allow-list on Repeater: keep SPI / RF SPI / LED / queue / low-memory.
+            // Historical storage settings live under Internal DB and stay available on Repeater.
         }
 
         function refreshInterconnectRoleChrome() {
@@ -21477,7 +21488,7 @@
                                 <p id="statusMasterFirmwareVersion" class="status-value">—</p>
                             </div>
                             <div class="status-row">
-                                <span class="status-row-label">Slave</span>
+                                <span class="status-row-label">RF firmware</span>
                                 <p id="statusSlaveFirmwareVersion" class="status-value">—</p>
                             </div>
                         </div>
@@ -21512,7 +21523,7 @@
                             </div>
                         </div>
                         <div class="status-group" id="statusHistoryGroup">
-                            <h3 class="group-title">Historical storage</h3>
+                            <h3 class="group-title">Internal database</h3>
                             <div class="status-row">
                                 <span class="status-row-label">Entries</span>
                                 <p id="statusHistoryEntries" class="status-value">—</p>
@@ -21526,7 +21537,7 @@
                                 <p id="statusHistoryPsram" class="status-value">—</p>
                             </div>
                             <div class="status-row">
-                                <span class="status-row-label">Values stored</span>
+                                <span class="status-row-label">rows stored</span>
                                 <p id="statusHistoryValues" class="status-value">—</p>
                             </div>
                             <div class="status-row" id="statusHistorySaveRow" hidden>
@@ -21534,7 +21545,7 @@
                                 <p id="statusHistoryTimeBeforeSave" class="status-value">—</p>
                             </div>
                             <div class="status-row" id="statusHistorySdSizeRow" hidden>
-                                <span class="status-row-label">on-SD history size</span>
+                                <span class="status-row-label">on-SD size</span>
                                 <p id="statusHistorySdSize" class="status-value">—</p>
                             </div>
                             <div class="status-row" id="statusHistoryFlashSizeRow" hidden>
@@ -22131,7 +22142,6 @@
                     <input id="interconnectCheckAliveSec" type="number" min="5" max="600" autocomplete="off">
                     <p class="field-hint">Main owns this interval and pushes it to Repeaters. Repeater marks Main dead after checkAlive + 30 s without a check, then holds outbound traffic in the interconnect queue.</p>
                 </div>
-                <p id="interconnectQueueStatus" class="field-hint">Queue: —</p>
                 <div class="dialog-actions interconnect-settings-actions">
                     <button type="button" class="btn btn-primary btn-inline" onclick="saveInterconnect()">Save</button>
                     <button type="button" class="btn btn-secondary btn-inline" onclick="loadInterconnect()">Reset</button>
@@ -22176,6 +22186,7 @@
                 <button type="button" class="system-tab-btn tab-btn active" data-tab="log" role="tab" onclick="showSystemTab('log')">Log</button>
                 <button type="button" class="system-tab-btn tab-btn" data-tab="update" role="tab" onclick="showSystemTab('update')">Update</button>
                 <button type="button" class="system-tab-btn tab-btn" data-tab="hardware" role="tab" onclick="showSystemTab('hardware')">Hardware</button>
+                <button type="button" class="system-tab-btn tab-btn" data-tab="internal-db" role="tab" onclick="showSystemTab('internal-db')">Internal DB</button>
                 <button type="button" class="system-tab-btn tab-btn" data-tab="maintenance" role="tab" onclick="showSystemTab('maintenance')">Maintenance</button>
             </nav>
             <div class="tab-content">
@@ -22283,6 +22294,21 @@
                         </div>
                         <p class="field-hint">When on, Place/Devices/Manual live commands use the paced action queue (all device kinds). When off, only automation actions use the queue. Configure dialog writes stay immediate. Default off.</p>
                         <div class="field">
+                            <label for="lowMemoryThresholdKb">Low memory threshold</label>
+                            <input id="lowMemoryThresholdKb" type="number" min="10" max="32" step="1" value="16">
+                            <p class="field-hint">Free internal heap at or below this many kB trips the low-memory fail-safe (stop web, save history, reboot). Range 10–32. Default 16.</p>
+                        </div>
+                    </div>
+                    <div class="dialog-actions hardware-tab-actions">
+                        <button type="button" class="btn btn-primary" onclick="saveHardware()">Save</button>
+                        <button type="button" class="btn btn-secondary" onclick="loadHardware()">Reset</button>
+                    </div>
+                </div>
+                <div id="system-tab-internal-db" class="system-tab-panel tab-panel" role="tabpanel">
+                    <p id="internalDbSaveError" class="save-error" hidden></p>
+                    <p id="internalDbSaveSuccess" class="save-success" hidden></p>
+                    <div class="hardware-tab-body">
+                        <div class="field">
                             <label for="historyMaxStoreDays">Max History store days</label>
                             <input id="historyMaxStoreDays" type="number" min="1" max="20" step="1" value="7">
                         </div>
@@ -22312,7 +22338,7 @@
                             <input type="checkbox" id="historyPersistFlash" onchange="onHistoryFlashPersistUiChanged()">
                             <span>persist historical on internal flash</span>
                         </div>
-                        <p class="field-hint" id="historyPersistFlashHint" hidden>On only when Maximum history size is 4096 kB or less. Larger sizes turn persist off and keep the reboot snapshot that is deleted after restore. S3 only.</p>
+                        <p class="field-hint" id="historyPersistFlashHint" hidden>On only when Maximum history size is 4096 kB or less and no SD card is present. Larger sizes or an SD card turn persist off. S3 only.</p>
                         <div class="field" id="historyFlashBackupIntervalField" hidden>
                             <label for="historyFlashBackupIntervalMin">interval save historical data</label>
                             <input id="historyFlashBackupIntervalMin" type="number" min="30" max="600" step="1" value="120">
@@ -22323,14 +22349,9 @@
                             <input id="historySdBackupIntervalMin" type="number" min="5" max="600" step="1" value="60">
                             <p class="field-hint">Minutes between SD history backups when a MicroSD card is usable (5–600). Default 60. P4 only.</p>
                         </div>
-                        <div class="field">
-                            <label for="lowMemoryThresholdKb">Low memory threshold</label>
-                            <input id="lowMemoryThresholdKb" type="number" min="10" max="32" step="1" value="16">
-                            <p class="field-hint">Free internal heap at or below this many kB trips the low-memory fail-safe (stop web, save history, reboot). Range 10–32. Default 16.</p>
-                        </div>
                     </div>
                     <div class="dialog-actions hardware-tab-actions">
-                        <button type="button" class="btn btn-primary" onclick="saveHardware()">Save</button>
+                        <button type="button" class="btn btn-primary" onclick="saveInternalDb()">Save</button>
                         <button type="button" class="btn btn-secondary" onclick="loadHardware()">Reset</button>
                     </div>
                 </div>
@@ -22339,7 +22360,7 @@
                         <p id="maintenanceStoreError" class="save-error" hidden></p>
                         <div id="maintenanceSettingsCard" class="upload-card">
                             <h3 class="upload-title">Settings</h3>
-                            <p class="field-hint">Export MQTT, Zigbee, hardware (including low memory threshold, SD history backup interval on P4, and S3 flash history persist plus its interval), devices, users, consoles, automations, cameras, scenes, and interconnect. Restore replaces those groups when present in the file. Wi-Fi is never included. E-mail password is exported empty (restore keeps the current password when blank).</p>
+                            <p class="field-hint">Export MQTT, Zigbee, hardware (including low memory threshold, Internal DB history settings, SD history backup interval on P4, and S3 flash history persist plus its interval), devices, users, consoles, automations, cameras, scenes, and interconnect (including paired Repeaters). Restore replaces those groups when present in the file; interconnect peers are fully overridden from the file. Wi-Fi is never included. E-mail password is exported empty (restore keeps the current password when blank).</p>
                             <p id="settingsRestoreError" class="save-error" hidden></p>
                             <input id="settingsRestoreFile" type="file" accept="application/json,.json" hidden onchange="onSettingsRestoreFileSelected(event)">
                             <div class="dialog-actions">
@@ -22768,14 +22789,6 @@
                 <div class="field">
                     <label for="interconnectPeerChannel">Zigbee channel</label>
                     <input id="interconnectPeerChannel" type="text" readonly>
-                </div>
-                <div class="field">
-                    <label for="interconnectPeerOnline">Online</label>
-                    <input id="interconnectPeerOnline" type="text" readonly>
-                </div>
-                <div class="field">
-                    <label for="interconnectPeerDevices">Devices</label>
-                    <input id="interconnectPeerDevices" type="text" readonly>
                 </div>
                 <p class="field-hint">Re pair tries the stored IP, then scans for this MAC. Re-pair with new swaps hardware but keeps router id and device binds. Target Repeater must be in Pair to host.</p>
                 <p id="interconnectPeerDialogStatus" class="field-hint" hidden></p>

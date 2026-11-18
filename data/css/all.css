@@ -470,6 +470,12 @@ html, body {
     display: none;
 }
 
+/* .field-check sets display:flex and would otherwise beat the UA [hidden] rule. */
+.field-check[hidden],
+.field-hint[hidden] {
+    display: none;
+}
+
 .field label {
     font-size: 0.875rem;
     font-weight: 600;
@@ -1433,6 +1439,18 @@ html, body {
     display: flex;
     flex-direction: column;
     gap: var(--gap);
+}
+
+/* Modest bump from the default 36rem dialog — enough for found-table headers/cells on one line. */
+#searchDialog .dialog-panel {
+    width: min(48rem, 96vw);
+}
+
+#searchDialog .data-table th,
+#searchDialog .data-table td {
+    white-space: nowrap;
+    word-break: normal;
+    overflow-wrap: normal;
 }
 
 .dialog-scroll {

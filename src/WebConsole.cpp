@@ -1087,6 +1087,9 @@ void WebConsole::broadcastInterconnectLive() {
     if (interconnectSocket.count() == 0 || routerInterconnect == nullptr) {
         return;
     }
+    if (routerInterconnect->store() != nullptr && settingsManager != nullptr) {
+        routerInterconnect->store()->refreshDeviceCounts(settingsManager->deviceMap());
+    }
     PsramJsonBuffer status = routerInterconnect->statusJson();
     if (!status.ok() || status.length() == 0) {
         return;
@@ -3048,6 +3051,10 @@ void WebConsole::setHistoryStore(HistoryStore *store) {
     historyStore = store;
 }
 
+void WebConsole::setSdCardStorage(SdCardStorage *storage) {
+    sdCardStorage = storage;
+}
+
 void WebConsole::setRouterInterconnect(RouterInterconnect *interconnect) {
     routerInterconnect = interconnect;
 }
@@ -3059,6 +3066,9 @@ void WebConsole::handleInterconnectGet(AsyncWebServerRequest *request) {
     if (routerInterconnect == nullptr || routerInterconnect->store() == nullptr) {
         request->send(503, "text/plain", "Interconnect unavailable");
         return;
+    }
+    if (settingsManager != nullptr) {
+        routerInterconnect->store()->refreshDeviceCounts(settingsManager->deviceMap());
     }
     sendJsonDocument(request, routerInterconnect->statusJson());
 }
@@ -3339,7 +3349,7 @@ void WebConsole::handleInterconnectImportPost(AsyncWebServerRequest *request) {
         request->send(403, "text/plain", "Interconnect import is Main-only");
         return;
     }
-    if (!routerInterconnect->store()->importJson(body.c_str(), true)) {
+    if (!routerInterconnect->store()->importJson(body.c_str(), false)) {
         request->send(400, "text/plain", "Invalid interconnect import");
         return;
     }
@@ -3394,6 +3404,12 @@ void WebConsole::handleHardwareGet(AsyncWebServerRequest *request) {
     json += settingsManager->historyPersistFlash() ? "true" : "false";
     json += ",\"historyFlashBackupIntervalMin\":";
     json += String((unsigned)settingsManager->historyFlashBackupIntervalMin());
+#endif
+    json += ",\"sdCardUsable\":";
+#if defined(BOARD_ROLE_HOST)
+    json += (sdCardStorage != nullptr && sdCardStorage->usable()) ? "true" : "false";
+#else
+    json += "false";
 #endif
     json += ",\"lowMemoryThresholdKb\":";
     json += String((unsigned)settingsManager->lowMemoryThresholdKb());
@@ -3606,6 +3622,11 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
     if (haveHistorySize && historyMaxSizeKiB > (int)HISTORY_FLASH_PERSIST_MAX_KIB) {
         historyPersistFlash = false;
     }
+#if defined(BOARD_ROLE_HOST)
+    if (sdCardStorage != nullptr && sdCardStorage->usable()) {
+        historyPersistFlash = false;
+    }
+#endif
     if (haveHistoryPersistFlash || haveHistorySize) {
         settingsManager->setHistoryPersistFlash(historyPersistFlash);
     }
@@ -3615,6 +3636,11 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
 #else
     (void)historyPersistFlash;
     (void)haveHistoryPersistFlash;
+#if defined(BOARD_ROLE_HOST)
+    if (sdCardStorage != nullptr && sdCardStorage->usable()) {
+        settingsManager->setHistoryPersistFlash(false);
+    }
+#endif
 #endif
     if (haveLowMemoryThreshold) {
         settingsManager->setLowMemoryThresholdKb((uint16_t)lowMemoryThresholdKb);
@@ -4403,7 +4429,7 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
             request->send(503, "text/plain", "Interconnect unavailable");
             return;
         }
-        if (!routerInterconnect->store()->importJson(interconnectJson.c_str(), true)) {
+        if (!routerInterconnect->store()->importJson(interconnectJson.c_str(), false)) {
             request->send(400, "text/plain", "Need a valid interconnect section");
             return;
         }
