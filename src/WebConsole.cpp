@@ -3413,6 +3413,8 @@ void WebConsole::handleHardwareGet(AsyncWebServerRequest *request) {
 #endif
     json += ",\"lowMemoryThresholdKb\":";
     json += String((unsigned)settingsManager->lowMemoryThresholdKb());
+    json += ",\"timeZoneUtcOffsetMin\":";
+    json += String((int)settingsManager->timeZoneUtcOffsetMin());
     json += "}";
     request->send(200, "application/json", json);
 }
@@ -3531,6 +3533,12 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
         extractJsonInt(body.c_str(), "historyFlashBackupIntervalMin", historyFlashBackupIntervalMin);
     const bool haveLowMemoryThreshold =
         extractJsonInt(body.c_str(), "lowMemoryThresholdKb", lowMemoryThresholdKb);
+    int timeZoneUtcOffsetMin = settingsManager->timeZoneUtcOffsetMin();
+    const bool isRepeaterRole = routerInterconnect != nullptr
+        && routerInterconnect->store() != nullptr
+        && routerInterconnect->store()->settings().role == InterconnectRoleRepeater;
+    const bool haveTimeZoneUtcOffsetMin = !isRepeaterRole
+        && extractJsonInt(body.c_str(), "timeZoneUtcOffsetMin", timeZoneUtcOffsetMin);
     if (haveHistoryDays) {
         const int clampedDays = clampSignedToRange(
             historyMaxStoreDays,
@@ -3645,6 +3653,13 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
     if (haveLowMemoryThreshold) {
         settingsManager->setLowMemoryThresholdKb((uint16_t)lowMemoryThresholdKb);
     }
+    if (haveTimeZoneUtcOffsetMin) {
+        const int16_t clampedTimeZone =
+            SettingsManager::clampTimeZoneUtcOffsetMin(timeZoneUtcOffsetMin);
+        logHardwareFieldClamp("timeZoneUtcOffsetMin", timeZoneUtcOffsetMin, (int)clampedTimeZone);
+        settingsManager->setTimeZoneUtcOffsetMin(clampedTimeZone);
+        configTime((long)clampedTimeZone * 60L, 0, "pool.ntp.org", "time.nist.gov");
+    }
     settingsManager->saveMain(false);
     if (applyHardware != nullptr) {
         applyHardware(clamped, bluePercent, greenPercent);
@@ -3662,6 +3677,12 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
         );
     }
 #endif
+    if (haveTimeZoneUtcOffsetMin
+        && routerInterconnect != nullptr
+        && routerInterconnect->store() != nullptr
+        && routerInterconnect->store()->settings().role == InterconnectRoleMain) {
+        routerInterconnect->pushSharedVariablesToAllPeers();
+    }
     request->send(200, "text/plain", "Saved. Hardware settings are active now.");
 }
 
@@ -4165,6 +4186,19 @@ bool WebConsole::applyHardwareJson(const char *json, String *errorText) {
         logHardwareFieldClamp("lowMemoryThresholdKb", lowMemoryThresholdKb, clampedLowMemory);
         settingsManager->setLowMemoryThresholdKb((uint16_t)clampedLowMemory);
     }
+    int timeZoneUtcOffsetMin = settingsManager->timeZoneUtcOffsetMin();
+    if (extractJsonInt(json, "timeZoneUtcOffsetMin", timeZoneUtcOffsetMin)) {
+        const int16_t clampedTimeZone =
+            SettingsManager::clampTimeZoneUtcOffsetMin(timeZoneUtcOffsetMin);
+        logHardwareFieldClamp("timeZoneUtcOffsetMin", timeZoneUtcOffsetMin, (int)clampedTimeZone);
+        settingsManager->setTimeZoneUtcOffsetMin(clampedTimeZone);
+        configTime((long)clampedTimeZone * 60L, 0, "pool.ntp.org", "time.nist.gov");
+        if (routerInterconnect != nullptr
+            && routerInterconnect->store() != nullptr
+            && routerInterconnect->store()->settings().role == InterconnectRoleMain) {
+            routerInterconnect->pushSharedVariablesToAllPeers();
+        }
+    }
     settingsManager->setSpiSpeedHz(clamped);
     settingsManager->setLedBrightness(bluePercent, greenPercent);
     settingsManager->setUseQueueForBaseDeviceCommand(useQueueForBaseDeviceCommand);
@@ -4272,6 +4306,8 @@ void WebConsole::handleSettingsExportGet(AsyncWebServerRequest *request) {
 #endif
     json += ",\"lowMemoryThresholdKb\":";
     appendNumber(json, settingsManager->lowMemoryThresholdKb());
+    json += ",\"timeZoneUtcOffsetMin\":";
+    json += String((int)settingsManager->timeZoneUtcOffsetMin());
     json += "},\"ui\":{\"theme\":\"";
     json += UserStore::themeJsonId(user->theme);
     json += "\"},\"devices\":";

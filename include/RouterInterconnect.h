@@ -50,6 +50,7 @@ public:
     using SettingsApplyFn = void (*)(const char *name, const char *value);
     using LocalZigbeeChannelFn = uint8_t (*)();
     using LocalPermitJoinSecFn = uint8_t (*)();
+    using LocalTimeZoneUtcOffsetMinFn = int16_t (*)();
     using ApplyZigbeeChannelFn = void (*)(uint8_t channel);
     using LiveChangedFn = void (*)();
 
@@ -108,11 +109,14 @@ public:
     void setLocalPermitJoinSecProvider(LocalPermitJoinSecFn handler) {
         localPermitJoinSecProvider = handler;
     }
+    void setLocalTimeZoneUtcOffsetMinProvider(LocalTimeZoneUtcOffsetMinFn handler) {
+        localTimeZoneUtcOffsetMinProvider = handler;
+    }
     void setApplyZigbeeChannelHandler(ApplyZigbeeChannelFn handler) {
         applyZigbeeChannelHandler = handler;
     }
     void setLiveChangedHandler(LiveChangedFn handler) { liveChangedHandler = handler; }
-    /** Main: push checkAlive, Zigbee search window, and peer channel to every paired Repeater. */
+    /** Main: push checkAlive, Zigbee search window, peer channel, and UTC offset to every paired Repeater. */
     void pushSharedVariablesToAllPeers();
     int queueUsed() const { return jobCount; }
     int queueDepth() const { return INTERCONNECT_QUEUE_DEPTH; }
@@ -154,6 +158,7 @@ private:
     SettingsApplyFn variableApplyHandler = nullptr;
     LocalZigbeeChannelFn localZigbeeChannelProvider = nullptr;
     LocalPermitJoinSecFn localPermitJoinSecProvider = nullptr;
+    LocalTimeZoneUtcOffsetMinFn localTimeZoneUtcOffsetMinProvider = nullptr;
     ApplyZigbeeChannelFn applyZigbeeChannelHandler = nullptr;
     LiveChangedFn liveChangedHandler = nullptr;
     mutable uint64_t nonceCounter = 1;

@@ -679,6 +679,45 @@ void SettingsManager::setLowMemoryThresholdKb(uint16_t thresholdKb) {
     );
 }
 
+int16_t SettingsManager::clampTimeZoneUtcOffsetMin(int offsetMin) {
+    if (offsetMin < TIME_ZONE_UTC_OFFSET_MIN_MIN) {
+        offsetMin = TIME_ZONE_UTC_OFFSET_MIN_MIN;
+    }
+    if (offsetMin > TIME_ZONE_UTC_OFFSET_MIN_MAX) {
+        offsetMin = TIME_ZONE_UTC_OFFSET_MIN_MAX;
+    }
+    const int halfStep = TIME_ZONE_UTC_OFFSET_STEP_MIN / 2;
+    const int rounded = offsetMin >= 0
+        ? ((offsetMin + halfStep) / TIME_ZONE_UTC_OFFSET_STEP_MIN) * TIME_ZONE_UTC_OFFSET_STEP_MIN
+        : ((offsetMin - halfStep) / TIME_ZONE_UTC_OFFSET_STEP_MIN) * TIME_ZONE_UTC_OFFSET_STEP_MIN;
+    if (rounded < TIME_ZONE_UTC_OFFSET_MIN_MIN) {
+        return (int16_t)TIME_ZONE_UTC_OFFSET_MIN_MIN;
+    }
+    if (rounded > TIME_ZONE_UTC_OFFSET_MIN_MAX) {
+        return (int16_t)TIME_ZONE_UTC_OFFSET_MIN_MAX;
+    }
+    return (int16_t)rounded;
+}
+
+int16_t SettingsManager::timeZoneUtcOffsetMin() const {
+    int16_t offsetMin = 0;
+    memcpy(
+        &offsetMin,
+        settings.reserved + TIME_ZONE_UTC_OFFSET_MIN_RESERVED_OFFSET,
+        sizeof(offsetMin)
+    );
+    return clampTimeZoneUtcOffsetMin(offsetMin);
+}
+
+void SettingsManager::setTimeZoneUtcOffsetMin(int16_t offsetMin) {
+    offsetMin = clampTimeZoneUtcOffsetMin(offsetMin);
+    memcpy(
+        settings.reserved + TIME_ZONE_UTC_OFFSET_MIN_RESERVED_OFFSET,
+        &offsetMin,
+        sizeof(offsetMin)
+    );
+}
+
 uint8_t SettingsManager::blueLedBrightness() const {
     const uint8_t stored = settings.reserved[LED_BLUE_BRIGHTNESS_RESERVED_OFFSET];
     if (stored == 0) {

@@ -1365,6 +1365,14 @@
                 payload && payload.mqttPacketsRx != null ? String(payload.mqttPacketsRx) : "—"
             );
             setStatusText(
+                "statusRepeaterPacketsTx",
+                payload && payload.repeaterPacketsTx != null ? String(payload.repeaterPacketsTx) : "—"
+            );
+            setStatusText(
+                "statusRepeaterPacketsRx",
+                payload && payload.repeaterPacketsRx != null ? String(payload.repeaterPacketsRx) : "—"
+            );
+            setStatusText(
                 "statusWebActiveConnections",
                 payload && payload.webActiveConnections != null
                     ? String(payload.webActiveConnections)
@@ -1828,7 +1836,9 @@
                 ["Zigbee packets sent", "statusZigbeePacketsTx"],
                 ["MQTT packets sent", "statusMqttPacketsTx"],
                 ["Zigbee packets received", "statusZigbeePacketsRx"],
-                ["MQTT packets received", "statusMqttPacketsRx"]
+                ["MQTT packets received", "statusMqttPacketsRx"],
+                ["Repeater packets sent", "statusRepeaterPacketsTx"],
+                ["Repeater packets received", "statusRepeaterPacketsRx"]
             ]);
             appendStatusGroup(stack, "Connections", [
                 ["Web active connections", "statusWebActiveConnections"],
