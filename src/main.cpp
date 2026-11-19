@@ -1204,6 +1204,25 @@ static String hostGatewayStatusJson() {
     json += String((unsigned long)mqttPacketsRx);
     json += ",\"mqttPacketsTx\":";
     json += String((unsigned long)mqttPacketsTx);
+    {
+        uint32_t repeaterPacketsTx = 0;
+        uint32_t repeaterPacketsRx = 0;
+        if (interconnectStore != nullptr
+            && interconnectStore->settings().role == InterconnectRoleMain) {
+            for (int peerIndex = 0; peerIndex < INTERCONNECT_MAX_REPEATERS; peerIndex++) {
+                const InterconnectPeer *peer = interconnectStore->peerAt(peerIndex);
+                if (peer == nullptr || !peer->used) {
+                    continue;
+                }
+                repeaterPacketsTx += peer->packetsOut;
+                repeaterPacketsRx += peer->packetsIn;
+            }
+        }
+        json += ",\"repeaterPacketsTx\":";
+        json += String((unsigned long)repeaterPacketsTx);
+        json += ",\"repeaterPacketsRx\":";
+        json += String((unsigned long)repeaterPacketsRx);
+    }
     json += ",\"version\":\"";
     json += FIRMWARE_VERSION;
     json += "\",\"masterVersion\":\"";
@@ -1846,6 +1865,8 @@ static void runDeviceRegistryFixtures() {
     LOGGER.info("Device map cap " + String(DEVICE_MAP_SLOTS) + " (overflow rejected)");
 }
 
+static void maybeStartNtp();
+
 static void onWiFiArduinoEvent(arduino_event_id_t event, arduino_event_info_t info) {
     (void)info;
     if (event == ARDUINO_EVENT_WIFI_AP_START) {
@@ -1873,14 +1894,23 @@ static void onWiFiArduinoEvent(arduino_event_id_t event, arduino_event_info_t in
     }
     if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
         wifiController->notifyStaGotIp();
+        maybeStartNtp();
     }
+}
+
+static void applyNtpTimeZoneFromSettings() {
+    const long offsetSec = settingsManager != nullptr
+        ? (long)settingsManager->timeZoneUtcOffsetMin() * 60L
+        : 0L;
+    // Sets local TZ immediately; SNTP syncs when STA has connectivity.
+    configTime(offsetSec, 0, "pool.ntp.org", "time.nist.gov");
 }
 
 static void maybeStartNtp() {
     if (ntpStarted || wifiController == nullptr || !wifiController->isStaConnected()) {
         return;
     }
-    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    applyNtpTimeZoneFromSettings();
     ntpStarted = true;
     LOGGER.info("NTP started");
 }
@@ -2359,6 +2389,11 @@ static void setupHost() {
     }
 
     settingsManager = new SettingsManager();
+    applyNtpTimeZoneFromSettings();
+    LOGGER.info(
+        "Time zone UTC offset min="
+        + String((int)settingsManager->timeZoneUtcOffsetMin())
+    );
     if (settingsManager->reconcileHistoryFlashPersist()) {
         settingsManager->saveMain(false);
         LOGGER.info("History flash persist forced off because max size is above 4096 KiB");
@@ -2469,6 +2504,12 @@ static void setupHost() {
         }
         return settingsManager->getSettings()->zigbee.permitJoinOnBootSec;
     });
+    routerInterconnect->setLocalTimeZoneUtcOffsetMinProvider([]() -> int16_t {
+        if (settingsManager == nullptr) {
+            return (int16_t)DEFAULT_TIME_ZONE_UTC_OFFSET_MIN;
+        }
+        return settingsManager->timeZoneUtcOffsetMin();
+    });
     routerInterconnect->setApplyZigbeeChannelHandler([](uint8_t channel) {
         if (settingsManager == nullptr || channel < 11 || channel > 26) {
             return;
@@ -2509,6 +2550,15 @@ static void setupHost() {
                     (uint8_t)sec
                 );
             }
+            return;
+        }
+        if (strcmp(name, "timeZoneUtcOffsetMin") == 0) {
+            const int offsetMin = atoi(value);
+            settingsManager->setTimeZoneUtcOffsetMin(
+                SettingsManager::clampTimeZoneUtcOffsetMin(offsetMin)
+            );
+            settingsManager->saveMain(false);
+            applyNtpTimeZoneFromSettings();
         }
     });
     routerInterconnect->setZigbeeInjectHandler([](const SpiFrame &frame, uint32_t routerId) {

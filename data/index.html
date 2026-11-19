@@ -285,6 +285,14 @@
                 payload && payload.mqttPacketsRx != null ? String(payload.mqttPacketsRx) : "—"
             );
             setStatusText(
+                "statusRepeaterPacketsTx",
+                payload && payload.repeaterPacketsTx != null ? String(payload.repeaterPacketsTx) : "—"
+            );
+            setStatusText(
+                "statusRepeaterPacketsRx",
+                payload && payload.repeaterPacketsRx != null ? String(payload.repeaterPacketsRx) : "—"
+            );
+            setStatusText(
                 "statusWebActiveConnections",
                 payload && payload.webActiveConnections != null
                     ? String(payload.webActiveConnections)
@@ -918,7 +926,10 @@
             setHidden(document.querySelector('.sidebar-btn[data-section="interconnect"]'), !admin);
             setHidden(document.querySelector('.system-tab-btn[data-tab="update"]'), !admin);
             setHidden(document.querySelector('.system-tab-btn[data-tab="hardware"]'), !admin);
-            setHidden(document.querySelector('.system-tab-btn[data-tab="internal-db"]'), !admin);
+            setHidden(
+                document.querySelector('.system-tab-btn[data-tab="internal-db"]'),
+                !admin || interconnectNetworkRole === "Repeater"
+            );
             setHidden(document.querySelector('.sidebar-btn[data-section="security"]'), !canEditUsers);
             var canEditConsoles = admin || hasRole("editConsoles");
             var canEditScenes = admin || hasRole("editScenes");
@@ -2702,6 +2713,43 @@
             tip.style.top = tipY + "px";
         }
 
+        function formatUtcOffsetLabel(offsetMin) {
+            var sign = offsetMin < 0 ? "\u2212" : "+";
+            var absMin = Math.abs(offsetMin);
+            var hours = Math.floor(absMin / 60);
+            var minutes = absMin % 60;
+            return "UTC" + sign + String(hours).padStart(2, "0") + ":" + String(minutes).padStart(2, "0");
+        }
+
+        function ensureTimeZoneOptions() {
+            var select = document.getElementById("timeZoneUtcOffsetMin");
+            if (!select || select.options.length > 0) {
+                return;
+            }
+            var offsetMin;
+            for (offsetMin = -12 * 60; offsetMin <= 14 * 60; offsetMin += 30) {
+                var option = document.createElement("option");
+                option.value = String(offsetMin);
+                option.textContent = formatUtcOffsetLabel(offsetMin);
+                select.appendChild(option);
+            }
+        }
+
+        function syncHardwareTimeZoneChrome() {
+            ensureTimeZoneOptions();
+            var select = document.getElementById("timeZoneUtcOffsetMin");
+            var hint = document.getElementById("timeZoneUtcOffsetHint");
+            var isRepeater = interconnectNetworkRole === "Repeater";
+            if (select) {
+                select.disabled = isRepeater;
+            }
+            if (hint) {
+                hint.textContent = isRepeater
+                    ? "UTC offset from Main (read-only on Repeater)."
+                    : "UTC offset in 30-minute steps (UTC−12:00…UTC+14:00). Applied to NTP wall clock. On Main, Save also pushes to paired Repeaters. Default UTC+00:00.";
+            }
+        }
+
         function loadHardware() {
             var saveError = document.getElementById("hardwareSaveError");
             var saveSuccess = document.getElementById("hardwareSaveSuccess");
@@ -2712,6 +2760,8 @@
             var blueInput = document.getElementById("blueLedBrightness");
             var greenInput = document.getElementById("greenLedBrightness");
             var queueInput = document.getElementById("useQueueForBaseDeviceCommand");
+            ensureTimeZoneOptions();
+            syncHardwareTimeZoneChrome();
             fetch("/api/hardware", { cache: "no-store" }).then(function (response) {
                 return response.text().then(function (text) {
                     if (!response.ok) {
@@ -2786,6 +2836,14 @@
                             : 16
                     );
                 }
+                var timeZoneSelect = document.getElementById("timeZoneUtcOffsetMin");
+                if (timeZoneSelect) {
+                    var offsetMin = hardwareSettings.timeZoneUtcOffsetMin != null
+                        ? hardwareSettings.timeZoneUtcOffsetMin
+                        : 0;
+                    timeZoneSelect.value = String(offsetMin);
+                }
+                syncHardwareTimeZoneChrome();
             }).catch(function (error) {
                 if (speedSelect && !speedSelect.value) {
                     speedSelect.value = "500000";
@@ -2891,6 +2949,10 @@
             var lowMemoryInput = document.getElementById("lowMemoryThresholdKb");
             if (lowMemoryInput) {
                 body.lowMemoryThresholdKb = parseInt(lowMemoryInput.value, 10);
+            }
+            var timeZoneSelect = document.getElementById("timeZoneUtcOffsetMin");
+            if (timeZoneSelect && interconnectNetworkRole !== "Repeater") {
+                body.timeZoneUtcOffsetMin = parseInt(timeZoneSelect.value, 10);
             }
             return body;
         }
@@ -8820,8 +8882,17 @@
             if (zigbeeSaveBtn) {
                 zigbeeSaveBtn.disabled = isRepeater;
             }
-            // Hardware allow-list on Repeater: keep SPI / RF SPI / LED / queue / low-memory.
-            // Historical storage settings live under Internal DB and stay available on Repeater.
+            // Hardware allow-list on Repeater: keep SPI / RF SPI / LED / queue / low-memory /
+            // read-only Time zone. Internal DB is Main-only.
+            setHidden(document.querySelector('.system-tab-btn[data-tab="internal-db"]'), isRepeater || !isAdminUser());
+            setHidden(document.getElementById("system-tab-internal-db"), isRepeater);
+            if (isRepeater) {
+                var internalDbPanel = document.getElementById("system-tab-internal-db");
+                if (internalDbPanel && internalDbPanel.classList.contains("active")) {
+                    showSystemTab("hardware");
+                }
+            }
+            syncHardwareTimeZoneChrome();
         }
 
         function refreshInterconnectRoleChrome() {
@@ -21649,6 +21720,14 @@
                                 <span class="status-row-label">MQTT packets received</span>
                                 <p id="statusMqttPacketsRx" class="status-value">—</p>
                             </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Repeater packets sent</span>
+                                <p id="statusRepeaterPacketsTx" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-row-label">Repeater packets received</span>
+                                <p id="statusRepeaterPacketsRx" class="status-value">—</p>
+                            </div>
                         </div>
                         <div class="status-group">
                             <h3 class="group-title">Connections</h3>
@@ -22298,6 +22377,11 @@
                             <input id="lowMemoryThresholdKb" type="number" min="10" max="32" step="1" value="16">
                             <p class="field-hint">Free internal heap at or below this many kB trips the low-memory fail-safe (stop web, save history, reboot). Range 10–32. Default 16.</p>
                         </div>
+                        <div class="field" id="timeZoneUtcOffsetField">
+                            <label for="timeZoneUtcOffsetMin">Time zone</label>
+                            <select id="timeZoneUtcOffsetMin"></select>
+                            <p class="field-hint" id="timeZoneUtcOffsetHint">UTC offset in 30-minute steps (UTC−12:00…UTC+14:00). Applied to NTP wall clock. On Main, Save also pushes to paired Repeaters. Default UTC+00:00.</p>
+                        </div>
                     </div>
                     <div class="dialog-actions hardware-tab-actions">
                         <button type="button" class="btn btn-primary" onclick="saveHardware()">Save</button>
@@ -22360,7 +22444,7 @@
                         <p id="maintenanceStoreError" class="save-error" hidden></p>
                         <div id="maintenanceSettingsCard" class="upload-card">
                             <h3 class="upload-title">Settings</h3>
-                            <p class="field-hint">Export MQTT, Zigbee, hardware (including low memory threshold, Internal DB history settings, SD history backup interval on P4, and S3 flash history persist plus its interval), devices, users, consoles, automations, cameras, scenes, and interconnect (including paired Repeaters). Restore replaces those groups when present in the file; interconnect peers are fully overridden from the file. Wi-Fi is never included. E-mail password is exported empty (restore keeps the current password when blank).</p>
+                            <p class="field-hint">Export MQTT, Zigbee, hardware (including time zone UTC offset, low memory threshold, Internal DB history settings, SD history backup interval on P4, and S3 flash history persist plus its interval), devices, users, consoles, automations, cameras, scenes, and interconnect (including paired Repeaters). Restore replaces those groups when present in the file; interconnect peers are fully overridden from the file. Wi-Fi is never included. E-mail password is exported empty (restore keeps the current password when blank).</p>
                             <p id="settingsRestoreError" class="save-error" hidden></p>
                             <input id="settingsRestoreFile" type="file" accept="application/json,.json" hidden onchange="onSettingsRestoreFileSelected(event)">
                             <div class="dialog-actions">

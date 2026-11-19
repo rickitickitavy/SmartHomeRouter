@@ -1008,6 +1008,24 @@ void RouterInterconnect::pushVariablesToPeer(
         (const uint8_t *)permitText,
         (uint16_t)strlen(permitText)
     );
+    const int16_t timeZoneUtcOffsetMin = localTimeZoneUtcOffsetMinProvider != nullptr
+        ? localTimeZoneUtcOffsetMinProvider()
+        : (int16_t)DEFAULT_TIME_ZONE_UTC_OFFSET_MIN;
+    char timeZoneText[48];
+    snprintf(
+        timeZoneText,
+        sizeof(timeZoneText),
+        "timeZoneUtcOffsetMin=%d",
+        (int)timeZoneUtcOffsetMin
+    );
+    enqueueExchange(
+        InterconnectMsgVariable,
+        peerMac,
+        peerIp,
+        peerPort,
+        (const uint8_t *)timeZoneText,
+        (uint16_t)strlen(timeZoneText)
+    );
 }
 
 void RouterInterconnect::pushSharedVariablesToAllPeers() {

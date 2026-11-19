@@ -182,8 +182,19 @@ void Logger::appendSlaveLine(const char *line) {
     if (line == nullptr || line[0] == '\0') {
         return;
     }
-    appendRing(String(line));
-    Serial.println(line);
+    // Host wall clock only: slave stamps with its own RTC/TZ, which drifts from
+    // host after configTime. Re-prefix so interleaved [host]/[slave] lines share one time.
+    char timestamp[24];
+    formatTimestamp(timestamp, sizeof(timestamp));
+    const char *roleAndMsg = strstr(line, " [");
+    String stamped;
+    if (roleAndMsg != nullptr) {
+        stamped = String(timestamp) + roleAndMsg;
+    } else {
+        stamped = String(timestamp) + " [slave] " + line;
+    }
+    appendRing(stamped);
+    Serial.println(stamped);
 }
 
 void Logger::println(const String &msg) {

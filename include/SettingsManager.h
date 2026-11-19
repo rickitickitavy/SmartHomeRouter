@@ -50,6 +50,9 @@ public:
     bool reconcileHistoryFlashPersist();
     uint16_t lowMemoryThresholdKb() const;
     void setLowMemoryThresholdKb(uint16_t thresholdKb);
+    int16_t timeZoneUtcOffsetMin() const;
+    void setTimeZoneUtcOffsetMin(int16_t offsetMin);
+    static int16_t clampTimeZoneUtcOffsetMin(int offsetMin);
     static bool isValidHistoryEntrySize(uint16_t entrySize);
     static uint8_t clampHistoryMaxStoreDays(uint8_t days);
     static uint8_t clampHistorySweepIntervalMin(uint8_t minutes);
