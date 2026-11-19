@@ -11,6 +11,11 @@
         "command": ".cursor/hooks/block-git-rollback.py",
         "matcher": "git\\s+(restore|reset|revert|clean|checkout|switch)",
         "failClosed": true
+      },
+      {
+        "command": ".cursor/hooks/ask-before-firmware-upload.py",
+        "matcher": "upload|write_flash|erase_flash|erase_region|idf\\.py|arduino-cli",
+        "failClosed": true
       }
     ],
     "beforeSubmitPrompt": [

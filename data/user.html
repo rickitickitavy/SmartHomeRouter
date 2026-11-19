@@ -1403,6 +1403,10 @@
                     : "—"
             );
             setStatusText("statusOnlineTime", formatOnlineTime(payload && payload.onlineSec));
+            setStatusText(
+                "statusRouterDateTime",
+                payload && payload.routerDateTime ? payload.routerDateTime : "—"
+            );
             var masterVersion = payload && payload.masterVersion
                 ? payload.masterVersion
                 : (payload && payload.version ? payload.version : "");
@@ -1772,6 +1776,7 @@
             stack.style.marginTop = "1.25rem";
             appendStatusGroup(stack, "General", [
                 ["Online time", "statusOnlineTime"],
+                ["Router date / time", "statusRouterDateTime"],
                 ["Master", "statusMasterFirmwareVersion"],
                 ["RF firmware", "statusSlaveFirmwareVersion"]
             ]);

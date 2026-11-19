@@ -323,6 +323,10 @@
                     : "—"
             );
             setStatusText("statusOnlineTime", formatOnlineTime(payload && payload.onlineSec));
+            setStatusText(
+                "statusRouterDateTime",
+                payload && payload.routerDateTime ? payload.routerDateTime : "—"
+            );
             var masterVersion = payload && payload.masterVersion
                 ? payload.masterVersion
                 : (payload && payload.version ? payload.version : "");
@@ -10880,6 +10884,7 @@
                 active: true,
                 group: "",
                 useCondition: false,
+                useTimeChange: false,
                 debug: false,
                 minTriggerIntervalSec: 0,
                 timer: { use: false, autoRestart: false, startOnBoot: false, defaultTime: 0, counting: false, timeLeft: 0 },
@@ -10889,6 +10894,9 @@
             }));
             if (typeof draft.useCondition !== "boolean") {
                 draft.useCondition = false;
+            }
+            if (typeof draft.useTimeChange !== "boolean") {
+                draft.useTimeChange = false;
             }
             if (typeof draft.debug !== "boolean") {
                 draft.debug = false;
@@ -11716,6 +11724,8 @@
                 !!document.getElementById("automationTimerStartOnBoot").checked;
             var defaultTime = parseInt(document.getElementById("automationTimerDefaultTime").value, 10);
             automationEditorDraft.timer.defaultTime = defaultTime > 0 ? defaultTime : 0;
+            var useTimeChangeInput = document.getElementById("automationUseTimeChange");
+            automationEditorDraft.useTimeChange = !!(useTimeChangeInput && useTimeChangeInput.checked);
         }
 
         function automationDialogIsEmpty() {
@@ -11733,7 +11743,8 @@
                 conditionEmpty = !(condition.ieee || "").trim() && !(condition.value || "").trim();
             }
             var timerUnused = !(automationEditorDraft.timer && automationEditorDraft.timer.use);
-            return listenEmpty && actionsEmpty && conditionEmpty && timerUnused;
+            var timeChangeUnused = !automationEditorDraft.useTimeChange;
+            return listenEmpty && actionsEmpty && conditionEmpty && timerUnused && timeChangeUnused;
         }
 
         function updateAutomationImportEnabled() {
@@ -11794,8 +11805,20 @@
             function pad(part) {
                 return part < 10 ? "0" + String(part) : String(part);
             }
-            return pad(hours) + ":" + pad(minutes) + ":" + pad(seconds);
+            return pad(hours) + ":" + pad(minutes);
         }
+
+        var AUTOMATION_TIME_OF_DAY_PARAM = "timeOfDay";
+        var AUTOMATION_DAY_OF_WEEK_PARAM = "dayOfWeek";
+        var AUTOMATION_DAY_OF_WEEK_LABELS = [
+            { value: "1", label: "Monday" },
+            { value: "2", label: "Tuesday" },
+            { value: "3", label: "Wednesday" },
+            { value: "4", label: "Thursday" },
+            { value: "5", label: "Friday" },
+            { value: "6", label: "Saturday" },
+            { value: "7", label: "Sunday" }
+        ];
 
         function findRegisteredDeviceByIeee(ieeeText) {
             var list = registeredDeviceRows || [];
@@ -12483,6 +12506,10 @@
                 timer.counting
                     ? ("Counting: " + String(timer.timeLeft || 0) + " s left")
                     : "Not counting";
+            var useTimeChangeInput = document.getElementById("automationUseTimeChange");
+            if (useTimeChangeInput) {
+                useTimeChangeInput.checked = !!automationEditorDraft.useTimeChange;
+            }
             updateAutomationTimerVisibility();
             updateAutomationConditionVisibility();
             renderAutomationListenEditor();
@@ -12786,16 +12813,27 @@
                     ? formatZigbeeIdToken(node.attrId)
                     : "";
             var valueHost = document.createElement("div");
+            function fillCurrentTimeParamSelect() {
+                paramSelect.innerHTML = "";
+                var todOption = document.createElement("option");
+                todOption.value = AUTOMATION_TIME_OF_DAY_PARAM;
+                todOption.textContent = "Time of day";
+                paramSelect.appendChild(todOption);
+                var dowOption = document.createElement("option");
+                dowOption.value = AUTOMATION_DAY_OF_WEEK_PARAM;
+                dowOption.textContent = "Day of week";
+                paramSelect.appendChild(dowOption);
+                if (node.param !== AUTOMATION_TIME_OF_DAY_PARAM
+                    && node.param !== AUTOMATION_DAY_OF_WEEK_PARAM) {
+                    node.param = AUTOMATION_TIME_OF_DAY_PARAM;
+                }
+                paramSelect.value = node.param;
+            }
             function refreshCompareOpControl() {
                 var currentTime = isAutomationCurrentTimeIeee(node.ieee);
                 var isCustom = paramSelect.value === "custom";
-                var previous = node.cmp || (currentTime ? "GREATER" : "EQUAL");
-                if (currentTime) {
-                    cmpSelect.innerHTML = "<option>GREATER</option><option>LESS</option>";
-                    if (previous !== "GREATER" && previous !== "LESS") {
-                        previous = "GREATER";
-                    }
-                } else if (isCustom) {
+                var previous = node.cmp || "EQUAL";
+                if (currentTime || isCustom) {
                     cmpSelect.innerHTML = "<option>EQUAL</option><option>GREATER</option><option>LESS</option>";
                     if (previous !== "EQUAL" && previous !== "GREATER" && previous !== "LESS") {
                         previous = "EQUAL";
@@ -12821,10 +12859,41 @@
             function refreshCompareValueControl() {
                 valueHost.innerHTML = "";
                 if (isAutomationCurrentTimeIeee(node.ieee)) {
+                    channelSelect.hidden = true;
+                    paramSelect.hidden = false;
+                    clusterInput.hidden = true;
+                    attrInput.hidden = true;
+                    delete node.cluster;
+                    delete node.attrId;
+                    node.channel = 1;
+                    if (paramSelect.value === AUTOMATION_DAY_OF_WEEK_PARAM) {
+                        node.param = AUTOMATION_DAY_OF_WEEK_PARAM;
+                        var daySelect = document.createElement("select");
+                        var dayIndex;
+                        for (dayIndex = 0; dayIndex < AUTOMATION_DAY_OF_WEEK_LABELS.length; dayIndex++) {
+                            var dayOption = document.createElement("option");
+                            dayOption.value = AUTOMATION_DAY_OF_WEEK_LABELS[dayIndex].value;
+                            dayOption.textContent = AUTOMATION_DAY_OF_WEEK_LABELS[dayIndex].label;
+                            daySelect.appendChild(dayOption);
+                        }
+                        var dayValue = String(node.value || "1");
+                        if (dayValue < "1" || dayValue > "7") {
+                            dayValue = "1";
+                        }
+                        daySelect.value = dayValue;
+                        node.value = daySelect.value;
+                        daySelect.onchange = function () {
+                            node.value = daySelect.value;
+                        };
+                        valueHost.appendChild(daySelect);
+                        return;
+                    }
+                    node.param = AUTOMATION_TIME_OF_DAY_PARAM;
                     var timeInput = document.createElement("input");
                     timeInput.type = "text";
-                    timeInput.placeholder = "HH:MM:SS";
-                    timeInput.value = normalizeTimeOfDayValue(node.value) || (node.value || "");
+                    timeInput.placeholder = "HH:MM";
+                    timeInput.value = normalizeTimeOfDayValue(node.value) || "00:00";
+                    node.value = timeInput.value;
                     timeInput.onchange = function () {
                         var normalized = normalizeTimeOfDayValue(timeInput.value);
                         node.value = normalized || timeInput.value;
@@ -12833,14 +12902,6 @@
                         }
                     };
                     valueHost.appendChild(timeInput);
-                    channelSelect.hidden = true;
-                    paramSelect.hidden = true;
-                    clusterInput.hidden = true;
-                    attrInput.hidden = true;
-                    delete node.cluster;
-                    delete node.attrId;
-                    delete node.param;
-                    node.channel = 1;
                     return;
                 }
                 paramSelect.hidden = false;
@@ -12860,11 +12921,16 @@
             function refreshDeviceDependent() {
                 node.ieee = deviceSelect.value;
                 if (isAutomationCurrentTimeIeee(node.ieee)) {
-                    if (node.cmp !== "GREATER" && node.cmp !== "LESS") {
-                        node.cmp = "GREATER";
+                    if (node.cmp !== "EQUAL" && node.cmp !== "GREATER" && node.cmp !== "LESS") {
+                        node.cmp = "EQUAL";
                     }
-                    if (!normalizeTimeOfDayValue(node.value)) {
-                        node.value = "00:00:00";
+                    fillCurrentTimeParamSelect();
+                    if (node.param === AUTOMATION_DAY_OF_WEEK_PARAM) {
+                        if (!node.value || node.value < "1" || node.value > "7") {
+                            node.value = "1";
+                        }
+                    } else if (!normalizeTimeOfDayValue(node.value)) {
+                        node.value = "00:00";
                     }
                     refreshCompareOpControl();
                     refreshCompareValueControl();
@@ -21555,6 +21621,10 @@
                                 <p id="statusOnlineTime" class="status-value">—</p>
                             </div>
                             <div class="status-row">
+                                <span class="status-row-label">Router date / time</span>
+                                <p id="statusRouterDateTime" class="status-value">—</p>
+                            </div>
+                            <div class="status-row">
                                 <span class="status-row-label">Master</span>
                                 <p id="statusMasterFirmwareVersion" class="status-value">—</p>
                             </div>
@@ -23203,6 +23273,11 @@
                     </div>
                     <p id="automationTimerRuntime" class="field-hint">Not counting</p>
                 </div>
+                <div class="field-check">
+                    <input id="automationUseTimeChange" type="checkbox" onchange="updateAutomationImportEnabled();">
+                    <span>Time change</span>
+                </div>
+                <p class="field-hint">Fires once each local minute at :00. Requires a time-of-day or day-of-week condition and at least one action; listening devices are optional.</p>
                 <h4 class="upload-title">Triggered by devices</h4>
                 <div id="automationListenEditor"></div>
             </div>

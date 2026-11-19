@@ -1233,7 +1233,27 @@ static String hostGatewayStatusJson() {
     json += ZIGBEE_SPI_PROXY.pairingActive() ? "true" : "false";
     json += ",\"onlineSec\":";
     json += String((unsigned long)(millis() / 1000UL));
-    json += ",\"mqttServerType\":\"";
+    json += ",\"routerDateTime\":\"";
+    {
+        time_t now = time(nullptr);
+        struct tm timeInfo;
+        if (now > 1700000000 && localtime_r(&now, &timeInfo) != nullptr) {
+            char routerDateTime[24];
+            snprintf(
+                routerDateTime,
+                sizeof(routerDateTime),
+                "%02d-%02d-%04d %02d:%02d:%02d",
+                timeInfo.tm_mday,
+                timeInfo.tm_mon + 1,
+                timeInfo.tm_year + 1900,
+                timeInfo.tm_hour,
+                timeInfo.tm_min,
+                timeInfo.tm_sec
+            );
+            json += routerDateTime;
+        }
+    }
+    json += "\",\"mqttServerType\":\"";
     json += mqttServerTypeName(mqttServerType);
     json += "\",\"mqttStatus\":\"";
     json += mqttStatus;
@@ -2836,8 +2856,12 @@ static void setupSlave() {
 
 void setup() {
     STATUS_RGB.begin();
-    Serial.begin(115200);
+    Serial.begin(SERIAL_CONSOLE_BAUD);
     Serial.setTxTimeoutMs(20);
+#if defined(BOARD_HOST_P4)
+    // Type-C USB-UART (CH343) is UART0; CDC Serial alone is silent on that port.
+    Serial0.begin(SERIAL_CONSOLE_BAUD);
+#endif
     delay(400);
 #if defined(BOARD_ROLE_HOST)
     setupHost();
