@@ -155,14 +155,21 @@ bool AutomationStore::isCurrentTimeIeee(const char *ieeeText) {
 }
 
 bool AutomationStore::isTimeOfDayValue(const char *value) {
-    if (value == nullptr || strlen(value) != 8) {
+    if (value == nullptr) {
         return false;
     }
-    if (value[2] != ':' || value[5] != ':') {
+    const size_t length = strlen(value);
+    if (length != 5 && length != 8) {
         return false;
     }
-    for (int index = 0; index < 8; index++) {
-        if (index == 2 || index == 5) {
+    if (value[2] != ':') {
+        return false;
+    }
+    if (length == 8 && value[5] != ':') {
+        return false;
+    }
+    for (size_t index = 0; index < length; index++) {
+        if (index == 2 || (length == 8 && index == 5)) {
             continue;
         }
         if (value[index] < '0' || value[index] > '9') {
@@ -171,8 +178,44 @@ bool AutomationStore::isTimeOfDayValue(const char *value) {
     }
     const int hours = (value[0] - '0') * 10 + (value[1] - '0');
     const int minutes = (value[3] - '0') * 10 + (value[4] - '0');
-    const int seconds = (value[6] - '0') * 10 + (value[7] - '0');
-    return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59 && seconds >= 0 && seconds <= 59;
+    if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+        return false;
+    }
+    if (length == 8) {
+        const int seconds = (value[6] - '0') * 10 + (value[7] - '0');
+        if (seconds < 0 || seconds > 59) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool AutomationStore::normalizeTimeOfDayValue(const char *value, char *out, size_t outLen) {
+    if (out == nullptr || outLen < 6 || !isTimeOfDayValue(value)) {
+        return false;
+    }
+    out[0] = value[0];
+    out[1] = value[1];
+    out[2] = ':';
+    out[3] = value[3];
+    out[4] = value[4];
+    out[5] = '\0';
+    return true;
+}
+
+bool AutomationStore::isDayOfWeekValue(const char *value) {
+    if (value == nullptr || value[0] == '\0' || value[1] != '\0') {
+        return false;
+    }
+    return value[0] >= '1' && value[0] <= '7';
+}
+
+bool AutomationStore::isScheduleTimeParam(const char *param) {
+    if (param == nullptr || param[0] == '\0') {
+        return true;
+    }
+    return strcmp(param, AUTOMATION_PARAM_TIME_OF_DAY) == 0
+        || strcmp(param, AUTOMATION_PARAM_DAY_OF_WEEK) == 0;
 }
 
 bool AutomationStore::conditionUsesCurrentTime(const AutomationCondition *node) {
@@ -187,6 +230,39 @@ bool AutomationStore::conditionUsesCurrentTime(const AutomationCondition *node) 
             continue;
         }
         if (conditionUsesCurrentTime(sibling->children)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool AutomationStore::conditionHasScheduleComparison(const AutomationCondition *node) {
+    if (node == nullptr) {
+        return false;
+    }
+    for (const AutomationCondition *sibling = node; sibling != nullptr; sibling = sibling->nextSibling) {
+        if (sibling->kind == AutomationConditionComparison) {
+            if (!isCurrentTimeIeee(sibling->ieeeText) || !isScheduleTimeParam(sibling->param)) {
+                continue;
+            }
+            if (sibling->cmp != AutomationCmpEqual
+                && sibling->cmp != AutomationCmpGreater
+                && sibling->cmp != AutomationCmpLess) {
+                continue;
+            }
+            if (sibling->param != nullptr
+                && strcmp(sibling->param, AUTOMATION_PARAM_DAY_OF_WEEK) == 0) {
+                if (isDayOfWeekValue(sibling->value)) {
+                    return true;
+                }
+                continue;
+            }
+            if (isTimeOfDayValue(sibling->value)) {
+                return true;
+            }
+            continue;
+        }
+        if (conditionHasScheduleComparison(sibling->children)) {
             return true;
         }
     }
@@ -452,8 +528,20 @@ static bool validateConditionTree(const AutomationCondition *node) {
     for (const AutomationCondition *sibling = node; sibling != nullptr; sibling = sibling->nextSibling) {
         if (sibling->kind == AutomationConditionComparison) {
             if (AutomationStore::isCurrentTimeIeee(sibling->ieeeText)) {
-                if ((sibling->cmp != AutomationCmpGreater && sibling->cmp != AutomationCmpLess)
-                    || !AutomationStore::isTimeOfDayValue(sibling->value)) {
+                if (sibling->cmp != AutomationCmpEqual
+                    && sibling->cmp != AutomationCmpGreater
+                    && sibling->cmp != AutomationCmpLess) {
+                    return false;
+                }
+                if (!AutomationStore::isScheduleTimeParam(sibling->param)) {
+                    return false;
+                }
+                if (sibling->param != nullptr
+                    && strcmp(sibling->param, AUTOMATION_PARAM_DAY_OF_WEEK) == 0) {
+                    if (!AutomationStore::isDayOfWeekValue(sibling->value)) {
+                        return false;
+                    }
+                } else if (!AutomationStore::isTimeOfDayValue(sibling->value)) {
                     return false;
                 }
             }
@@ -505,6 +593,9 @@ static bool validateTypedConditionNode(const AutomationCondition *node) {
                             return false;
                         }
                     }
+                } else if (AutomationStore::isCurrentTimeIeee(sibling->ieeeText)
+                    && AutomationStore::isScheduleTimeParam(sibling->param)) {
+                    // Validated in validateConditionTree.
                 } else if (!automationParamIsKnownKey(sibling->param)) {
                     return false;
                 }
@@ -598,14 +689,17 @@ bool AutomationStore::validateAutomation(const AutomationRecord *automation) con
         && automation->timer.defaultTime == 0) {
         return false;
     }
+    if (automation->useTimeChange) {
+        if (!automation->useCondition || automation->actions == nullptr) {
+            return false;
+        }
+        return conditionHasScheduleComparison(automation->condition);
+    }
     if (automation->timer.use) {
         return true;
     }
     if (!automation->useCondition) {
         return automation->listen != nullptr;
-    }
-    if (conditionIsComplete(automation->condition) && conditionUsesCurrentTime(automation->condition)) {
-        return true;
     }
     if (automation->listen == nullptr) {
         return false;
@@ -923,8 +1017,21 @@ bool AutomationStore::parseCondition(const char *conditionJson, AutomationCondit
             return false;
         }
         condition->ieeeText = duplicateBoundedString(ieeeText.c_str(), IEEE_TEXT_MAX - 1);
-        condition->value = duplicateBoundedString(valueText.c_str(), AUTOMATION_VALUE_MAX - 1);
-        if (condition->ieeeText == nullptr || condition->value == nullptr) {
+        if (condition->ieeeText == nullptr) {
+            freeConditionTree(condition);
+            return false;
+        }
+        if (isCurrentTimeIeee(condition->ieeeText)) {
+            char normalizedTime[8];
+            if (normalizeTimeOfDayValue(valueText.c_str(), normalizedTime, sizeof(normalizedTime))) {
+                condition->value = duplicateBoundedString(normalizedTime, AUTOMATION_VALUE_MAX - 1);
+            } else {
+                condition->value = duplicateBoundedString(valueText.c_str(), AUTOMATION_VALUE_MAX - 1);
+            }
+        } else {
+            condition->value = duplicateBoundedString(valueText.c_str(), AUTOMATION_VALUE_MAX - 1);
+        }
+        if (condition->value == nullptr) {
             freeConditionTree(condition);
             return false;
         }
@@ -940,6 +1047,15 @@ bool AutomationStore::parseCondition(const char *conditionJson, AutomationCondit
         String paramText;
         if (extractJsonString(conditionJson, "param", paramText) && paramText.length() > 0) {
             condition->param = duplicateBoundedString(paramText.c_str(), AUTOMATION_PARAM_KEY_MAX - 1);
+            if (condition->param == nullptr) {
+                freeConditionTree(condition);
+                return false;
+            }
+        } else if (isCurrentTimeIeee(condition->ieeeText)) {
+            condition->param = duplicateBoundedString(
+                AUTOMATION_PARAM_TIME_OF_DAY,
+                AUTOMATION_PARAM_KEY_MAX - 1
+            );
             if (condition->param == nullptr) {
                 freeConditionTree(condition);
                 return false;
@@ -1649,6 +1765,11 @@ AutomationWriteResult AutomationStore::parseOneAutomation(
         useCondition = true;
     }
     automation->useCondition = useCondition;
+    bool useTimeChange = false;
+    if (!extractJsonBool(objectJson, "useTimeChange", useTimeChange)) {
+        useTimeChange = false;
+    }
+    automation->useTimeChange = useTimeChange;
     bool debugEnabled = false;
     if (!extractJsonBool(objectJson, "debug", debugEnabled)) {
         debugEnabled = false;
@@ -1988,6 +2109,7 @@ AutomationWriteResult AutomationStore::createAutomation(
     }
     automation->active = active;
     automation->useCondition = false;
+    automation->useTimeChange = false;
     automation->debug = false;
     automation->timer.use = false;
     automation->timer.startOnBoot = false;
@@ -2057,6 +2179,7 @@ AutomationWriteResult AutomationStore::replaceFromJson(const char *name, const c
         existing->group = parsed->group;
         existing->active = parsed->active;
         existing->useCondition = parsed->useCondition;
+        existing->useTimeChange = parsed->useTimeChange;
         existing->debug = parsed->debug;
         existing->minTriggerIntervalSec = parsed->minTriggerIntervalSec;
         existing->timer.use = parsed->timer.use;
@@ -2380,6 +2503,8 @@ void AutomationStore::appendAutomationFull(PsramJsonBuffer &json, const Automati
     json += automation->active ? "true" : "false";
     json += ",\"useCondition\":";
     json += automation->useCondition ? "true" : "false";
+    json += ",\"useTimeChange\":";
+    json += automation->useTimeChange ? "true" : "false";
     json += ",\"debug\":";
     json += automation->debug ? "true" : "false";
     json += ",\"minTriggerIntervalSec\":";

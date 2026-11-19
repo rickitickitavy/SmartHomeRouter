@@ -134,6 +134,7 @@ struct AutomationRecord {
     char *group;
     bool active;
     bool useCondition;
+    bool useTimeChange;
     bool debug;
     uint32_t minTriggerIntervalSec;
     AutomationTimer timer;
@@ -200,7 +201,11 @@ public:
     static bool isNameSafe(const char *name);
     static bool isCurrentTimeIeee(const char *ieeeText);
     static bool isTimeOfDayValue(const char *value);
+    static bool isDayOfWeekValue(const char *value);
+    static bool isScheduleTimeParam(const char *param);
+    static bool normalizeTimeOfDayValue(const char *value, char *out, size_t outLen);
     static bool conditionUsesCurrentTime(const AutomationCondition *node);
+    static bool conditionHasScheduleComparison(const AutomationCondition *node);
     static int countConditionNodes(const AutomationCondition *node);
     static bool conditionIsComplete(const AutomationCondition *node);
     static const char *compareOpToText(AutomationCompareOp op);

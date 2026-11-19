@@ -3534,9 +3534,13 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
     const bool haveLowMemoryThreshold =
         extractJsonInt(body.c_str(), "lowMemoryThresholdKb", lowMemoryThresholdKb);
     int timeZoneUtcOffsetMin = settingsManager->timeZoneUtcOffsetMin();
+#if defined(BOARD_ROLE_HOST)
     const bool isRepeaterRole = routerInterconnect != nullptr
         && routerInterconnect->store() != nullptr
         && routerInterconnect->store()->settings().role == InterconnectRoleRepeater;
+#else
+    const bool isRepeaterRole = false;
+#endif
     const bool haveTimeZoneUtcOffsetMin = !isRepeaterRole
         && extractJsonInt(body.c_str(), "timeZoneUtcOffsetMin", timeZoneUtcOffsetMin);
     if (haveHistoryDays) {
@@ -3677,12 +3681,14 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
         );
     }
 #endif
+#if defined(BOARD_ROLE_HOST)
     if (haveTimeZoneUtcOffsetMin
         && routerInterconnect != nullptr
         && routerInterconnect->store() != nullptr
         && routerInterconnect->store()->settings().role == InterconnectRoleMain) {
         routerInterconnect->pushSharedVariablesToAllPeers();
     }
+#endif
     request->send(200, "text/plain", "Saved. Hardware settings are active now.");
 }
 
@@ -4193,11 +4199,13 @@ bool WebConsole::applyHardwareJson(const char *json, String *errorText) {
         logHardwareFieldClamp("timeZoneUtcOffsetMin", timeZoneUtcOffsetMin, (int)clampedTimeZone);
         settingsManager->setTimeZoneUtcOffsetMin(clampedTimeZone);
         configTime((long)clampedTimeZone * 60L, 0, "pool.ntp.org", "time.nist.gov");
+#if defined(BOARD_ROLE_HOST)
         if (routerInterconnect != nullptr
             && routerInterconnect->store() != nullptr
             && routerInterconnect->store()->settings().role == InterconnectRoleMain) {
             routerInterconnect->pushSharedVariablesToAllPeers();
         }
+#endif
     }
     settingsManager->setSpiSpeedHz(clamped);
     settingsManager->setLedBrightness(bluePercent, greenPercent);

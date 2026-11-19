@@ -195,6 +195,9 @@ void Logger::appendSlaveLine(const char *line) {
     }
     appendRing(stamped);
     Serial.println(stamped);
+#if defined(BOARD_HOST_P4)
+    Serial0.println(stamped);
+#endif
 }
 
 void Logger::println(const String &msg) {
@@ -203,6 +206,9 @@ void Logger::println(const String &msg) {
     String line = String(timestamp) + " [" + roleLabel + "] " + msg;
     appendRing(line);
     Serial.println(line);
+#if defined(BOARD_HOST_P4)
+    Serial0.println(line);
+#endif
     if (lineHook != nullptr) {
         lineHook(line.c_str());
     }

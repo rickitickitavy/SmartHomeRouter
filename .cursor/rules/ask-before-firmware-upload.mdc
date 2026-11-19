@@ -1,0 +1,19 @@
+---
+description: Always ask the human before any firmware/device flash upload
+alwaysApply: true
+---
+
+# Ask before firmware upload
+
+NEVER flash or upload firmware to a device without an **explicit human approval for that upload** in the same turn (chat yes / Cursor hook Approve).
+
+This applies to:
+
+- `pio` / `platformio` `-t upload`, `--target upload`, `uploadfs`
+- `esptool` / `esptool.py` `write_flash` / `erase_flash` / `erase_region`
+- `idf.py flash`
+- `arduino-cli upload`
+
+Build-only (`pio run` without an upload target) is allowed without asking.
+
+Even if the human said “fix it” or “flash it” earlier, still obtain a clear go-ahead before the upload command runs. A Cursor `beforeShellExecution` hook (`.cursor/hooks/ask-before-firmware-upload.py`, mirrored under `~/.cursor/hooks/`) returns `permission: ask` for these commands — do not bypass it.

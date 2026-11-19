@@ -126,7 +126,7 @@ pio run -e esp32-c6-slave -t upload
 
 1. Install the PlatformIO plugin.
 2. Open this folder. `pio project init --ide clion` generates CMake files if they are missing.
-3. Build selected envs; upload/monitor as above (115200).
+3. Build selected envs; upload/monitor as above (921600).
 
 ## Configure over USB CLI
 

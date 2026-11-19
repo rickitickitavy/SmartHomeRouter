@@ -42,11 +42,12 @@ private:
     EmailSender *emailSender;
     CameraStore *cameraStore;
     unsigned long lastTickMs;
+    int lastTimeChangeMinuteKey;
     uint8_t actionDepth;
     bool bootStartApplied;
 
     void applyStartOnBootTimers();
-    void evaluateCurrentTimeAutomations();
+    void evaluateTimeChangeTriggers();
     void evaluateMatching(const char *ieeeText, uint8_t endpoint, uint16_t clusterOr0, bool fromTimer, AutomationRecord *only);
     void evaluateAndMaybeRun(AutomationRecord *automation, bool requireConditionRisingEdge = false);
     bool isMinTriggerIntervalBlocking(const AutomationRecord *automation) const;
@@ -62,6 +63,7 @@ private:
         size_t outLen
     ) const;
     bool formatCurrentTimeOfDay(char *out, size_t outLen) const;
+    bool formatCurrentDayOfWeek(char *out, size_t outLen) const;
     void runActions(AutomationRecord *automation);
     void applyAction(const AutomationAction *action);
     static bool compareValues(AutomationCompareOp op, const char *left, const char *right);
