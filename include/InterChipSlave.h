@@ -83,6 +83,7 @@ public:
     void resumeAfterRadioPause();
     void setZigbeeStarted(bool started);
     void setZigbeeHealthChecker(ZigbeeHealthFn checker);
+    void markZigbeeLost(const char *reason);
     bool consumeZigbeeLostReboot();
     bool completeCommandResult(uint8_t seq, bool ok);
     bool hasOutboundPending() const;

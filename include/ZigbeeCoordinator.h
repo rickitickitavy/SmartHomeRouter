@@ -52,13 +52,15 @@ public:
     using RegistryChangedFn = void (*)();
     using JoinClosedFn = void (*)();
     using RebindResultFn = void (*)(const uint8_t ieee[8], uint8_t outcome);
+    using ZigbeeLostFn = void (*)(const char *reason);
 
     ZigbeeCoordinator();
 
     void attachLibraryCallbacks(void (*withSource)(bool, uint8_t, esp_zb_zcl_addr_t));
     bool begin(uint8_t channel, uint8_t permitJoinSec);
     bool isStarted() const;
-    bool checkResponsive() const;
+    bool checkResponsive();
+    void setZigbeeLostHandler(ZigbeeLostFn handler);
     void permitJoin(uint8_t seconds);
     void closeJoin();
     void refreshBoundDevices();
@@ -135,8 +137,32 @@ public:
     static constexpr unsigned long kBasicIdentityGiveUpMs = 45000UL;
     static constexpr uint8_t kMaxBasicIdentityRetries = 5;
     static constexpr unsigned long kTypeProbeTimeoutMs = 2000UL;
+    static constexpr uint32_t kZigbeeLockMsShort = 50UL;
+    static constexpr uint32_t kZigbeeLockMsSend = 100UL;
+    static constexpr unsigned long kZigbeeHealthGraceMs = 60000UL;
+    static constexpr uint8_t kRadioInfraFailureStreak = 5;
 
 private:
+    bool tryZigbeeLock(uint32_t timeoutMs);
+    void releaseZigbeeLock();
+    uint16_t lookupShortByIeeeUnlocked(const uint8_t ieee[8]);
+    uint16_t lookupShortByIeee(const uint8_t ieee[8]);
+    void noteRadioInfraSendSuccess();
+    void noteRadioInfraSendFailure();
+    void tripZigbeeLost(const char *reason);
+    void enterZigbeeCallback();
+    void leaveZigbeeCallback();
+    bool inZigbeeCallback() const;
+
+    struct CallbackScope {
+        ZigbeeCoordinator &owner;
+        explicit CallbackScope(ZigbeeCoordinator &coordinator) : owner(coordinator) {
+            owner.enterZigbeeCallback();
+        }
+        ~CallbackScope() {
+            owner.leaveZigbeeCallback();
+        }
+    };
     class CoordinatorSwitch : public ZigbeeSwitch {
     public:
         CoordinatorSwitch(uint8_t endpoint, ZigbeeCoordinator *owner);
@@ -252,6 +278,7 @@ private:
     RegistryChangedFn registryChangedHandler = nullptr;
     JoinClosedFn joinClosedHandler = nullptr;
     RebindResultFn rebindResultHandler = nullptr;
+    ZigbeeLostFn zigbeeLostHandler = nullptr;
     bool registryReady = false;
     bool rebindActive = false;
     uint8_t rebindIeee[8]{};
@@ -266,6 +293,10 @@ private:
     unsigned long pairingLedToggleMs = 0;
     bool pairingLedOn = false;
     bool started = false;
+    unsigned long zigbeeStartedAtMs = 0;
+    uint8_t consecutiveRadioInfraFailures = 0;
+    int zigbeeLockNestDepth = 0;
+    int zigbeeCallbackDepth = 0;
     StatusReadItem *statusReadHead = nullptr;
     StatusIssuedItem *statusIssuedHead = nullptr;
     StatusAnswerHold *statusAnswerHead = nullptr;

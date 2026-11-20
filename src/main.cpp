@@ -2019,6 +2019,9 @@ static void createSlaveCoordinator() {
             }
         }
     );
+    zigbeeCoordinator->setZigbeeLostHandler([](const char *reason) {
+        INTER_CHIP_SLAVE.markZigbeeLost(reason);
+    });
 }
 
 static void onSlaveSettings(uint8_t channel, uint8_t permitJoinSec, uint32_t unixSec) {

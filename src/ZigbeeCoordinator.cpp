@@ -505,6 +505,105 @@ void ZigbeeCoordinator::releaseDescriptorProbe(DescriptorProbe *probe) {
 
 ZigbeeCoordinator::ZigbeeCoordinator() : zigbeeSwitch(kSwitchEndpoint, this), iasCie(1, this) {}
 
+bool ZigbeeCoordinator::tryZigbeeLock(uint32_t timeoutMs) {
+    if (inZigbeeCallback()) {
+        return true;
+    }
+    if (zigbeeLockNestDepth > 0) {
+        zigbeeLockNestDepth++;
+        return true;
+    }
+    if (!esp_zb_lock_acquire(pdMS_TO_TICKS(timeoutMs))) {
+        return false;
+    }
+    zigbeeLockNestDepth = 1;
+    return true;
+}
+
+void ZigbeeCoordinator::releaseZigbeeLock() {
+    if (inZigbeeCallback()) {
+        return;
+    }
+    if (zigbeeLockNestDepth == 0) {
+        return;
+    }
+    zigbeeLockNestDepth--;
+    if (zigbeeLockNestDepth == 0) {
+        esp_zb_lock_release();
+    }
+}
+
+void ZigbeeCoordinator::enterZigbeeCallback() {
+    zigbeeCallbackDepth++;
+}
+
+void ZigbeeCoordinator::leaveZigbeeCallback() {
+    if (zigbeeCallbackDepth > 0) {
+        zigbeeCallbackDepth--;
+    }
+}
+
+bool ZigbeeCoordinator::inZigbeeCallback() const {
+    return zigbeeCallbackDepth > 0;
+}
+
+uint16_t ZigbeeCoordinator::lookupShortByIeeeUnlocked(const uint8_t ieee[8]) {
+    if (ieee == nullptr) {
+        return 0xFFFF;
+    }
+    uint8_t lookupIeee[8];
+    memcpy(lookupIeee, ieee, 8);
+    return esp_zb_address_short_by_ieee(lookupIeee);
+}
+
+uint16_t ZigbeeCoordinator::lookupShortByIeee(const uint8_t ieee[8]) {
+    if (inZigbeeCallback()) {
+        return lookupShortByIeeeUnlocked(ieee);
+    }
+    if (!tryZigbeeLock(kZigbeeLockMsShort)) {
+        return 0xFFFF;
+    }
+    const uint16_t resolved = lookupShortByIeeeUnlocked(ieee);
+    releaseZigbeeLock();
+    return resolved;
+}
+
+void ZigbeeCoordinator::setZigbeeLostHandler(ZigbeeLostFn handler) {
+    zigbeeLostHandler = handler;
+}
+
+void ZigbeeCoordinator::tripZigbeeLost(const char *reason) {
+    if (!started) {
+        return;
+    }
+    LOGGER.error(
+        String("Zigbee radio lost: ") + (reason != nullptr ? reason : "unknown")
+    );
+    consecutiveRadioInfraFailures = 0;
+    if (zigbeeLostHandler != nullptr) {
+        zigbeeLostHandler(reason != nullptr ? reason : "unknown");
+    }
+}
+
+void ZigbeeCoordinator::noteRadioInfraSendSuccess() {
+    consecutiveRadioInfraFailures = 0;
+}
+
+void ZigbeeCoordinator::noteRadioInfraSendFailure() {
+    if (!started || zigbeeStartedAtMs == 0) {
+        return;
+    }
+    if ((millis() - zigbeeStartedAtMs) < kZigbeeHealthGraceMs) {
+        return;
+    }
+    if (consecutiveRadioInfraFailures < 255) {
+        consecutiveRadioInfraFailures++;
+    }
+    if (consecutiveRadioInfraFailures >= kRadioInfraFailureStreak) {
+        tripZigbeeLost("send lock/buffer streak");
+    }
+}
+
 void ZigbeeCoordinator::setLightStateHandler(LightStateFn handler) {
     lightStateHandler = handler;
 }
@@ -599,7 +698,7 @@ bool ZigbeeCoordinator::resolveRebindAddress(
     }
 
     if (!DeviceTopicMap::isUsableShortAddr(*shortAddrOut)) {
-        const uint16_t resolved = esp_zb_address_short_by_ieee(const_cast<uint8_t *>(ieee));
+        const uint16_t resolved = lookupShortByIeee(ieee);
         if (DeviceTopicMap::isUsableShortAddr(resolved)) {
             *shortAddrOut = resolved;
         }
@@ -654,6 +753,7 @@ void ZigbeeCoordinator::onRebindZdoBind(esp_zb_zdp_status_t zdoStatus, void *use
     if (coordinator == nullptr || !coordinator->rebindActive) {
         return;
     }
+    CallbackScope callbackScope(*coordinator);
     if (zdoStatus == ESP_ZB_ZDP_STATUS_SUCCESS) {
         coordinator->rebindBindsSucceeded++;
     } else {
@@ -708,6 +808,11 @@ void ZigbeeCoordinator::issueRebindZdoBinds(
 
     const uint8_t coordinatorEndpoint =
         (zigbeeType == ZigbeeDeviceTypeIasZone) ? iasCie.getEndpoint() : zigbeeSwitch.getEndpoint();
+    if (!tryZigbeeLock(kZigbeeLockMsSend)) {
+        LOGGER.warning("Zigbee lock failed for rebind ZDO binds");
+        rebindBindsIssued = 0;
+        return;
+    }
     esp_zb_ieee_addr_t coordinatorIeee;
     memset(coordinatorIeee, 0, sizeof(coordinatorIeee));
     esp_zb_get_long_address(coordinatorIeee);
@@ -728,6 +833,7 @@ void ZigbeeCoordinator::issueRebindZdoBinds(
         esp_zb_zdo_device_bind_req(&bindReq, onRebindZdoBind, this);
         rebindBindsIssued++;
     }
+    releaseZigbeeLock();
 }
 
 void ZigbeeCoordinator::servicePendingRebind() {
@@ -821,26 +927,33 @@ bool ZigbeeCoordinator::begin(uint8_t channel, uint8_t permitJoinSec) {
         return false;
     }
 
-    esp_zb_set_tx_power(kZigbeeTxPowerDbm);
-    int8_t txPowerDbm = 0;
-    esp_zb_get_tx_power(&txPowerDbm);
-    if (txPowerDbm != kZigbeeTxPowerDbm) {
-        LOGGER.warning(
-            "Zigbee TX power read-back " + String((int)txPowerDbm)
-            + " dBm (requested " + String((int)kZigbeeTxPowerDbm) + " dBm)"
-        );
+    if (tryZigbeeLock(kZigbeeLockMsSend)) {
+        esp_zb_set_tx_power(kZigbeeTxPowerDbm);
+        int8_t txPowerDbm = 0;
+        esp_zb_get_tx_power(&txPowerDbm);
+        if (txPowerDbm != kZigbeeTxPowerDbm) {
+            LOGGER.warning(
+                "Zigbee TX power read-back " + String((int)txPowerDbm)
+                + " dBm (requested " + String((int)kZigbeeTxPowerDbm) + " dBm)"
+            );
+        } else {
+            LOGGER.info("Zigbee TX power " + String((int)txPowerDbm) + " dBm");
+        }
+        esp_zb_ieee_addr_t localIeee;
+        memset(localIeee, 0, sizeof(localIeee));
+        esp_zb_get_long_address(localIeee);
+        LOGGER.info("Zigbee coordinator started ieee=" + formatIeeeText(localIeee));
+        releaseZigbeeLock();
     } else {
-        LOGGER.info("Zigbee TX power " + String((int)txPowerDbm) + " dBm");
+        LOGGER.warning("Zigbee lock failed after begin; TX power/IEEE skipped");
     }
 
     started = true;
+    zigbeeStartedAtMs = millis();
+    consecutiveRadioInfraFailures = 0;
     coordinatorForDefaultResponse = this;
     lastRefreshMs = millis();
     maybeStartStatusRefresh();
-    esp_zb_ieee_addr_t localIeee;
-    memset(localIeee, 0, sizeof(localIeee));
-    esp_zb_get_long_address(localIeee);
-    LOGGER.info("Zigbee coordinator started ieee=" + formatIeeeText(localIeee));
     if (permitJoinSec > 0) {
         startPairingWindow(permitJoinSec);
     }
@@ -851,14 +964,20 @@ bool ZigbeeCoordinator::isStarted() const {
     return started;
 }
 
-bool ZigbeeCoordinator::checkResponsive() const {
+bool ZigbeeCoordinator::checkResponsive() {
     if (!started) {
         return false;
     }
-    if (!esp_zb_lock_acquire(pdMS_TO_TICKS(50))) {
+    if (!tryZigbeeLock(kZigbeeLockMsShort)) {
         return false;
     }
-    esp_zb_lock_release();
+    const zb_bufid_t buffer = zb_buf_get_out();
+    if (buffer == 0) {
+        releaseZigbeeLock();
+        return false;
+    }
+    zb_buf_free(buffer);
+    releaseZigbeeLock();
     return true;
 }
 
@@ -984,7 +1103,7 @@ void ZigbeeCoordinator::storeBoundDevice(zb_device_params_t *device) {
 
     uint16_t shortAddr = device->short_addr;
     if (shortAddr == 0xFFFF || shortAddr == 0) {
-        const uint16_t resolved = esp_zb_address_short_by_ieee(device->ieee_addr);
+        const uint16_t resolved = lookupShortByIeee(device->ieee_addr);
         if (resolved != 0 && resolved != 0xFFFF) {
             shortAddr = resolved;
         }
@@ -1262,11 +1381,13 @@ void ZigbeeCoordinator::requestSimpleDescriptor(uint16_t shortAddr, uint8_t endp
     esp_zb_zdo_simple_desc_req_param_t request{};
     request.addr_of_interest = shortAddr;
     request.endpoint = endpoint;
-    const bool tookLock = esp_zb_lock_acquire(pdMS_TO_TICKS(20));
-    esp_zb_zdo_simple_desc_req(&request, onSimpleDescriptor, probe);
-    if (tookLock) {
-        esp_zb_lock_release();
+    if (!tryZigbeeLock(20)) {
+        LOGGER.warning("Zigbee lock failed for simple_desc; skipping");
+        releaseDescriptorProbe(probe);
+        return;
     }
+    esp_zb_zdo_simple_desc_req(&request, onSimpleDescriptor, probe);
+    releaseZigbeeLock();
 }
 
 void ZigbeeCoordinator::requestActiveEndpoints(uint16_t shortAddr) {
@@ -1276,11 +1397,13 @@ void ZigbeeCoordinator::requestActiveEndpoints(uint16_t shortAddr) {
     }
     esp_zb_zdo_active_ep_req_param_t request{};
     request.addr_of_interest = shortAddr;
-    const bool tookLock = esp_zb_lock_acquire(pdMS_TO_TICKS(20));
-    esp_zb_zdo_active_ep_req(&request, onActiveEndpoints, probe);
-    if (tookLock) {
-        esp_zb_lock_release();
+    if (!tryZigbeeLock(20)) {
+        LOGGER.warning("Zigbee lock failed for active_ep; skipping");
+        releaseDescriptorProbe(probe);
+        return;
     }
+    esp_zb_zdo_active_ep_req(&request, onActiveEndpoints, probe);
+    releaseZigbeeLock();
 }
 
 void ZigbeeCoordinator::startDescriptorProbe(BoundZigbeeDevice *slot) {
@@ -1319,6 +1442,7 @@ void ZigbeeCoordinator::onActiveEndpoints(
         return;
     }
     ZigbeeCoordinator *coordinator = probe->owner;
+    CallbackScope callbackScope(*coordinator);
     const uint16_t shortAddr = probe->shortAddr;
     coordinator->releaseDescriptorProbe(probe);
     BoundZigbeeDevice *slot = coordinator->findByShortAddr(shortAddr);
@@ -1344,6 +1468,7 @@ void ZigbeeCoordinator::onSimpleDescriptor(
         return;
     }
     ZigbeeCoordinator *coordinator = probe->owner;
+    CallbackScope callbackScope(*coordinator);
     const uint16_t shortAddr = probe->shortAddr;
     coordinator->releaseDescriptorProbe(probe);
     if (zdoStatus != ESP_ZB_ZDP_STATUS_SUCCESS || simpleDesc == nullptr) {
@@ -1382,11 +1507,15 @@ void ZigbeeCoordinator::refreshRegisteredShorts() {
     if (registeredMap == nullptr) {
         return;
     }
+    if (!tryZigbeeLock(kZigbeeLockMsShort)) {
+        LOGGER.warning("Zigbee lock failed for registered short refresh");
+        return;
+    }
     int slotIndex = registeredMap->nextUsedIndex(0);
     while (slotIndex >= 0) {
         DeviceTopicEntry *entry = registeredMap->slotAt(slotIndex);
         if (entry != nullptr && entry->used) {
-            const uint16_t resolvedShort = esp_zb_address_short_by_ieee(entry->ieee);
+            const uint16_t resolvedShort = lookupShortByIeeeUnlocked(entry->ieee);
             if (resolvedShort != 0 && resolvedShort != 0xFFFF) {
                 rememberShortIeee(resolvedShort, entry->ieee, 0);
             }
@@ -1403,6 +1532,7 @@ void ZigbeeCoordinator::refreshRegisteredShorts() {
             rememberShortIeee(neighbor.short_addr, neighbor.ieee_addr, 0);
         }
     }
+    releaseZigbeeLock();
 }
 
 void ZigbeeCoordinator::releaseStatusReadsForIeee(const uint8_t ieee[8]) {
@@ -1453,6 +1583,9 @@ void ZigbeeCoordinator::syncPairingNeighborShorts() {
     if (pairingUntilMs == 0 || !started) {
         return;
     }
+    if (!tryZigbeeLock(kZigbeeLockMsShort)) {
+        return;
+    }
     esp_zb_nwk_info_iterator_t iterator = ESP_ZB_NWK_INFO_ITERATOR_INIT;
     esp_zb_nwk_neighbor_info_t neighbor{};
     while (esp_zb_nwk_get_next_neighbor(&iterator, &neighbor) == ESP_OK) {
@@ -1488,6 +1621,7 @@ void ZigbeeCoordinator::syncPairingNeighborShorts() {
         updateLibraryBoundShort(neighbor.ieee_addr, neighbor.short_addr);
         refreshIdentityAfterShortChange(slot);
     }
+    releaseZigbeeLock();
 }
 
 void ZigbeeCoordinator::dispatch() {
@@ -1794,6 +1928,7 @@ void ZigbeeCoordinator::handleIasZoneStatus(
     if (message == nullptr) {
         return;
     }
+    CallbackScope callbackScope(*this);
     uint8_t ieee[8];
     uint16_t shortAddr = 0;
     resolveIeeeFromSource(message->info.src_address, ieee, &shortAddr);
@@ -1821,6 +1956,7 @@ void ZigbeeCoordinator::handleIasZoneEnroll(
     if (endpoint == nullptr || message == nullptr) {
         return;
     }
+    CallbackScope callbackScope(*this);
     uint8_t ieee[8];
     uint16_t shortAddr = 0;
     resolveIeeeFromSource(message->info.src_address, ieee, &shortAddr);
@@ -1894,6 +2030,7 @@ void ZigbeeCoordinator::handleAttributeReport(
     if (attribute == nullptr) {
         return;
     }
+    CallbackScope callbackScope(*this);
     uint8_t ieee[8];
     uint16_t shortAddr = 0;
     resolveIeeeFromSource(srcAddress, ieee, &shortAddr);
@@ -2004,6 +2141,7 @@ void ZigbeeCoordinator::handleAttributeReport(
 }
 
 void ZigbeeCoordinator::handleLightStateWithSource(bool on, uint8_t endpoint, esp_zb_zcl_addr_t source) {
+    CallbackScope callbackScope(*this);
     uint8_t ieee[8];
     uint16_t shortAddr = 0;
     resolveIeeeFromSource(source, ieee, &shortAddr);
@@ -2177,9 +2315,7 @@ bool ZigbeeCoordinator::trySendStatusRead(StatusReadItem *item) {
     const uint16_t attributeId = item->attributeId;
     BoundZigbeeDevice *device = findByIeee(ieee);
     if (device == nullptr && ieee != nullptr) {
-        uint8_t lookupIeee[8];
-        memcpy(lookupIeee, ieee, 8);
-        const uint16_t resolvedShort = esp_zb_address_short_by_ieee(lookupIeee);
+        const uint16_t resolvedShort = lookupShortByIeee(ieee);
         if (resolvedShort != 0 && resolvedShort != 0xFFFF) {
             rememberShortIeee(resolvedShort, ieee, endpoint);
             device = findByIeee(ieee);
@@ -2598,7 +2734,7 @@ void ZigbeeCoordinator::enqueueRegisteredStatusReads() {
         }
         BoundZigbeeDevice *bound = findByIeee(entry->ieee);
         if (bound == nullptr) {
-            const uint16_t resolvedShort = esp_zb_address_short_by_ieee(entry->ieee);
+            const uint16_t resolvedShort = lookupShortByIeee(entry->ieee);
             if (resolvedShort != 0 && resolvedShort != 0xFFFF) {
                 rememberShortIeee(resolvedShort, entry->ieee, 1);
                 bound = findByIeee(entry->ieee);
@@ -3107,14 +3243,16 @@ bool ZigbeeCoordinator::sendZclPacket(
     bool disableApsAck,
     bool disableDefaultResponse
 ) {
-    if (!esp_zb_lock_acquire(pdMS_TO_TICKS(100))) {
+    if (!tryZigbeeLock(kZigbeeLockMsSend)) {
         LOGGER.warning("Zigbee lock failed for ZCL send");
+        noteRadioInfraSendFailure();
         return false;
     }
     const zb_bufid_t buffer = zb_buf_get_out();
     if (buffer == 0) {
-        esp_zb_lock_release();
+        releaseZigbeeLock();
         LOGGER.warning("No Zigbee buffer for ZCL send");
+        noteRadioInfraSendFailure();
         return false;
     }
     const zb_uint8_t frameType =
@@ -3158,11 +3296,12 @@ bool ZigbeeCoordinator::sendZclPacket(
         disableApsAck ? ZB_TRUE : ZB_FALSE,
         0
     );
-    esp_zb_lock_release();
+    releaseZigbeeLock();
     if (sendResult != RET_OK) {
         LOGGER.warning("ZCL send failed status=" + String((int)sendResult));
         return false;
     }
+    noteRadioInfraSendSuccess();
     return true;
 }
 
