@@ -1462,7 +1462,7 @@ When the selected binding parameter is numeric (including Measurement-class `sen
 - **THEN** the persisted gauge ranges use the edited top and color
 
 ### Requirement: Console device dialog binary icon View style
-When the selected target is a binary sensor type (Binary Input / Output / Value or BACnet binary), an On/Off device, an automation, or a `userData` device parameter whose schema field type is `bool`, the binding dialog MUST show View style with Default and Icon (not Gauge). When Icon is selected, the dialog MUST show an icon picker of Material Design Icons (Home Assistant / Pictogrammers), including at least door, window, motion, water, pump, water-pump, heat-pump, and engine icons. Measurement numeric bindings MUST keep Default/Gauge and MUST NOT use this Icon View style path. `userData` int/float/string params MUST NOT offer Icon.
+When the selected target is a binary sensor type (Binary Input / Output / Value or BACnet binary), an On/Off device, an automation, or a `userData` device parameter whose schema field type is `bool`, the binding dialog MUST show View style with Default and Icon (not Gauge). When Icon is selected, the dialog MUST show an icon picker of Material Design Icons (Home Assistant / Pictogrammers) that includes **all previously offered icons** (at least door, window, motion, water, pump, water-pump, heat-pump, and engine) and the **operator-approved additional MDI names** (garden/outdoor, lighting, water, gates, appliances, and related ids such as `flower-tulip`, `sprinkler`, `ceiling-light`, `curtains`, `boom-gate`, `water-boiler`, etc.). Icons in the picker and on the console MUST remain **CSS-recolorable** (MDI webfont / `color`, including existing Icon on/off color controls). The picker MUST NOT rely on fixed-color raster images and MUST NOT require loading the full public MDI meta catalog. Measurement numeric bindings MUST keep Default/Gauge and MUST NOT use this Icon View style path. `userData` int/float/string params MUST NOT offer Icon.
 
 #### Scenario: Binary offers Icon
 - **WHEN** an editor opens a binding for a binaryInput device
@@ -1483,6 +1483,18 @@ When the selected target is a binary sensor type (Binary Input / Output / Value 
 #### Scenario: Pick pump icon
 - **WHEN** the editor selects View style Icon and chooses `mdi:pump`
 - **THEN** the saved binding stores `viewStyle` `icon` and `icon` `mdi:pump`
+
+#### Scenario: Approved lighting icon available
+- **WHEN** the operator selects Icon for an On/Off or binary / bool binding
+- **THEN** the icon picker includes `mdi:ceiling-light` (and the other approved additions present in the linked MDI font)
+
+#### Scenario: Prior icons still available
+- **WHEN** the operator opens the Icon picker
+- **THEN** previously offered icons such as `mdi:door` and `mdi:water-pump` remain selectable
+
+#### Scenario: Icon color still follows operator colors
+- **WHEN** the operator picks an approved new icon and sets Icon on/off colors
+- **THEN** the live and preview icon glyphs use those colors (not a baked multi-color bitmap)
 
 ### Requirement: Measurement binding param defaults to Sensor value
 When adding or refreshing a console device binding for a Measurement-class device (temperature, pressure, humidity, illuminance, flow, metering, electrical measurement, and the same set the console already treats as measurement for display), the param picker MUST offer Sensor value as the primary reading and MUST NOT leave an unmatched Status option selected merely because the dialog defaulted to `status`. If the previous param is not in that device’s catalog, the dialog MUST select the first catalog parameter instead of injecting the unmatched value as selected.
