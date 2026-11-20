@@ -292,6 +292,17 @@ When a device’s `router_id` refers to a paired Repeater that is offline, Main 
 - **WHEN** the operator commands a device whose Repeater online indicator is gray
 - **THEN** the command is not sent over interconnect and the UI/API indicates the router is offline
 
+### Requirement: Orphan device router_id can be reassigned from Main
+On Main, when a registered Zigbee device’s `router_id` refers to a Repeater that is no longer paired, the operator MUST be able to change that device’s `router_id` to **local** (`0`) or to a currently paired Repeater’s id through the device dialog Save path, without deleting the device. After Save, Zigbee command routing MUST use the new `router_id` (local radio for `0`, or the matching peer for a non-zero id) under existing interconnect command rules.
+
+#### Scenario: Reassign orphan to local
+- **WHEN** a registered device has `router_id` 4, peer 4 is unpaired, and the operator Saves with local selected
+- **THEN** the device’s stored `router_id` is 0 and later commands use the local radio path
+
+#### Scenario: Reassign orphan to another paired Repeater
+- **WHEN** a registered device is orphaned from `router_id` 4 and the operator Saves with paired Repeater id 2 selected
+- **THEN** the device’s stored `router_id` is 2 and later commands target peer 2 when that peer is online
+
 ### Requirement: Paired Repeater device count reflects bound devices
 On Main, each paired Repeater’s live **device** count SHALL equal the number of registered Zigbee devices whose `router_id` matches that peer’s router id. The count SHALL update when devices are added, removed, or rebound so Status and the Interconnection paired table do not stay at zero while remote devices exist.
 

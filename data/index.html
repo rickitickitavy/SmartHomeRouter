@@ -1814,7 +1814,7 @@
             payload: null,
             layout: null,
             smooth: false,
-            smoothWindow: 5
+            smoothWindow: 3
         };
         var HISTORY_RANGE_PRESETS = [
             { hours: 1, label: "1h" },
@@ -2157,7 +2157,7 @@
             }
             params.set("from", String(historyUnixToEpoch2010(startUnix)));
             params.set("to", String(historyUnixToEpoch2010(endUnix)));
-            params.set("maxPoints", "128");
+            params.set("maxPoints", "256");
             fetch("/api/history?" + params.toString(), { cache: "no-store" }).then(function (response) {
                 if (!response.ok) {
                     throw new Error("history " + response.status);
@@ -2191,7 +2191,7 @@
             historyChartState.hours = 24;
             historyChartState.rangeEndUnix = Math.floor(Date.now() / 1000);
             if (historyChartState.smoothWindow < 1) {
-                historyChartState.smoothWindow = 5;
+                historyChartState.smoothWindow = 3;
             }
             historySyncSmoothControls();
             if (title) {
@@ -2237,14 +2237,14 @@
             var input = document.getElementById("historyChartSmoothWindow");
             var value = input ? Number(input.value) : historyChartState.smoothWindow;
             if (!isFinite(value) || value < 1) {
-                value = 5;
+                value = 3;
             }
             value = Math.floor(value);
             if (value < 1) {
                 value = 1;
             }
-            if (value > 128) {
-                value = 128;
+            if (value > 64) {
+                value = 64;
             }
             historyChartState.smoothWindow = value;
             if (input && String(input.value) !== String(value)) {
@@ -2281,7 +2281,7 @@
                 flag.checked = !!historyChartState.smooth;
             }
             if (input) {
-                input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 5);
+                input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 3);
                 input.disabled = !historyChartState.smooth;
             }
         }
@@ -2306,39 +2306,49 @@
             if (!isFinite(value) || value < 1) {
                 return;
             }
-            historyChartState.smoothWindow = Math.min(128, Math.floor(value));
+            historyChartState.smoothWindow = Math.min(64, Math.floor(value));
             historyRedrawFromPayload();
         }
 
-        function historySmoothSeriesAvg(series, windowSize) {
-            var windowCount = Math.max(1, Math.floor(Number(windowSize) || 5));
-            if (!series || !series.length || windowCount <= 1) {
+        function historySmoothSeriesGaussian(series, userSamples) {
+            var userCount = Math.max(1, Math.floor(Number(userSamples) || 3));
+            if (userCount > 64) {
+                userCount = 64;
+            }
+            if (!series || !series.length) {
                 return series || [];
             }
-            var left = Math.floor((windowCount - 1) / 2);
-            var right = windowCount - 1 - left;
+            var weights = [];
+            var weightIndex;
+            for (weightIndex = 0; weightIndex <= userCount * 2; weightIndex++) {
+                var x = ((weightIndex - userCount) / userCount) * (2 / 3);
+                weights.push(Math.exp(-0.5 * x * x));
+            }
             var smoothed = [];
             var index;
             for (index = 0; index < series.length; index++) {
-                var start = Math.max(0, index - left);
-                var end = Math.min(series.length - 1, index + right);
                 var sum = 0;
-                var count = 0;
-                var sampleIndex;
-                for (sampleIndex = start; sampleIndex <= end; sampleIndex++) {
-                    sum += series[sampleIndex].value;
-                    count++;
+                var weightSum = 0;
+                var offset;
+                for (offset = -userCount; offset <= userCount; offset++) {
+                    var sampleIndex = index + offset;
+                    if (sampleIndex < 0 || sampleIndex >= series.length) {
+                        continue;
+                    }
+                    var weight = weights[offset + userCount];
+                    sum += Number(series[sampleIndex].value) * weight;
+                    weightSum += weight;
                 }
                 smoothed.push({
                     unix: series[index].unix,
-                    value: sum / count
+                    value: weightSum > 0 ? sum / weightSum : series[index].value
                 });
             }
             return smoothed;
         }
 
-        function historySmoothSeries(series, windowSize) {
-            return historySmoothSeriesAvg(series, windowSize);
+        function historySmoothSeries(series, userSamples) {
+            return historySmoothSeriesGaussian(series, userSamples);
         }
 
         function historyRedrawFromPayload() {
@@ -6609,6 +6619,66 @@
             return "#" + String(id);
         }
 
+        function interconnectPeerExistsForRouterId(routerId) {
+            var id = Number(routerId) || 0;
+            if (id === 0) {
+                return true;
+            }
+            var index;
+            for (index = 0; index < interconnectPeersCache.length; index++) {
+                if ((Number((interconnectPeersCache[index] || {}).routerId) || 0) === id) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function isOrphanDeviceRouterId(routerId) {
+            var id = Number(routerId) || 0;
+            return id !== 0 && !interconnectPeerExistsForRouterId(id);
+        }
+
+        function setDeviceRouterControls(routerId) {
+            var routerInput = document.getElementById("deviceRouter");
+            var routerSelect = document.getElementById("deviceRouterSelect");
+            var deviceRouterId = Number(routerId) || 0;
+            var orphan = isOrphanDeviceRouterId(deviceRouterId);
+            if (routerInput) {
+                routerInput.value = deviceRouterDisplayLabel(deviceRouterId);
+                routerInput.hidden = !!orphan;
+            }
+            if (!routerSelect) {
+                return;
+            }
+            routerSelect.hidden = !orphan;
+            while (routerSelect.firstChild) {
+                routerSelect.removeChild(routerSelect.firstChild);
+            }
+            if (!orphan) {
+                return;
+            }
+            var localOption = document.createElement("option");
+            localOption.value = "0";
+            localOption.textContent = "local";
+            routerSelect.appendChild(localOption);
+            var index;
+            for (index = 0; index < interconnectPeersCache.length; index++) {
+                var peer = interconnectPeersCache[index] || {};
+                var peerId = Number(peer.routerId) || 0;
+                if (peerId === 0) {
+                    continue;
+                }
+                var option = document.createElement("option");
+                option.value = String(peerId);
+                var peerName = String(peer.name || "").trim();
+                option.textContent = peerName
+                    ? (peerName + " (#" + String(peerId) + ")")
+                    : ("#" + String(peerId));
+                routerSelect.appendChild(option);
+            }
+            routerSelect.value = "0";
+        }
+
         function fillParameterDialog(device, title) {
             var heading = document.getElementById("parameterDialogTitle");
             if (heading) {
@@ -6651,26 +6721,23 @@
                 }
                 channelsSelect.value = String(channelsValue);
             }
-            var routerInput = document.getElementById("deviceRouter");
-            if (routerInput) {
-                var deviceRouterId = Number(device.routerId) || 0;
-                routerInput.value = deviceRouterDisplayLabel(deviceRouterId);
-                if (deviceRouterId !== 0 && interconnectPeersCache.length === 0) {
-                    fetch("/api/interconnect", { credentials: "same-origin", cache: "no-store" })
-                        .then(function (response) {
-                            if (!response.ok) {
-                                throw new Error("HTTP " + response.status);
-                            }
-                            return response.json();
-                        })
-                        .then(function (data) {
-                            rememberInterconnectPeers(data && data.peers);
-                            if (routerInput) {
-                                routerInput.value = deviceRouterDisplayLabel(deviceRouterId);
-                            }
-                        })
-                        .catch(function () {});
-                }
+            var deviceRouterId = Number(device.routerId) || 0;
+            setDeviceRouterControls(deviceRouterId);
+            if (deviceRouterId !== 0) {
+                fetch("/api/interconnect", { credentials: "same-origin", cache: "no-store" })
+                    .then(function (response) {
+                        if (!response.ok) {
+                            throw new Error("HTTP " + response.status);
+                        }
+                        return response.json();
+                    })
+                    .then(function (data) {
+                        rememberInterconnectPeers(data && data.peers);
+                        setDeviceRouterControls(deviceRouterId);
+                    })
+                    .catch(function () {
+                        setDeviceRouterControls(deviceRouterId);
+                    });
             }
             var fullControlInput = document.getElementById("deviceFullControl");
             if (fullControlInput) {
@@ -9200,6 +9267,10 @@
                 && parameterDialogNwk > 0
                 && parameterDialogNwk < 0xffff) {
                 body.nwk = parameterDialogNwk;
+            }
+            var routerSelect = document.getElementById("deviceRouterSelect");
+            if (routerSelect && !routerSelect.hidden) {
+                body.routerId = Number(routerSelect.value) || 0;
             }
             fetch("/api/devices", {
                 method: "POST",
@@ -22714,6 +22785,7 @@
                         <div class="field">
                             <label for="deviceRouter">ROUTER</label>
                             <input id="deviceRouter" type="text" readonly autocomplete="off">
+                            <select id="deviceRouterSelect" hidden aria-label="Router"></select>
                         </div>
                         <div id="deviceUserDataFieldsSection" class="form-section" hidden>
                             <h3 class="group-title">User data fields</h3>
@@ -23690,7 +23762,7 @@
                             <span>Smooth</span>
                         </div>
                         <label for="historyChartSmoothWindow">samples</label>
-                        <input id="historyChartSmoothWindow" type="number" min="1" max="128" step="1" value="5"
+                        <input id="historyChartSmoothWindow" type="number" min="1" max="64" step="1" value="3"
                                onchange="onHistoryChartSmoothChange()" oninput="onHistoryChartSmoothWindowInput()">
                     </div>
                 </div>

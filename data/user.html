@@ -95,7 +95,7 @@
             payload: null,
             layout: null,
             smooth: false,
-            smoothWindow: 5
+            smoothWindow: 3
         };
         var HISTORY_STATE_COLORS = [
             "#03a9f4", "#4caf50", "#ff9800", "#f44336", "#9c27b0",
@@ -316,7 +316,7 @@
             if (query.attribute != null) params.set("attribute", String(query.attribute));
             params.set("from", String(historyUnixToEpoch2010(startUnix)));
             params.set("to", String(historyUnixToEpoch2010(endUnix)));
-            params.set("maxPoints", "128");
+            params.set("maxPoints", "256");
             fetch("/api/history?" + params.toString(), { cache: "no-store" })
                 .then(function (r) {
                     if (!r.ok) throw new Error("history " + r.status);
@@ -342,10 +342,10 @@
         function historySmoothWindowSize() {
             var input = document.getElementById("historyChartSmoothWindow");
             var value = input ? Number(input.value) : historyChartState.smoothWindow;
-            if (!isFinite(value) || value < 1) value = 5;
+            if (!isFinite(value) || value < 1) value = 3;
             value = Math.floor(value);
             if (value < 1) value = 1;
-            if (value > 128) value = 128;
+            if (value > 64) value = 64;
             historyChartState.smoothWindow = value;
             if (input && String(input.value) !== String(value)) input.value = String(value);
             return value;
@@ -367,7 +367,7 @@
             if (!allowSmooth) return;
             if (flag) flag.checked = !!historyChartState.smooth;
             if (input) {
-                input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 5);
+                input.value = String(historyChartState.smoothWindow > 0 ? historyChartState.smoothWindow : 3);
                 input.disabled = !historyChartState.smooth;
             }
         }
@@ -384,32 +384,41 @@
             var input = document.getElementById("historyChartSmoothWindow");
             var value = input ? Number(input.value) : NaN;
             if (!isFinite(value) || value < 1) return;
-            historyChartState.smoothWindow = Math.min(128, Math.floor(value));
+            historyChartState.smoothWindow = Math.min(64, Math.floor(value));
             historyRedrawFromPayload();
         }
-        function historySmoothSeriesAvg(series, windowSize) {
-            var windowCount = Math.max(1, Math.floor(Number(windowSize) || 5));
-            if (!series || !series.length || windowCount <= 1) return series || [];
-            var left = Math.floor((windowCount - 1) / 2);
-            var right = windowCount - 1 - left;
+        function historySmoothSeriesGaussian(series, userSamples) {
+            var userCount = Math.max(1, Math.floor(Number(userSamples) || 3));
+            if (userCount > 64) userCount = 64;
+            if (!series || !series.length) return series || [];
+            var weights = [];
+            var weightIndex;
+            for (weightIndex = 0; weightIndex <= userCount * 2; weightIndex++) {
+                var x = ((weightIndex - userCount) / userCount) * (2 / 3);
+                weights.push(Math.exp(-0.5 * x * x));
+            }
             var smoothed = [];
             var index;
             for (index = 0; index < series.length; index++) {
-                var start = Math.max(0, index - left);
-                var end = Math.min(series.length - 1, index + right);
                 var sum = 0;
-                var count = 0;
-                var sampleIndex;
-                for (sampleIndex = start; sampleIndex <= end; sampleIndex++) {
-                    sum += series[sampleIndex].value;
-                    count++;
+                var weightSum = 0;
+                var offset;
+                for (offset = -userCount; offset <= userCount; offset++) {
+                    var sampleIndex = index + offset;
+                    if (sampleIndex < 0 || sampleIndex >= series.length) continue;
+                    var weight = weights[offset + userCount];
+                    sum += Number(series[sampleIndex].value) * weight;
+                    weightSum += weight;
                 }
-                smoothed.push({ unix: series[index].unix, value: sum / count });
+                smoothed.push({
+                    unix: series[index].unix,
+                    value: weightSum > 0 ? sum / weightSum : series[index].value
+                });
             }
             return smoothed;
         }
-        function historySmoothSeries(series, windowSize) {
-            return historySmoothSeriesAvg(series, windowSize);
+        function historySmoothSeries(series, userSamples) {
+            return historySmoothSeriesGaussian(series, userSamples);
         }
         function historyRedrawFromPayload() {
             var canvas = document.getElementById("historyChartCanvas");
@@ -427,7 +436,7 @@
             historyChartState.payload = null;
             historyChartState.hours = 24;
             historyChartState.rangeEndUnix = Math.floor(Date.now() / 1000);
-            if (historyChartState.smoothWindow < 1) historyChartState.smoothWindow = 5;
+            if (historyChartState.smoothWindow < 1) historyChartState.smoothWindow = 3;
             historySyncSmoothControls();
             if (title) title.textContent = query.title || "History";
             overlay.hidden = false;
@@ -5287,7 +5296,7 @@
                             <span>Smooth</span>
                         </div>
                         <label for="historyChartSmoothWindow">samples</label>
-                        <input id="historyChartSmoothWindow" type="number" min="1" max="128" step="1" value="5"
+                        <input id="historyChartSmoothWindow" type="number" min="1" max="64" step="1" value="3"
                                onchange="onHistoryChartSmoothChange()" oninput="onHistoryChartSmoothWindowInput()">
                     </div>
                 </div>
