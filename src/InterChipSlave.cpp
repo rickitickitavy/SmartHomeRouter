@@ -81,6 +81,17 @@ void InterChipSlave::setZigbeeHealthChecker(ZigbeeHealthFn checker) {
     zigbeeHealthChecker = checker;
 }
 
+void InterChipSlave::markZigbeeLost(const char *reason) {
+    if (!zigbeeStarted && zigbeeLostRebootPending) {
+        return;
+    }
+    LOGGER.error(
+        String("Zigbee health failed: ") + (reason != nullptr ? reason : "unknown")
+    );
+    zigbeeStarted = false;
+    zigbeeLostRebootPending = true;
+}
+
 bool InterChipSlave::consumeZigbeeLostReboot() {
     if (!zigbeeLostRebootPending) {
         return false;
@@ -725,9 +736,7 @@ void InterChipSlave::handleHostFrame(const SpiFrame &frame) {
         if (zigbeeStarted && zigbeeHealthChecker != nullptr) {
             zigbeeOk = zigbeeHealthChecker();
             if (!zigbeeOk) {
-                LOGGER.error("Zigbee health check failed on ping");
-                zigbeeStarted = false;
-                zigbeeLostRebootPending = true;
+                markZigbeeLost("ping buffer/lock health");
             }
         }
         if (zigbeeOk) {
