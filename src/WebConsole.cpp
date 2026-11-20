@@ -3748,10 +3748,10 @@ void WebConsole::handleHistoryGet(AsyncWebServerRequest *request) {
         toEpoch = (uint32_t)strtoul(request->getParam("to")->value().c_str(), nullptr, 10);
     }
     // Keep tiny on the AsyncTCP task: heap samples + bounded JSON.
-    uint16_t maxPoints = 128;
+    uint16_t maxPoints = 256;
     if (request->hasParam("maxPoints")) {
         const int parsedMax = request->getParam("maxPoints")->value().toInt();
-        if (parsedMax > 0 && parsedMax <= 128) {
+        if (parsedMax > 0 && parsedMax <= 256) {
             maxPoints = (uint16_t)parsedMax;
         }
     }
