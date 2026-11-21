@@ -61,8 +61,8 @@ public:
     bool isStarted() const;
     bool checkResponsive();
     void setZigbeeLostHandler(ZigbeeLostFn handler);
-    void permitJoin(uint8_t seconds);
-    void closeJoin();
+    bool permitJoin(uint8_t seconds);
+    bool closeJoin();
     void refreshBoundDevices();
     void startRebind(const uint8_t ieee[8]);
     void setRebindResultHandler(RebindResultFn handler);

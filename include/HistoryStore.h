@@ -34,13 +34,24 @@ struct HistorySeriesKey {
     uint16_t attribute;
 };
 
-struct HistorySample {
+struct HistoryFloatSample {
     uint32_t epoch2010;
-    HistoryValueType valueType;
-    float floatValue;
-    int32_t intValue;
-    bool boolValue;
-    char stringValue[kHistoryValueTextMaxLen];
+    float value;
+};
+
+struct HistoryIntSample {
+    uint32_t epoch2010;
+    int32_t value;
+};
+
+struct HistoryBoolSample {
+    uint32_t epoch2010;
+    bool value;
+};
+
+struct HistoryStringSample {
+    uint32_t epoch2010;
+    char value[kHistoryValueTextMaxLen];
 };
 
 struct HistoryStoreStats {
@@ -91,22 +102,51 @@ public:
     bool noteString(const HistorySeriesKey &key, const char *value);
     bool noteInt(const HistorySeriesKey &key, int32_t value, float epsilon);
 
-    bool query(
+    bool seriesValueType(const HistorySeriesKey &key, HistoryValueType *outType) const;
+
+    bool queryFloat(
         const HistorySeriesKey &key,
         uint32_t fromEpoch2010,
         uint32_t toEpoch2010,
         uint16_t maxPoints,
-        HistorySample *outSamples,
-        uint16_t *outCount,
-        HistoryValueType *outType
+        HistoryFloatSample *outSamples,
+        uint16_t *outCount
+    ) const;
+    bool queryInt(
+        const HistorySeriesKey &key,
+        uint32_t fromEpoch2010,
+        uint32_t toEpoch2010,
+        uint16_t maxPoints,
+        HistoryIntSample *outSamples,
+        uint16_t *outCount
+    ) const;
+    bool queryBool(
+        const HistorySeriesKey &key,
+        uint32_t fromEpoch2010,
+        uint32_t toEpoch2010,
+        uint16_t maxPoints,
+        HistoryBoolSample *outSamples,
+        uint16_t *outCount
+    ) const;
+    bool queryString(
+        const HistorySeriesKey &key,
+        uint32_t fromEpoch2010,
+        uint32_t toEpoch2010,
+        uint16_t maxPoints,
+        HistoryStringSample *outSamples,
+        uint16_t *outCount
     ) const;
 
     // Walk series that already have a last sample in RAM (after restore / notes).
+    // stringValue is non-null only for HistoryValueString series.
     void forEachSeriesWithLastSample(
         void (*visitor)(
             const HistorySeriesKey &key,
             HistoryValueType valueType,
-            const HistorySample &sample,
+            float floatValue,
+            int32_t intValue,
+            bool boolValue,
+            const char *stringValue,
             void *context
         ),
         void *context
@@ -158,10 +198,12 @@ private:
         uint8_t blockLength;
         float epsilon;
         bool hasLast;
-        float lastFloat;
-        int32_t lastInt;
-        bool lastBool;
-        char lastString[kHistoryValueTextMaxLen];
+        union {
+            float lastFloat;
+            int32_t lastInt;
+            bool lastBool;
+        };
+        char *lastString;
         uint8_t *entryBytes;
         bool used;
     };
@@ -206,6 +248,17 @@ private:
     void dropSeries(SeriesRuntime *runtime);
     bool seriesConfigured(DeviceTopicMap *deviceMap, const HistorySeriesKey &key) const;
     bool appendRecord(SeriesRuntime *runtime, uint32_t epoch2010, const void *valueBytes);
+    bool ensureLastStringBuffer(SeriesRuntime *runtime);
+    bool queryRecords(
+        const HistorySeriesKey &key,
+        HistoryValueType expectedType,
+        uint32_t fromEpoch2010,
+        uint32_t toEpoch2010,
+        uint16_t maxPoints,
+        void *outSamples,
+        size_t sampleBytes,
+        uint16_t *outCount
+    ) const;
     bool purgeOldestPage(SeriesRuntime *runtime);
     void purgeOutdated(SeriesRuntime *runtime, uint32_t nowEpoch2010);
     void sweepAll();

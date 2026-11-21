@@ -153,7 +153,8 @@ void test_slab_overflow_reclaims_by_purging_oldest() {
 
     const HistoryStoreStats after = store.stats();
     TEST_ASSERT_EQUAL_UINT16(4, after.pagesUsed);
-    TEST_ASSERT_TRUE(after.valuesStored > before.valuesStored);
+    // Full-page reclaim replaces one packed page with another; count stays equal.
+    TEST_ASSERT_TRUE(after.valuesStored >= before.valuesStored);
 
     store.end();
 }

@@ -1120,15 +1120,19 @@ The device parameter dialog SHALL show a transport field (Zigbee or MQTT) immedi
 - **THEN** transport shows MQTT and cannot be changed to Zigbee in that dialog
 
 ### Requirement: MQTT card edits server-born topic and interval
-The MQTT section SHALL show and allow saving SERVER BORN TOPIC and BORN INTERVAL (minutes). GET `/api/mqtt` and POST `/api/mqtt` SHALL include `serverBornTopic` and `bornIntervalMin`. The form SHALL load stored values when the MQTT section opens. Interval input SHALL use the stored clamp rules (5–120, default 20). Settings export and restore SHALL include both fields.
+The MQTT section SHALL show and allow saving **SERVER_BORN_TOPIC**. The MQTT section MUST NOT host the born-interval control after the move to Hardware (interval is edited under System → Hardware). GET `/api/mqtt` and POST `/api/mqtt` MAY still include `bornIntervalMin` for compatibility, but the operator-facing interval editor SHALL be on Hardware. Settings export and restore SHALL include both `serverBornTopic` and `bornIntervalMin`.
 
-#### Scenario: Load born fields
-- **WHEN** the host has `serverBornTopic` `homeassistant/status` and `bornIntervalMin` 30 and the operator opens MQTT
-- **THEN** those fields show that topic and 30
+#### Scenario: MQTT shows topic only for born
+- **WHEN** an admin opens MQTT
+- **THEN** SERVER_BORN_TOPIC is editable there and BORN_INTERVAL_MIN is not edited on the MQTT card
 
-#### Scenario: Save born fields
-- **WHEN** the operator sets SERVER BORN TOPIC to `z2m/birth`, BORN INTERVAL to 15, and saves MQTT
-- **THEN** GET `/api/mqtt` returns those values
+#### Scenario: Load born topic
+- **WHEN** the host has `serverBornTopic` `homeassistant/status` and the operator opens MQTT
+- **THEN** that field shows that topic
+
+#### Scenario: Save born topic
+- **WHEN** the operator sets SERVER_BORN_TOPIC to `z2m/birth` and saves MQTT
+- **THEN** GET `/api/mqtt` returns that topic
 
 ### Requirement: Pointer-down outside an overlay dismisses it
 
@@ -2292,6 +2296,13 @@ On the P4 host, Status SHALL show an **SD card** group with **status**, **capaci
 #### Scenario: Absent card
 - **WHEN** Status is open on P4 and no usable SD was found
 - **THEN** SD card shows an absent/error status and does not claim capacity as if a card were present
+
+### Requirement: Hardware edits born interval
+System → Hardware SHALL show and allow saving **BORN_INTERVAL_MIN** (minutes), using the same clamp rules as today (5–120, default 20). The control SHALL persist the existing `bornIntervalMin` setting (shared with MQTT born publish cadence when a topic is set). Only `isAdmin` SHALL edit it. GET/POST hardware (or the Hardware save path that already persists related gateway fields) SHALL round-trip this value; settings export/restore SHALL keep including it.
+
+#### Scenario: Admin sets interval on Hardware
+- **WHEN** an admin opens System → Hardware and saves born interval 30
+- **THEN** `bornIntervalMin` is stored as 30 and Zigbee interval collect uses 30 minutes
 
 ### Requirement: Hardware sets UTC time zone offset
 System → Hardware SHALL show **Time zone** as a UTC-offset select in 30-minute steps (UTC−12:00…UTC+14:00). Persist minutes from UTC, round-trip on `/api/hardware`, export/restore with settings, and apply to NTP. Only Main `isAdmin` may edit.

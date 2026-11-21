@@ -264,6 +264,9 @@ private:
     bool rebindWaitDone = false;
     uint8_t rebindWaitIeee[8]{};
     uint8_t rebindWaitOutcome = SPI_REBIND_OUTCOME_FAILED;
+    bool permitJoinWaitActive = false;
+    bool permitJoinWaitDone = false;
+    bool permitJoinWaitOk = false;
 
     CachedDevice *findByIeee(const uint8_t ieee[8]);
     const CachedDevice *findByIeee(const uint8_t ieee[8]) const;

@@ -3415,6 +3415,8 @@ void WebConsole::handleHardwareGet(AsyncWebServerRequest *request) {
     json += String((unsigned)settingsManager->lowMemoryThresholdKb());
     json += ",\"timeZoneUtcOffsetMin\":";
     json += String((int)settingsManager->timeZoneUtcOffsetMin());
+    json += ",\"bornIntervalMin\":";
+    json += String((unsigned)settingsManager->getSettings()->mqtt.bornIntervalMin);
     json += "}";
     request->send(200, "application/json", json);
 }
@@ -3664,6 +3666,12 @@ void WebConsole::handleHardwarePost(AsyncWebServerRequest *request) {
         settingsManager->setTimeZoneUtcOffsetMin(clampedTimeZone);
         configTime((long)clampedTimeZone * 60L, 0, "pool.ntp.org", "time.nist.gov");
     }
+    int bornIntervalMin = settingsManager->getSettings()->mqtt.bornIntervalMin;
+    if (extractJsonInt(body.c_str(), "bornIntervalMin", bornIntervalMin)) {
+        const int clampedBorn = clampBornIntervalMin(bornIntervalMin);
+        logHardwareFieldClamp("bornIntervalMin", bornIntervalMin, clampedBorn);
+        settingsManager->getSettings()->mqtt.bornIntervalMin = (uint8_t)clampedBorn;
+    }
     settingsManager->saveMain(false);
     if (applyHardware != nullptr) {
         applyHardware(clamped, bluePercent, greenPercent);
@@ -3755,20 +3763,72 @@ void WebConsole::handleHistoryGet(AsyncWebServerRequest *request) {
             maxPoints = (uint16_t)parsedMax;
         }
     }
-    HistorySample *samples = (HistorySample *)heap_caps_malloc(
-        (size_t)maxPoints * sizeof(HistorySample),
+    HistoryValueType valueType = HistoryValueFloat;
+    if (!historyStore->seriesValueType(key, &valueType)) {
+        // Unknown series: empty float series keeps chart clients stable.
+        valueType = HistoryValueFloat;
+    }
+    size_t sampleBytes = sizeof(HistoryFloatSample);
+    if (valueType == HistoryValueBool) {
+        sampleBytes = sizeof(HistoryBoolSample);
+    } else if (valueType == HistoryValueInt) {
+        sampleBytes = sizeof(HistoryIntSample);
+    } else if (valueType == HistoryValueString) {
+        sampleBytes = sizeof(HistoryStringSample);
+    }
+    void *samples = heap_caps_malloc(
+        (size_t)maxPoints * sampleBytes,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
     );
     if (samples == nullptr) {
-        samples = (HistorySample *)malloc((size_t)maxPoints * sizeof(HistorySample));
+        samples = malloc((size_t)maxPoints * sampleBytes);
     }
     if (samples == nullptr) {
         request->send(503, "text/plain", "History buffer unavailable");
         return;
     }
     uint16_t sampleCount = 0;
-    HistoryValueType valueType = HistoryValueFloat;
-    historyStore->query(key, fromEpoch, toEpoch, maxPoints, samples, &sampleCount, &valueType);
+    bool queried = false;
+    if (valueType == HistoryValueBool) {
+        queried = historyStore->queryBool(
+            key,
+            fromEpoch,
+            toEpoch,
+            maxPoints,
+            (HistoryBoolSample *)samples,
+            &sampleCount
+        );
+    } else if (valueType == HistoryValueInt) {
+        queried = historyStore->queryInt(
+            key,
+            fromEpoch,
+            toEpoch,
+            maxPoints,
+            (HistoryIntSample *)samples,
+            &sampleCount
+        );
+    } else if (valueType == HistoryValueString) {
+        queried = historyStore->queryString(
+            key,
+            fromEpoch,
+            toEpoch,
+            maxPoints,
+            (HistoryStringSample *)samples,
+            &sampleCount
+        );
+    } else {
+        queried = historyStore->queryFloat(
+            key,
+            fromEpoch,
+            toEpoch,
+            maxPoints,
+            (HistoryFloatSample *)samples,
+            &sampleCount
+        );
+    }
+    if (!queried) {
+        sampleCount = 0;
+    }
     String json;
     json.reserve((size_t)sampleCount * 48u + 64u);
     json = "{\"valueType\":\"";
@@ -3787,19 +3847,28 @@ void WebConsole::handleHistoryGet(AsyncWebServerRequest *request) {
             json += ",";
         }
         json += "{\"t\":";
-        json += String((unsigned long)samples[index].epoch2010);
-        json += ",\"v\":";
         if (valueType == HistoryValueBool) {
-            json += samples[index].boolValue ? "true" : "false";
+            const HistoryBoolSample *sample = &((HistoryBoolSample *)samples)[index];
+            json += String((unsigned long)sample->epoch2010);
+            json += ",\"v\":";
+            json += sample->value ? "true" : "false";
         } else if (valueType == HistoryValueInt) {
-            json += String((long)samples[index].intValue);
+            const HistoryIntSample *sample = &((HistoryIntSample *)samples)[index];
+            json += String((unsigned long)sample->epoch2010);
+            json += ",\"v\":";
+            json += String((long)sample->value);
         } else if (valueType == HistoryValueString) {
-            json += "\"";
-            appendJsonEscaped(json, samples[index].stringValue, sizeof(samples[index].stringValue));
+            const HistoryStringSample *sample = &((HistoryStringSample *)samples)[index];
+            json += String((unsigned long)sample->epoch2010);
+            json += ",\"v\":\"";
+            appendJsonEscaped(json, sample->value, sizeof(sample->value));
             json += "\"";
         } else {
+            const HistoryFloatSample *sample = &((HistoryFloatSample *)samples)[index];
+            json += String((unsigned long)sample->epoch2010);
+            json += ",\"v\":";
             char floatText[32];
-            snprintf(floatText, sizeof(floatText), "%.6g", (double)samples[index].floatValue);
+            snprintf(floatText, sizeof(floatText), "%.6g", (double)sample->value);
             json += floatText;
         }
         json += "}";
@@ -3966,8 +4035,9 @@ bool WebConsole::applyMqttJson(const char *json, String *errorText) {
     extractJsonInt(json, "port", port);
     extractJsonInt(json, "reconnectIntervalMs", reconnectIntervalMs);
     extractJsonInt(json, "clientTimeoutMs", clientTimeoutMs);
+    // Interval is edited on Hardware; omit on MQTT save keeps the stored value.
     if (!extractJsonInt(json, "bornIntervalMin", bornIntervalMin)) {
-        bornIntervalMin = DEFAULT_MQTT_BORN_INTERVAL_MIN;
+        bornIntervalMin = settingsManager->getSettings()->mqtt.bornIntervalMin;
     }
     if (haveServerType) {
         if (!parseMqttServerType(serverTypeText.c_str(), serverType)) {
