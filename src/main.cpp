@@ -116,6 +116,9 @@ static bool hostPreparationLatched = false;
 static bool hostLowMemoryFailsafeLatched = false;
 #endif
 static bool hostZigbeeStatusCollectPending = false;
+static unsigned long hostZigbeeBornCollectBootMs = 0;
+static unsigned long hostZigbeeBornCollectLastMs = 0;
+static bool hostZigbeeBornCollectBootDone = false;
 static volatile bool hostDeviceListPersistPending = false;
 static volatile bool hostMqttCommandResubscribePending = false;
 static volatile bool hostMqttReloadPending = false;
@@ -756,6 +759,35 @@ static void pumpHostZigbeeStatusCollect() {
     hostCollectZigbeeStatuses();
 }
 
+static void pumpHostZigbeeBornIntervalCollect() {
+    if (settingsManager == nullptr) {
+        return;
+    }
+    // Zigbee status collect on born interval even when MQTT server-born topic is empty.
+    if (hostZigbeeBornCollectBootMs == 0) {
+        hostZigbeeBornCollectBootMs = millis();
+        return;
+    }
+    const unsigned long now = millis();
+    const unsigned long intervalMs =
+        (unsigned long)clampBornIntervalMin(settingsManager->getSettings()->mqtt.bornIntervalMin)
+        * 60UL * 1000UL;
+    if (!hostZigbeeBornCollectBootDone) {
+        if ((now - hostZigbeeBornCollectBootMs) < MQTT_BORN_BOOT_DELAY_REMOTE_MS) {
+            return;
+        }
+        hostZigbeeBornCollectBootDone = true;
+        hostZigbeeBornCollectLastMs = now;
+        requestHostZigbeeStatusCollect();
+        return;
+    }
+    if ((now - hostZigbeeBornCollectLastMs) < intervalMs) {
+        return;
+    }
+    hostZigbeeBornCollectLastMs = now;
+    requestHostZigbeeStatusCollect();
+}
+
 static void onMqttLogicalMessage(const char *topic, const char *payload) {
     if (mqttClient != nullptr
         && mqttClient->serverBornTopic().length() > 0
@@ -935,10 +967,14 @@ static bool startDeviceSearch() {
     LOGGER.info("Search permit join " + String(seconds) + "s");
     interconnectBroadcastSearch(seconds, true);
     if (!ZIGBEE_SPI_PROXY.permitJoin(seconds)) {
+        LOGGER.warning("Search permit-join not applied; resetting slave");
         if (foundDevices != nullptr) {
             foundDevices->setAcceptingJoins(false);
             foundDevices->clear();
         }
+#if defined(BOARD_ROLE_HOST)
+        INTER_CHIP_HOST.resetSlaveSynchronous();
+#endif
         return false;
     }
     return true;
@@ -2042,11 +2078,9 @@ static bool onSlavePermitJoin(uint8_t seconds) {
         return false;
     }
     if (seconds == 0) {
-        zigbeeCoordinator->closeJoin();
-        return true;
+        return zigbeeCoordinator->closeJoin();
     }
-    zigbeeCoordinator->permitJoin(seconds);
-    return true;
+    return zigbeeCoordinator->permitJoin(seconds);
 }
 
 static void onSlaveRebindDevice(const uint8_t ieee[8]) {
@@ -2945,6 +2979,7 @@ void loop() {
         mqttBroker->dispatch(wifiController->hasUsableInterface());
         mqttClient->dispatch(wifiController->isStaConnected());
     }
+    pumpHostZigbeeBornIntervalCollect();
     pumpHostZigbeeStatusCollect();
     pumpWifiDeviceCommands();
     ZIGBEE_SPI_PROXY.pumpRegistrySync();
@@ -2996,6 +3031,10 @@ void loop() {
         return;
     }
 
+    STATUS_RGB.service();
+    INTER_CHIP_SLAVE.applyDeferredSettings();
+    INTER_CHIP_SLAVE.applyDeferredRadioCommands();
+    // Consume after deferred apply so permit-join / radio apply failure reboots immediately.
     if (INTER_CHIP_SLAVE.consumeZigbeeLostReboot()) {
         LOGGER.error("Zigbee lost; rebooting slave");
         delay(200);
@@ -3010,9 +3049,6 @@ void loop() {
         delay(200);
         ESP.restart();
     }
-    STATUS_RGB.service();
-    INTER_CHIP_SLAVE.applyDeferredSettings();
-    INTER_CHIP_SLAVE.applyDeferredRadioCommands();
     INTER_CHIP_SLAVE.pumpDeviceDump();
     INTER_CHIP_SLAVE.pumpUserDump();
     if (deviceStore != nullptr) {

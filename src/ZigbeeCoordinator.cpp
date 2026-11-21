@@ -667,7 +667,9 @@ void ZigbeeCoordinator::openRebindPairingFallback(const uint8_t ieee[8]) {
     if (seconds == 0) {
         seconds = 180;
     }
-    permitJoin(seconds);
+    if (!permitJoin(seconds)) {
+        tripZigbeeLost("rebind pairing fallback permit-join failed");
+    }
     finishRebind(SPI_REBIND_OUTCOME_PAIRING_FALLBACK);
 }
 
@@ -981,23 +983,35 @@ bool ZigbeeCoordinator::checkResponsive() {
     return true;
 }
 
-void ZigbeeCoordinator::permitJoin(uint8_t seconds) {
+bool ZigbeeCoordinator::permitJoin(uint8_t seconds) {
     if (!started) {
         LOGGER.warning("Zigbee is not started");
-        return;
+        return false;
+    }
+    if (!tryZigbeeLock(kZigbeeLockMsSend)) {
+        LOGGER.warning("Zigbee lock failed for permit join");
+        return false;
     }
     LOGGER.info("Permit join " + String(seconds) + "s");
     Zigbee.openNetwork(seconds);
+    releaseZigbeeLock();
     startPairingWindow(seconds);
+    return true;
 }
 
-void ZigbeeCoordinator::closeJoin() {
+bool ZigbeeCoordinator::closeJoin() {
     if (!started) {
-        return;
+        return false;
+    }
+    if (!tryZigbeeLock(kZigbeeLockMsSend)) {
+        LOGGER.warning("Zigbee lock failed for close join");
+        return false;
     }
     LOGGER.info("Closing join window");
     Zigbee.closeNetwork();
+    releaseZigbeeLock();
     stopPairingWindow();
+    return true;
 }
 
 void ZigbeeCoordinator::startPairingWindow(uint8_t seconds) {

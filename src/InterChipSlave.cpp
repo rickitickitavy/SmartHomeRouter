@@ -784,10 +784,9 @@ void InterChipSlave::handleHostFrame(const SpiFrame &frame) {
         return;
     }
     if (frame.cmd == SpiCmdPermitJoin && frame.length >= 1) {
+        // Success/failure SpiEvtCmdResult is sent only after deferred apply (open/close).
         deferredPermitSeconds = frame.payload[0];
         permitJoinPending = true;
-        uint8_t ok = 1;
-        enqueueEvent(SpiEvtCmdResult, &ok, 1);
         return;
     }
     if (frame.cmd == SpiCmdRebindDevice) {
@@ -958,9 +957,17 @@ void InterChipSlave::applyDeferredRadioCommands() {
     if (isFirmwareTransferQuiet()) {
         return;
     }
-    if (permitJoinPending && permitJoinHandler != nullptr) {
-        if (permitJoinHandler(deferredPermitSeconds)) {
-            permitJoinPending = false;
+    if (permitJoinPending) {
+        permitJoinPending = false;
+        bool applied = false;
+        if (permitJoinHandler != nullptr) {
+            applied = permitJoinHandler(deferredPermitSeconds);
+        }
+        uint8_t result = applied ? 1 : 0;
+        enqueueEvent(SpiEvtCmdResult, &result, 1);
+        if (!applied) {
+            // Slave knows RF/apply is down (e.g. Search would not arm blue).
+            markZigbeeLost("permit-join apply failed");
         }
     }
     if (rebindPending) {

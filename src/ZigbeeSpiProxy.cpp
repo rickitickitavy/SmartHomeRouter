@@ -710,21 +710,60 @@ void ZigbeeSpiProxy::retainRegisteredTelemetry(DeviceTopicMap *topicMap) {
     }
 }
 
-bool ZigbeeSpiProxy::permitJoin(uint8_t seconds) {
-    const bool queued = INTER_CHIP_HOST.tryEnqueue(SpiCmdPermitJoin, &seconds, 1);
-    if (queued) {
-        pairingOpen = seconds != 0;
+namespace {
+
+bool waitPermitJoinAppliedResult(
+    bool &waitActive,
+    bool &waitDone,
+    bool &waitOk
+) {
+    constexpr unsigned long kPermitJoinApplyTimeoutMs = 5000UL;
+    // Ignore instant success from unrelated early CmdResult frames already in flight.
+    constexpr unsigned long kIgnoreEarlySuccessMs = 50UL;
+    waitActive = true;
+    waitDone = false;
+    waitOk = false;
+    const unsigned long startedMs = millis();
+    while ((millis() - startedMs) < kPermitJoinApplyTimeoutMs) {
+        INTER_CHIP_HOST.pump();
+        if (waitDone) {
+            if (waitOk && (millis() - startedMs) < kIgnoreEarlySuccessMs) {
+                waitDone = false;
+                waitOk = false;
+            } else {
+                break;
+            }
+        }
+        delay(10);
     }
-    return queued;
+    waitActive = false;
+    return waitDone && waitOk;
+}
+
+}  // namespace
+
+bool ZigbeeSpiProxy::permitJoin(uint8_t seconds) {
+    if (!INTER_CHIP_HOST.tryEnqueue(SpiCmdPermitJoin, &seconds, 1)) {
+        return false;
+    }
+    if (!waitPermitJoinAppliedResult(permitJoinWaitActive, permitJoinWaitDone, permitJoinWaitOk)) {
+        pairingOpen = false;
+        return false;
+    }
+    pairingOpen = seconds != 0;
+    return true;
 }
 
 bool ZigbeeSpiProxy::closeJoin() {
     uint8_t seconds = 0;
-    const bool queued = INTER_CHIP_HOST.tryEnqueue(SpiCmdPermitJoin, &seconds, 1);
-    if (queued) {
-        pairingOpen = false;
+    if (!INTER_CHIP_HOST.tryEnqueue(SpiCmdPermitJoin, &seconds, 1)) {
+        return false;
     }
-    return queued;
+    if (!waitPermitJoinAppliedResult(permitJoinWaitActive, permitJoinWaitDone, permitJoinWaitOk)) {
+        return false;
+    }
+    pairingOpen = false;
+    return true;
 }
 
 bool ZigbeeSpiProxy::rebindDevice(const uint8_t ieee[8], uint8_t *outcomeOut, unsigned long timeoutMs) {
@@ -1199,9 +1238,12 @@ void ZigbeeSpiProxy::seedEndpointState(
 
 namespace {
 
-void formatHistorySampleForLiveCache(
+void formatHistoryLastForLiveCache(
     HistoryValueType valueType,
-    const HistorySample &sample,
+    float floatValue,
+    int32_t intValue,
+    bool boolValue,
+    const char *stringValue,
     HistorySeriesKind kind,
     char *outText,
     size_t outLen
@@ -1211,23 +1253,26 @@ void formatHistorySampleForLiveCache(
     }
     outText[0] = '\0';
     if (valueType == HistoryValueFloat) {
-        snprintf(outText, outLen, "%.6g", (double)sample.floatValue);
+        snprintf(outText, outLen, "%.6g", (double)floatValue);
         return;
     }
     if (valueType == HistoryValueInt) {
-        snprintf(outText, outLen, "%ld", (long)sample.intValue);
+        snprintf(outText, outLen, "%ld", (long)intValue);
         return;
     }
     if (valueType == HistoryValueBool) {
         if (kind == HistorySeriesMainState) {
-            strncpy(outText, sample.boolValue ? "ON" : "OFF", outLen - 1);
+            strncpy(outText, boolValue ? "ON" : "OFF", outLen - 1);
         } else {
-            strncpy(outText, sample.boolValue ? "true" : "false", outLen - 1);
+            strncpy(outText, boolValue ? "true" : "false", outLen - 1);
         }
         outText[outLen - 1] = '\0';
         return;
     }
-    strncpy(outText, sample.stringValue, outLen - 1);
+    if (stringValue == nullptr) {
+        return;
+    }
+    strncpy(outText, stringValue, outLen - 1);
     outText[outLen - 1] = '\0';
 }
 
@@ -1238,7 +1283,10 @@ struct SeedLiveCacheContext {
 void seedLiveCacheVisitor(
     const HistorySeriesKey &key,
     HistoryValueType valueType,
-    const HistorySample &sample,
+    float floatValue,
+    int32_t intValue,
+    bool boolValue,
+    const char *stringValue,
     void *context
 ) {
     SeedLiveCacheContext *seedContext = (SeedLiveCacheContext *)context;
@@ -1246,7 +1294,16 @@ void seedLiveCacheVisitor(
         return;
     }
     char valueText[kHistoryValueTextMaxLen];
-    formatHistorySampleForLiveCache(valueType, sample, key.kind, valueText, sizeof(valueText));
+    formatHistoryLastForLiveCache(
+        valueType,
+        floatValue,
+        intValue,
+        boolValue,
+        stringValue,
+        key.kind,
+        valueText,
+        sizeof(valueText)
+    );
     if (valueText[0] == '\0') {
         return;
     }
@@ -1974,6 +2031,13 @@ void ZigbeeSpiProxy::pumpRegistrySync() {
 }
 
 void ZigbeeSpiProxy::onSpiEvent(const SpiFrame &frame) {
+    if (frame.cmd == SpiEvtCmdResult && frame.length >= 1) {
+        if (permitJoinWaitActive) {
+            permitJoinWaitOk = frame.payload[0] != 0;
+            permitJoinWaitDone = true;
+        }
+        return;
+    }
     if (frame.cmd == SpiEvtRebindResult) {
         uint8_t ieee[8];
         uint8_t outcome = SPI_REBIND_OUTCOME_FAILED;

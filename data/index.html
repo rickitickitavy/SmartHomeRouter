@@ -2857,6 +2857,18 @@
                         : 0;
                     timeZoneSelect.value = String(offsetMin);
                 }
+                var bornIntervalField = document.getElementById("bornIntervalMinField");
+                var bornIntervalInput = document.getElementById("bornIntervalMin");
+                if (bornIntervalField && bornIntervalInput) {
+                    bornIntervalField.hidden = interconnectNetworkRole === "Repeater";
+                    if (!bornIntervalField.hidden) {
+                        bornIntervalInput.value = String(
+                            hardwareSettings.bornIntervalMin != null
+                                ? hardwareSettings.bornIntervalMin
+                                : 20
+                        );
+                    }
+                }
                 syncHardwareTimeZoneChrome();
             }).catch(function (error) {
                 if (speedSelect && !speedSelect.value) {
@@ -2967,6 +2979,10 @@
             var timeZoneSelect = document.getElementById("timeZoneUtcOffsetMin");
             if (timeZoneSelect && interconnectNetworkRole !== "Repeater") {
                 body.timeZoneUtcOffsetMin = parseInt(timeZoneSelect.value, 10);
+            }
+            var bornIntervalInput = document.getElementById("bornIntervalMin");
+            if (bornIntervalInput && interconnectNetworkRole !== "Repeater") {
+                body.bornIntervalMin = parseInt(bornIntervalInput.value, 10);
             }
             return body;
         }
@@ -3461,8 +3477,6 @@
                 document.getElementById("mqttReconnectIntervalMs").value = mqttSettings.reconnectIntervalMs || 3000;
                 document.getElementById("mqttClientTimeoutMs").value = mqttSettings.clientTimeoutMs || 200;
                 document.getElementById("mqttServerBornTopic").value = mqttSettings.serverBornTopic || "";
-                document.getElementById("mqttBornIntervalMin").value =
-                    mqttSettings.bornIntervalMin || 20;
                 updateMqttServerVisibility();
             }).catch(function (error) {
                 if (saveError) {
@@ -3650,8 +3664,7 @@
                 baseTopic: document.getElementById("mqttBaseTopic").value,
                 reconnectIntervalMs: parseInt(document.getElementById("mqttReconnectIntervalMs").value, 10),
                 clientTimeoutMs: parseInt(document.getElementById("mqttClientTimeoutMs").value, 10),
-                serverBornTopic: document.getElementById("mqttServerBornTopic").value,
-                bornIntervalMin: parseInt(document.getElementById("mqttBornIntervalMin").value, 10)
+                serverBornTopic: document.getElementById("mqttServerBornTopic").value
             };
             fetch("/api/mqtt", {
                 method: "POST",
@@ -22116,12 +22129,7 @@
                         <div class="field">
                             <label for="mqttServerBornTopic">SERVER_BORN_TOPIC</label>
                             <input id="mqttServerBornTopic" type="text" autocomplete="off">
-                            <p class="field-hint">Listen for any message to refresh Zigbee states. Empty disables born listen/announce.</p>
-                        </div>
-                        <div class="field">
-                            <label for="mqttBornIntervalMin">BORN_INTERVAL_MIN</label>
-                            <input id="mqttBornIntervalMin" type="number" min="5" max="120" autocomplete="off">
-                            <p class="field-hint">Minutes between host born announces after the first post-boot announce (5–120, default 20).</p>
+                            <p class="field-hint">Listen for any message to refresh Zigbee states and publish MQTT born. Empty disables MQTT born listen/announce (Zigbee interval collect still uses BORN_INTERVAL_MIN on Hardware).</p>
                         </div>
                     </div>
                     <div class="page-footer">
@@ -22599,6 +22607,11 @@
                             <label for="timeZoneUtcOffsetMin">Time zone</label>
                             <select id="timeZoneUtcOffsetMin"></select>
                             <p class="field-hint" id="timeZoneUtcOffsetHint">UTC offset in 30-minute steps (UTC−12:00…UTC+14:00). Applied to NTP wall clock. On Main, Save also pushes to paired Repeaters. Default UTC+00:00.</p>
+                        </div>
+                        <div class="field" id="bornIntervalMinField">
+                            <label for="bornIntervalMin">BORN_INTERVAL_MIN</label>
+                            <input id="bornIntervalMin" type="number" min="5" max="120" step="1" value="20">
+                            <p class="field-hint">Minutes between Zigbee status collect (and MQTT born announce when SERVER_BORN_TOPIC is set). Range 5–120. Default 20.</p>
                         </div>
                     </div>
                     <div class="dialog-actions hardware-tab-actions">

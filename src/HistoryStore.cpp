@@ -379,6 +379,10 @@ void HistoryStore::end() {
                 heap_caps_free(series[index].entryBytes);
                 series[index].entryBytes = nullptr;
             }
+            if (series[index].lastString != nullptr) {
+                free(series[index].lastString);
+                series[index].lastString = nullptr;
+            }
         }
         heap_caps_free(series);
         series = nullptr;
@@ -557,6 +561,10 @@ void HistoryStore::dropSeries(SeriesRuntime *runtime) {
         heap_caps_free(runtime->entryBytes);
         runtime->entryBytes = nullptr;
     }
+    if (runtime->lastString != nullptr) {
+        free(runtime->lastString);
+        runtime->lastString = nullptr;
+    }
     memset(runtime, 0, sizeof(SeriesRuntime));
     if (seriesCount > 0) {
         seriesCount--;
@@ -629,6 +637,13 @@ HistoryStore::SeriesRuntime *HistoryStore::ensureSeries(
         existing->epsilon = epsilon;
         existing->valueType = valueType;
         existing->blockLength = blockLength;
+        if (valueType == HistoryValueString && !ensureLastStringBuffer(existing)) {
+            return nullptr;
+        }
+        if (valueType != HistoryValueString && existing->lastString != nullptr) {
+            free(existing->lastString);
+            existing->lastString = nullptr;
+        }
         return existing;
     }
     if (!available() || series == nullptr || seriesCount >= seriesCapacity) {
@@ -649,8 +664,16 @@ HistoryStore::SeriesRuntime *HistoryStore::ensureSeries(
     slot->valueType = valueType;
     slot->blockLength = blockLength;
     slot->epsilon = epsilon;
+    slot->lastString = nullptr;
+    if (valueType == HistoryValueString && !ensureLastStringBuffer(slot)) {
+        return nullptr;
+    }
     slot->entryBytes = (uint8_t *)heap_caps_malloc(entrySize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (slot->entryBytes == nullptr) {
+        if (slot->lastString != nullptr) {
+            free(slot->lastString);
+            slot->lastString = nullptr;
+        }
         return nullptr;
     }
     memset(slot->entryBytes, 0, entrySize);
@@ -951,6 +974,9 @@ bool HistoryStore::noteString(const HistorySeriesKey &key, const char *value) {
     if (runtime == nullptr) {
         return false;
     }
+    if (!ensureLastStringBuffer(runtime)) {
+        return false;
+    }
     if (runtime->hasLast && strncmp(runtime->lastString, value, kHistoryValueTextMaxChars) == 0) {
         return false;
     }
@@ -962,9 +988,20 @@ bool HistoryStore::noteString(const HistorySeriesKey &key, const char *value) {
         return false;
     }
     runtime->hasLast = true;
-    strncpy(runtime->lastString, packed, sizeof(runtime->lastString) - 1);
-    runtime->lastString[sizeof(runtime->lastString) - 1] = '\0';
+    strncpy(runtime->lastString, packed, kHistoryValueTextMaxChars);
+    runtime->lastString[kHistoryValueTextMaxChars] = '\0';
     return true;
+}
+
+bool HistoryStore::ensureLastStringBuffer(SeriesRuntime *runtime) {
+    if (runtime == nullptr) {
+        return false;
+    }
+    if (runtime->lastString != nullptr) {
+        return true;
+    }
+    runtime->lastString = (char *)calloc(1, kHistoryValueTextMaxLen);
+    return runtime->lastString != nullptr;
 }
 
 void HistoryStore::syncSeriesFromDevices(DeviceTopicMap *deviceMap) {
@@ -1200,7 +1237,10 @@ void HistoryStore::forEachSeriesWithLastSample(
     void (*visitor)(
         const HistorySeriesKey &key,
         HistoryValueType valueType,
-        const HistorySample &sample,
+        float floatValue,
+        int32_t intValue,
+        bool boolValue,
+        const char *stringValue,
         void *context
     ),
     void *context
@@ -1213,27 +1253,121 @@ void HistoryStore::forEachSeriesWithLastSample(
         if (!runtime.used || !runtime.hasLast) {
             continue;
         }
-        HistorySample sample{};
-        sample.valueType = runtime.valueType;
-        sample.floatValue = runtime.lastFloat;
-        sample.intValue = runtime.lastInt;
-        sample.boolValue = runtime.lastBool;
-        memcpy(sample.stringValue, runtime.lastString, kHistoryValueTextMaxLen);
-        sample.stringValue[kHistoryValueTextMaxChars] = '\0';
-        visitor(runtime.key, runtime.valueType, sample, context);
+        visitor(
+            runtime.key,
+            runtime.valueType,
+            runtime.lastFloat,
+            runtime.lastInt,
+            runtime.lastBool,
+            runtime.valueType == HistoryValueString ? runtime.lastString : nullptr,
+            context
+        );
     }
 }
 
-bool HistoryStore::query(
+bool HistoryStore::seriesValueType(const HistorySeriesKey &key, HistoryValueType *outType) const {
+    if (outType == nullptr) {
+        return false;
+    }
+    const SeriesRuntime *runtime = findSeries(key);
+    if (runtime == nullptr || !runtime->used) {
+        return false;
+    }
+    *outType = runtime->valueType;
+    return true;
+}
+
+bool HistoryStore::queryFloat(
     const HistorySeriesKey &key,
     uint32_t fromEpoch2010,
     uint32_t toEpoch2010,
     uint16_t maxPoints,
-    HistorySample *outSamples,
-    uint16_t *outCount,
-    HistoryValueType *outType
+    HistoryFloatSample *outSamples,
+    uint16_t *outCount
 ) const {
-    if (outSamples == nullptr || outCount == nullptr) {
+    return queryRecords(
+        key,
+        HistoryValueFloat,
+        fromEpoch2010,
+        toEpoch2010,
+        maxPoints,
+        outSamples,
+        sizeof(HistoryFloatSample),
+        outCount
+    );
+}
+
+bool HistoryStore::queryInt(
+    const HistorySeriesKey &key,
+    uint32_t fromEpoch2010,
+    uint32_t toEpoch2010,
+    uint16_t maxPoints,
+    HistoryIntSample *outSamples,
+    uint16_t *outCount
+) const {
+    return queryRecords(
+        key,
+        HistoryValueInt,
+        fromEpoch2010,
+        toEpoch2010,
+        maxPoints,
+        outSamples,
+        sizeof(HistoryIntSample),
+        outCount
+    );
+}
+
+bool HistoryStore::queryBool(
+    const HistorySeriesKey &key,
+    uint32_t fromEpoch2010,
+    uint32_t toEpoch2010,
+    uint16_t maxPoints,
+    HistoryBoolSample *outSamples,
+    uint16_t *outCount
+) const {
+    return queryRecords(
+        key,
+        HistoryValueBool,
+        fromEpoch2010,
+        toEpoch2010,
+        maxPoints,
+        outSamples,
+        sizeof(HistoryBoolSample),
+        outCount
+    );
+}
+
+bool HistoryStore::queryString(
+    const HistorySeriesKey &key,
+    uint32_t fromEpoch2010,
+    uint32_t toEpoch2010,
+    uint16_t maxPoints,
+    HistoryStringSample *outSamples,
+    uint16_t *outCount
+) const {
+    return queryRecords(
+        key,
+        HistoryValueString,
+        fromEpoch2010,
+        toEpoch2010,
+        maxPoints,
+        outSamples,
+        sizeof(HistoryStringSample),
+        outCount
+    );
+}
+
+bool HistoryStore::queryRecords(
+    const HistorySeriesKey &key,
+    HistoryValueType expectedType,
+    uint32_t fromEpoch2010,
+    uint32_t toEpoch2010,
+    uint16_t maxPoints,
+    void *outSamples,
+    size_t sampleBytes,
+    uint16_t *outCount
+) const {
+    if (outSamples == nullptr || outCount == nullptr || sampleBytes == 0) {
         return false;
     }
     *outCount = 0;
@@ -1241,8 +1375,8 @@ bool HistoryStore::query(
     if (runtime == nullptr || !runtime->used) {
         return true;
     }
-    if (outType != nullptr) {
-        *outType = runtime->valueType;
+    if (runtime->valueType != expectedType) {
+        return false;
     }
     if (maxPoints == 0) {
         return true;
@@ -1255,19 +1389,29 @@ bool HistoryStore::query(
         return true;
     }
 
-    auto fillSample = [&](HistorySample *sample, uint32_t epoch2010, const uint8_t *valueBytes) {
-        memset(sample, 0, sizeof(HistorySample));
-        sample->epoch2010 = epoch2010;
-        sample->valueType = runtime->valueType;
-        if (runtime->valueType == HistoryValueFloat) {
-            memcpy(&sample->floatValue, valueBytes, sizeof(float));
-        } else if (runtime->valueType == HistoryValueInt) {
-            memcpy(&sample->intValue, valueBytes, sizeof(int32_t));
-        } else if (runtime->valueType == HistoryValueBool) {
-            sample->boolValue = valueBytes[0] != 0;
+    auto fillSample = [&](void *sampleSlot, uint32_t epoch2010, const uint8_t *valueBytes) {
+        memset(sampleSlot, 0, sampleBytes);
+        if (expectedType == HistoryValueFloat) {
+            HistoryFloatSample *sample = (HistoryFloatSample *)sampleSlot;
+            sample->epoch2010 = epoch2010;
+            memcpy(&sample->value, valueBytes, sizeof(float));
+        } else if (expectedType == HistoryValueInt) {
+            HistoryIntSample *sample = (HistoryIntSample *)sampleSlot;
+            sample->epoch2010 = epoch2010;
+            memcpy(&sample->value, valueBytes, sizeof(int32_t));
+        } else if (expectedType == HistoryValueBool) {
+            HistoryBoolSample *sample = (HistoryBoolSample *)sampleSlot;
+            sample->epoch2010 = epoch2010;
+            sample->value = valueBytes[0] != 0;
         } else {
-            memcpy(sample->stringValue, valueBytes, runtime->blockLength);
-            sample->stringValue[sizeof(sample->stringValue) - 1] = '\0';
+            HistoryStringSample *sample = (HistoryStringSample *)sampleSlot;
+            sample->epoch2010 = epoch2010;
+            const size_t copyLen =
+                runtime->blockLength < kHistoryValueTextMaxChars
+                    ? (size_t)runtime->blockLength
+                    : kHistoryValueTextMaxChars;
+            memcpy(sample->value, valueBytes, copyLen);
+            sample->value[kHistoryValueTextMaxChars] = '\0';
         }
     };
 
@@ -1342,7 +1486,9 @@ bool HistoryStore::query(
                         || (matchIndex == nextTake)
                         || (outIndex + 1 == outN && matchIndex + 1 == matchCount);
                     if (take && outIndex < outN) {
-                        fillSample(&outSamples[outIndex], epoch2010, recordPtr + 4);
+                        uint8_t *sampleSlot =
+                            (uint8_t *)outSamples + (size_t)outIndex * sampleBytes;
+                        fillSample(sampleSlot, epoch2010, recordPtr + 4);
                         outIndex++;
                         if (outN > 1 && matchCount > 1) {
                             nextTake = (uint32_t)outIndex * (matchCount - 1) / (outN - 1);
@@ -1744,7 +1890,11 @@ bool HistoryStore::buildSnapshot(uint8_t **outBytes, size_t *outLen) const {
         seriesHeader->lastFloat = series[index].lastFloat;
         seriesHeader->lastInt = series[index].lastInt;
         seriesHeader->lastBool = series[index].lastBool ? 1 : 0;
-        memcpy(seriesHeader->lastString, series[index].lastString, kHistoryValueTextMaxLen);
+        memset(seriesHeader->lastString, 0, kHistoryValueTextMaxLen);
+        if (series[index].lastString != nullptr) {
+            memcpy(seriesHeader->lastString, series[index].lastString, kHistoryValueTextMaxLen);
+            seriesHeader->lastString[kHistoryValueTextMaxChars] = '\0';
+        }
 
         memcpy(cursor, series[index].entryBytes, entrySize);
         PageRecord *outRecords =
@@ -1936,9 +2086,20 @@ bool HistoryStore::applySnapshot(const uint8_t *bytes, size_t len) {
         slot->lastFloat = seriesHeader->lastFloat;
         slot->lastInt = seriesHeader->lastInt;
         slot->lastBool = seriesHeader->lastBool != 0;
-        memcpy(slot->lastString, seriesHeader->lastString, kHistoryValueTextMaxLen);
+        slot->lastString = nullptr;
+        if (slot->valueType == HistoryValueString) {
+            if (!ensureLastStringBuffer(slot)) {
+                continue;
+            }
+            memcpy(slot->lastString, seriesHeader->lastString, kHistoryValueTextMaxLen);
+            slot->lastString[kHistoryValueTextMaxChars] = '\0';
+        }
         slot->entryBytes = (uint8_t *)heap_caps_malloc(entrySize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (slot->entryBytes == nullptr) {
+            if (slot->lastString != nullptr) {
+                free(slot->lastString);
+                slot->lastString = nullptr;
+            }
             continue;
         }
         memset(slot->entryBytes, 0, entrySize);
