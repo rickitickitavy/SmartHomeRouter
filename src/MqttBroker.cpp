@@ -34,6 +34,14 @@ PicoMQTT::ConnectReturnCode MqttBroker::AuthServer::auth(
 MqttBroker::MqttBroker(SettingsManager *settingsManager)
     : settingsManager(settingsManager) {}
 
+MqttBroker::~MqttBroker() {
+    if (server != nullptr) {
+        delete server;
+        server = nullptr;
+    }
+    STATUS_RGB.setMqttBrokerListening(false);
+}
+
 void MqttBroker::setLocalMessageHandler(LocalMessageFn handler) {
     localMessageHandler = handler;
 }
