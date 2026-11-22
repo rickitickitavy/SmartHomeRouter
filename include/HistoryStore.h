@@ -86,6 +86,10 @@ public:
     bool restoreSnapshot();
     void discardSnapshotFile();
     bool snapshotFilePresent() const;
+    // Full backup/restore: export/import snapshot bytes; wipe RAM + on-disk snapshot.
+    bool exportSnapshotToHeap(uint8_t **outBytes, size_t *outLen) const;
+    bool importSnapshotFromHeap(const uint8_t *bytes, size_t len);
+    bool wipeAllSamples(uint16_t maxSizeKiB, uint16_t entrySizeBytes);
 
     void syncSeriesFromDevices(DeviceTopicMap *deviceMap);
     bool removeSeries(const HistorySeriesKey &key);
@@ -168,8 +172,6 @@ public:
         uint16_t *newestIndex,
         uint16_t *pageCountOut
     ) const;
-    bool exportSnapshotToHeap(uint8_t **outBytes, size_t *outLen) const;
-    bool importSnapshotFromHeap(const uint8_t *bytes, size_t len);
 #endif
 
 private:

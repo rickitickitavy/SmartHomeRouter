@@ -3230,6 +3230,247 @@
         }
 
         var pendingSettingsRestoreText = "";
+        var pendingFullRestoreBytes = null;
+
+        function setFullBackupSuccess(message) {
+            var errorLine = document.getElementById("fullBackupError");
+            var successLine = document.getElementById("fullBackupSuccess");
+            if (errorLine) {
+                errorLine.hidden = true;
+                errorLine.textContent = "";
+            }
+            if (!successLine) {
+                return;
+            }
+            if (!message) {
+                successLine.hidden = true;
+                successLine.textContent = "";
+                return;
+            }
+            successLine.hidden = false;
+            successLine.textContent = message;
+        }
+
+        function setFullBackupError(message) {
+            var errorLine = document.getElementById("fullBackupError");
+            var successLine = document.getElementById("fullBackupSuccess");
+            if (successLine) {
+                successLine.hidden = true;
+                successLine.textContent = "";
+            }
+            if (!errorLine) {
+                return;
+            }
+            if (!message) {
+                errorLine.hidden = true;
+                errorLine.textContent = "";
+                return;
+            }
+            errorLine.hidden = false;
+            errorLine.textContent = message;
+        }
+
+        function updateFullBackupPassphraseVisibility() {
+            var includeSecrets = document.getElementById("fullBackupIncludeSecrets");
+            var field = document.getElementById("fullBackupPassphraseField");
+            if (!field) {
+                return;
+            }
+            field.hidden = !(includeSecrets && includeSecrets.checked);
+        }
+
+        function openFullBackupDialog() {
+            setFullBackupError("");
+            var dialogError = document.getElementById("fullBackupDialogError");
+            if (dialogError) {
+                dialogError.hidden = true;
+            }
+            var wifi = document.getElementById("fullBackupIncludeWifi");
+            var history = document.getElementById("fullBackupIncludeHistory");
+            var secrets = document.getElementById("fullBackupIncludeSecrets");
+            var passphrase = document.getElementById("fullBackupPassphrase");
+            if (wifi) {
+                wifi.checked = true;
+            }
+            if (history) {
+                history.checked = true;
+            }
+            if (secrets) {
+                secrets.checked = true;
+            }
+            if (passphrase) {
+                passphrase.value = "";
+            }
+            updateFullBackupPassphraseVisibility();
+            document.getElementById("fullBackupDialog").hidden = false;
+        }
+
+        function closeFullBackupDialog() {
+            document.getElementById("fullBackupDialog").hidden = true;
+        }
+
+        function confirmFullBackup() {
+            var dialogError = document.getElementById("fullBackupDialogError");
+            var includeWifi = document.getElementById("fullBackupIncludeWifi");
+            var includeHistory = document.getElementById("fullBackupIncludeHistory");
+            var includeSecrets = document.getElementById("fullBackupIncludeSecrets");
+            var passphraseInput = document.getElementById("fullBackupPassphrase");
+            var includeSecretsOn = !!(includeSecrets && includeSecrets.checked);
+            var passphrase = passphraseInput ? String(passphraseInput.value || "") : "";
+            if (includeSecretsOn && !passphrase) {
+                if (dialogError) {
+                    dialogError.hidden = false;
+                    dialogError.textContent = "Passphrase is required when including important passwords";
+                }
+                return;
+            }
+            if (dialogError) {
+                dialogError.hidden = true;
+            }
+            closeFullBackupDialog();
+            setFullBackupError("");
+            fetch("/api/full-backup", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    includeWifi: !!(includeWifi && includeWifi.checked),
+                    includeHistory: !!(includeHistory && includeHistory.checked),
+                    includeSecrets: includeSecretsOn,
+                    passphrase: passphrase
+                })
+            }).then(function (response) {
+                if (!response.ok) {
+                    return response.text().then(function (text) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    });
+                }
+                return response.arrayBuffer();
+            }).then(function (buffer) {
+                var blob = new Blob([buffer], { type: "application/zip" });
+                var objectUrl = URL.createObjectURL(blob);
+                var link = document.createElement("a");
+                link.href = objectUrl;
+                link.download = "full-backup.zip";
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(objectUrl);
+            }).catch(function (error) {
+                setFullBackupError(error && error.message ? error.message : "Full backup failed");
+            });
+        }
+
+        function chooseFullRestoreFile() {
+            setFullBackupError("");
+            var fileInput = document.getElementById("fullRestoreFile");
+            if (!fileInput) {
+                return;
+            }
+            fileInput.value = "";
+            fileInput.click();
+        }
+
+        function closeFullRestoreDialog() {
+            pendingFullRestoreBytes = null;
+            document.getElementById("fullRestoreDialog").hidden = true;
+        }
+
+        function closeFullRestoreBadPassphraseDialog() {
+            document.getElementById("fullRestoreBadPassphraseDialog").hidden = true;
+        }
+
+        function onFullRestoreFileSelected(event) {
+            var fileInput = event && event.target ? event.target : null;
+            var file = fileInput && fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+            if (!file) {
+                return;
+            }
+            var reader = new FileReader();
+            reader.onerror = function () {
+                setFullBackupError("Failed to read the selected ZIP");
+            };
+            reader.onload = function () {
+                pendingFullRestoreBytes = reader.result ? reader.result : null;
+                if (!pendingFullRestoreBytes) {
+                    setFullBackupError("Selected file is empty");
+                    return;
+                }
+                var dialogError = document.getElementById("fullRestoreDialogError");
+                if (dialogError) {
+                    dialogError.hidden = true;
+                }
+                var importWifi = document.getElementById("fullRestoreImportWifi");
+                var importEmail = document.getElementById("fullRestoreImportEmail");
+                var importHistory = document.getElementById("fullRestoreImportHistory");
+                var passphrase = document.getElementById("fullRestorePassphrase");
+                if (importWifi) {
+                    importWifi.checked = true;
+                }
+                if (importEmail) {
+                    importEmail.checked = true;
+                }
+                if (importHistory) {
+                    importHistory.checked = true;
+                }
+                if (passphrase) {
+                    passphrase.value = "";
+                }
+                document.getElementById("fullRestoreDialog").hidden = false;
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function confirmFullRestore(continueWithoutSecrets) {
+            var bytes = pendingFullRestoreBytes;
+            var dialogError = document.getElementById("fullRestoreDialogError");
+            if (!bytes) {
+                closeFullRestoreDialog();
+                closeFullRestoreBadPassphraseDialog();
+                return;
+            }
+            var importWifi = document.getElementById("fullRestoreImportWifi");
+            var importEmail = document.getElementById("fullRestoreImportEmail");
+            var importHistory = document.getElementById("fullRestoreImportHistory");
+            var passphraseInput = document.getElementById("fullRestorePassphrase");
+            var passphrase = passphraseInput ? String(passphraseInput.value || "") : "";
+            var query = "importWifi=" + ((importWifi && importWifi.checked) ? "1" : "0")
+                + "&importEmail=" + ((importEmail && importEmail.checked) ? "1" : "0")
+                + "&importHistory=" + ((importHistory && importHistory.checked) ? "1" : "0")
+                + "&continueWithoutSecrets=" + (continueWithoutSecrets ? "1" : "0");
+            closeFullRestoreBadPassphraseDialog();
+            if (!continueWithoutSecrets) {
+                closeFullRestoreDialog();
+            }
+            var headers = { "Content-Type": "application/zip" };
+            if (passphrase) {
+                headers["X-Full-Backup-Passphrase"] = passphrase;
+            }
+            fetch("/api/full-restore?" + query, {
+                method: "POST",
+                headers: headers,
+                body: bytes
+            }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (response.status === 409 && String(text || "").indexOf("bad_passphrase") >= 0) {
+                        document.getElementById("fullRestoreBadPassphraseDialog").hidden = false;
+                        return;
+                    }
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    pendingFullRestoreBytes = null;
+                    setFullBackupSuccess("Restore applied. Host is rebooting…");
+                });
+            }).catch(function (error) {
+                if (dialogError && !continueWithoutSecrets) {
+                    document.getElementById("fullRestoreDialog").hidden = false;
+                    dialogError.hidden = false;
+                    dialogError.textContent = error && error.message ? error.message : "Full restore failed";
+                } else {
+                    setFullBackupError(error && error.message ? error.message : "Full restore failed");
+                }
+            });
+        }
 
         function exportSettingsFile() {
             var restoreError = document.getElementById("settingsRestoreError");
@@ -22673,6 +22914,17 @@
                 <div id="system-tab-maintenance" class="system-tab-panel tab-panel" role="tabpanel">
                     <div id="maintenanceAdminContent" hidden>
                         <p id="maintenanceStoreError" class="save-error" hidden></p>
+                        <div id="maintenanceFullBackupCard" class="upload-card">
+                            <h3 class="upload-title">Full backup</h3>
+                            <p class="field-hint">ZIP backup of settings, scene images, optional Wi-Fi, history samples, and encrypted e-mail/Wi-Fi passwords. Full restore wipes owned collections then applies the archive and reboots. Main only. Passphrase encrypts important passwords inside the ZIP JSON — the ZIP file itself is not password-locked.</p>
+                            <p id="fullBackupError" class="save-error" hidden></p>
+                            <p id="fullBackupSuccess" class="save-success" hidden></p>
+                            <input id="fullRestoreFile" type="file" accept="application/zip,.zip" hidden onchange="onFullRestoreFileSelected(event)">
+                            <div class="dialog-actions">
+                                <button type="button" class="btn btn-secondary btn-inline" onclick="openFullBackupDialog()">Full backup</button>
+                                <button type="button" class="btn btn-primary btn-inline" onclick="chooseFullRestoreFile()">Full restore from backup</button>
+                            </div>
+                        </div>
                         <div id="maintenanceSettingsCard" class="upload-card">
                             <h3 class="upload-title">Settings</h3>
                             <p class="field-hint">Export MQTT, Zigbee, hardware (including time zone UTC offset, low memory threshold, Internal DB history settings, SD history backup interval on P4, and S3 flash history persist plus its interval), devices, users, consoles, automations, cameras, scenes, and interconnect (including paired Repeaters). Restore replaces those groups when present in the file; interconnect peers are fully overridden from the file. Wi-Fi is never included. E-mail password is exported empty (restore keeps the current password when blank).</p>
@@ -23169,6 +23421,73 @@
                 <div class="dialog-actions">
                     <button type="button" class="btn btn-primary" onclick="confirmSettingsRestore()">Restore</button>
                     <button type="button" class="btn btn-secondary" onclick="closeSettingsRestoreConfirmDialog()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="fullBackupDialog" class="dialog-overlay dialog-overlay-front" hidden>
+            <div class="dialog-panel" role="dialog" aria-label="Full backup options">
+                <h3 class="upload-title">Full backup</h3>
+                <p class="field-hint">Choose what to include. Passphrase is required only when important passwords are included.</p>
+                <p id="fullBackupDialogError" class="save-error" hidden></p>
+                <div class="field-check">
+                    <input id="fullBackupIncludeWifi" type="checkbox" checked>
+                    <span>Include Wi-Fi</span>
+                </div>
+                <div class="field-check">
+                    <input id="fullBackupIncludeHistory" type="checkbox" checked>
+                    <span>Include historical data</span>
+                </div>
+                <div class="field-check">
+                    <input id="fullBackupIncludeSecrets" type="checkbox" checked onchange="updateFullBackupPassphraseVisibility()">
+                    <span>Include important passwords</span>
+                </div>
+                <div class="field" id="fullBackupPassphraseField">
+                    <label for="fullBackupPassphrase">Passphrase</label>
+                    <input id="fullBackupPassphrase" type="password" autocomplete="new-password">
+                </div>
+                <div class="dialog-actions">
+                    <button type="button" class="btn btn-primary" onclick="confirmFullBackup()">Download ZIP</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeFullBackupDialog()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="fullRestoreDialog" class="dialog-overlay dialog-overlay-front" hidden>
+            <div class="dialog-panel" role="dialog" aria-label="Full restore options">
+                <h3 class="upload-title">Full restore from backup</h3>
+                <p class="field-hint">This wipes devices, users, consoles, automations, cameras, scenes (including bake images), and interconnect data, then applies the ZIP and reboots. Skipping historical data empties the history store.</p>
+                <p id="fullRestoreDialogError" class="save-error" hidden></p>
+                <div class="field-check">
+                    <input id="fullRestoreImportWifi" type="checkbox" checked>
+                    <span>Import Wi-Fi</span>
+                </div>
+                <div class="field-check">
+                    <input id="fullRestoreImportEmail" type="checkbox" checked>
+                    <span>Import e-mail</span>
+                </div>
+                <div class="field-check">
+                    <input id="fullRestoreImportHistory" type="checkbox" checked>
+                    <span>Import historical data</span>
+                </div>
+                <div class="field">
+                    <label for="fullRestorePassphrase">Passphrase (if backup has important passwords)</label>
+                    <input id="fullRestorePassphrase" type="password" autocomplete="off">
+                </div>
+                <div class="dialog-actions">
+                    <button type="button" class="btn btn-primary" onclick="confirmFullRestore(false)">Restore and reboot</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeFullRestoreDialog()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="fullRestoreBadPassphraseDialog" class="dialog-overlay dialog-overlay-front" hidden>
+            <div class="dialog-panel" role="dialog" aria-label="Wrong passphrase">
+                <h3 class="upload-title">Wrong passphrase</h3>
+                <p class="field-hint">Continue restore without important passwords? Current e-mail and Wi-Fi secrets stay unchanged.</p>
+                <div class="dialog-actions">
+                    <button type="button" class="btn btn-primary" onclick="confirmFullRestore(true)">Restore without important passwords</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeFullRestoreBadPassphraseDialog()">Cancel</button>
                 </div>
             </div>
         </div>

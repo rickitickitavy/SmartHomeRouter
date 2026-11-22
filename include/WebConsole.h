@@ -163,6 +163,19 @@ private:
 #endif
     void handleSettingsExportGet(AsyncWebServerRequest *request);
     void handleSettingsRestorePost(AsyncWebServerRequest *request);
+#if defined(BOARD_ROLE_HOST)
+    void handleFullBackupPost(AsyncWebServerRequest *request);
+    void handleFullRestorePost(AsyncWebServerRequest *request);
+    bool isMainRoleForFullBackup() const;
+    PsramJsonBuffer buildFullBackupSettingsJson(
+        const UserRecord *user,
+        bool includeWifi,
+        bool includeSecrets,
+        const char *passphrase,
+        String *errorText
+    );
+#endif
+
     void handleThemeGet(AsyncWebServerRequest *request);
     void handleThemePost(AsyncWebServerRequest *request);
     bool applyThemeJson(const char *json, UserRecord *user, String *errorText);
@@ -275,6 +288,7 @@ private:
     void handleGatewayStatusGet(AsyncWebServerRequest *request);
     static constexpr size_t kHttpBodyMaxSmall = 16 * 1024;
     static constexpr size_t kHttpBodyMaxRestore = 256 * 1024;
+    static constexpr size_t kHttpBodyMaxFullBackup = 4 * 1024 * 1024;
 
     void appendRequestBody(
         AsyncWebServerRequest *request,
