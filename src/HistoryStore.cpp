@@ -2196,7 +2196,6 @@ bool HistoryStore::restoreSnapshot() {
     return ok;
 }
 
-#if defined(HISTORY_STORE_UNIT_TEST)
 bool HistoryStore::exportSnapshotToHeap(uint8_t **outBytes, size_t *outLen) const {
     return buildSnapshot(outBytes, outLen);
 }
@@ -2204,4 +2203,8 @@ bool HistoryStore::exportSnapshotToHeap(uint8_t **outBytes, size_t *outLen) cons
 bool HistoryStore::importSnapshotFromHeap(const uint8_t *bytes, size_t len) {
     return applySnapshot(bytes, len);
 }
-#endif
+
+bool HistoryStore::wipeAllSamples(uint16_t maxSizeKiB, uint16_t entrySizeBytes) {
+    discardSnapshotFile();
+    return begin(maxSizeKiB, entrySizeBytes);
+}

@@ -15,6 +15,10 @@
 #include "generated/EmbeddedWebAssets.h"
 
 #include <ESPAsyncWebServer.h>
+#if defined(BOARD_ROLE_HOST)
+#include "FullBackup.h"
+#include "StoreZip.h"
+#endif
 #include <AsyncWebSocket.h>
 #include <Update.h>
 #include <LittleFS.h>
@@ -46,6 +50,17 @@ struct OwnedJsonBytes {
         free(bytes);
     }
 };
+
+#if defined(BOARD_ROLE_HOST)
+struct OwnedZipBytes {
+    uint8_t *bytes = nullptr;
+    size_t length = 0;
+    ~OwnedZipBytes() {
+        fullBackupFreeZip(bytes);
+        bytes = nullptr;
+    }
+};
+#endif
 
 // LED3 hold until the HTTP response is finished (not TCP disconnect).
 constexpr size_t kWebLedHoldSlots = 32;
@@ -377,6 +392,26 @@ void WebConsole::begin() {
             appendRequestBody(request, data, len, index, total, kHttpBodyMaxRestore);
         }
     );
+#if defined(BOARD_ROLE_HOST)
+    server.on(
+        "/api/full-backup",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleFullBackupPost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxSmall);
+        }
+    );
+    server.on(
+        "/api/full-restore",
+        HTTP_POST,
+        [this](AsyncWebServerRequest *request) { handleFullRestorePost(request); },
+        nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            appendRequestBody(request, data, len, index, total, kHttpBodyMaxFullBackup);
+        }
+    );
+#endif
     server.on("/api/theme", HTTP_GET, [this](AsyncWebServerRequest *request) { handleThemeGet(request); });
     server.on(
         "/api/theme",
@@ -4620,6 +4655,689 @@ void WebConsole::handleSettingsRestorePost(AsyncWebServerRequest *request) {
     }
     request->send(200, "text/plain", "Restored");
 }
+
+#if defined(BOARD_ROLE_HOST)
+bool WebConsole::isMainRoleForFullBackup() const {
+    if (routerInterconnect == nullptr || routerInterconnect->store() == nullptr) {
+        return true;
+    }
+    return routerInterconnect->store()->settings().role != InterconnectRoleRepeater;
+}
+
+PsramJsonBuffer WebConsole::buildFullBackupSettingsJson(
+    const UserRecord *user,
+    bool includeWifi,
+    bool includeSecrets,
+    const char *passphrase,
+    String *errorText
+) {
+    PsramJsonBuffer empty;
+    empty.requireExternalMemory();
+    if (errorText != nullptr) {
+        errorText->clear();
+    }
+    PsramJsonBuffer camerasJson;
+    if (cameraStore != nullptr) {
+        camerasJson = cameraStore->listJson(true);
+    } else {
+        camerasJson += "[]";
+    }
+    PsramJsonBuffer scenesJson;
+    if (sceneStore != nullptr) {
+        scenesJson = sceneStore->exportJson();
+    } else {
+        scenesJson += "[]";
+    }
+    PsramJsonBuffer devicesJson = settingsManager->deviceMap()->listStoreJson();
+    PsramJsonBuffer usersJson = userStore->listExportJson();
+    PsramJsonBuffer consolesJson;
+    if (consoleStore != nullptr) {
+        consolesJson = consoleStore->listFullJson();
+    } else {
+        consolesJson += "[]";
+    }
+    PsramJsonBuffer automationsJson;
+    if (automationStore != nullptr) {
+        automationsJson = automationStore->listFullJson();
+    } else {
+        automationsJson += "[]";
+    }
+    if (!camerasJson.ok() || !scenesJson.ok() || !devicesJson.ok() || !usersJson.ok()
+        || !consolesJson.ok() || !automationsJson.ok()) {
+        if (errorText != nullptr) {
+            *errorText = "Out of memory";
+        }
+        return empty;
+    }
+
+    GlobalSettings *settings = settingsManager->getSettings();
+    PsramJsonBuffer json;
+    json.requireExternalMemory();
+    auto appendNumber = [](PsramJsonBuffer &out, unsigned long value) {
+        char digits[16];
+        snprintf(digits, sizeof(digits), "%lu", value);
+        out += digits;
+    };
+    json += "{\"version\":\"";
+    json += FIRMWARE_VERSION;
+    json += "\",\"mqtt\":{";
+    String mqttSection;
+    appendMqttSettingsJson(mqttSection);
+    json += mqttSection;
+    json += "},\"email\":{";
+    String emailSection;
+    appendEmailSettingsJson(emailSection, true);
+    json += emailSection;
+    json += "},\"zigbee\":{\"channel\":";
+    appendNumber(json, settings->zigbee.channel);
+    json += ",\"permitJoinOnBootSec\":";
+    appendNumber(json, settings->zigbee.permitJoinOnBootSec);
+    json += "},\"hardware\":{\"spiSpeedHz\":";
+    appendNumber(json, settingsManager->spiSpeedHz());
+    json += ",\"rfUpdateSpiSpeedHz\":";
+    appendNumber(json, settingsManager->rfUpdateSpiSpeedHz());
+    json += ",\"blueLedBrightness\":";
+    appendNumber(json, settingsManager->blueLedBrightness());
+    json += ",\"greenLedBrightness\":";
+    appendNumber(json, settingsManager->greenLedBrightness());
+    json += ",\"useQueueForBaseDeviceCommand\":";
+    json += settingsManager->useQueueForBaseDeviceCommand() ? "true" : "false";
+    json += ",\"historyMaxStoreDays\":";
+    appendNumber(json, settingsManager->historyMaxStoreDays());
+    json += ",\"historySweepIntervalMin\":";
+    appendNumber(json, settingsManager->historySweepIntervalMin());
+    json += ",\"historyMaxSizeKiB\":";
+    appendNumber(json, settingsManager->historyMaxSizeKiB());
+    json += ",\"historyEntrySize\":";
+    appendNumber(json, settingsManager->historyEntrySize());
+    json += ",\"historySdBackupIntervalMin\":";
+    appendNumber(json, settingsManager->historySdBackupIntervalMin());
+#if !defined(BOARD_HOST_P4)
+    json += ",\"historyPersistFlash\":";
+    json += settingsManager->historyPersistFlash() ? "true" : "false";
+    json += ",\"historyFlashBackupIntervalMin\":";
+    appendNumber(json, settingsManager->historyFlashBackupIntervalMin());
+#endif
+    json += ",\"lowMemoryThresholdKb\":";
+    appendNumber(json, settingsManager->lowMemoryThresholdKb());
+    json += ",\"timeZoneUtcOffsetMin\":";
+    json += String((int)settingsManager->timeZoneUtcOffsetMin());
+    json += "},\"ui\":{\"theme\":\"";
+    json += UserStore::themeJsonId(user != nullptr ? user->theme : UI_THEME_LIGHT);
+    json += "\"},\"devices\":";
+    json += devicesJson.c_str();
+    json += ",\"users\":";
+    json += usersJson.c_str();
+    json += ",\"consoles\":";
+    json += consolesJson.c_str();
+    json += ",\"automations\":";
+    json += automationsJson.c_str();
+    json += ",\"cameras\":";
+    json += camerasJson.c_str();
+    json += ",\"scenes\":";
+    json += scenesJson.c_str();
+    if (routerInterconnect != nullptr && routerInterconnect->store() != nullptr) {
+        PsramJsonBuffer interconnectJson = routerInterconnect->store()->exportJson();
+        if (!interconnectJson.ok()) {
+            if (errorText != nullptr) {
+                *errorText = "Out of memory";
+            }
+            return empty;
+        }
+        json += ",\"interconnect\":";
+        json += interconnectJson.c_str();
+    }
+    if (includeWifi) {
+        json += ",\"wifi\":{\"bssid\":\"";
+        appendJsonEscaped(json, settings->wifi.bssid, sizeof(settings->wifi.bssid));
+        json += "\",\"deviceName\":\"";
+        appendJsonEscaped(json, settings->wifi.deviceName, sizeof(settings->wifi.deviceName));
+        json += "\",\"apIp\":\"";
+        appendJsonEscaped(json, settings->wifi.apIp, sizeof(settings->wifi.apIp));
+        json += "\",\"mode\":\"";
+        json += settings->wifi.mode == WifiSettingsModeSta ? "STA" : "AP";
+        json += "\",\"otgEnabled\":";
+        json += settings->wifi.otgEnabled ? "true" : "false";
+        json += "}";
+    }
+    if (includeSecrets) {
+        if (passphrase == nullptr || passphrase[0] == '\0') {
+            if (errorText != nullptr) {
+                *errorText = "Passphrase required when including important passwords";
+            }
+            return empty;
+        }
+        uint8_t salt[16];
+        fullBackupRandomSalt(salt);
+        char saltHex[33];
+        static const char *kHex = "0123456789abcdef";
+        for (size_t index = 0; index < sizeof(salt); index++) {
+            saltHex[index * 2] = kHex[(salt[index] >> 4) & 0x0f];
+            saltHex[index * 2 + 1] = kHex[salt[index] & 0x0f];
+        }
+        saltHex[32] = '\0';
+        String emailCipher;
+        if (!fullBackupEncryptSecretField(passphrase, settings->email.password, salt, emailCipher)) {
+            if (errorText != nullptr) {
+                *errorText = "Failed to encrypt e-mail password";
+            }
+            return empty;
+        }
+        json += ",\"secrets\":{\"iter\":";
+        appendNumber(json, (unsigned long)fullBackupSecretIterations());
+        json += ",\"salt\":\"";
+        json += saltHex;
+        json += "\",\"emailPassword\":";
+        json += emailCipher;
+        if (includeWifi) {
+            String wifiCipher;
+            if (!fullBackupEncryptSecretField(passphrase, settings->wifi.password, salt, wifiCipher)) {
+                if (errorText != nullptr) {
+                    *errorText = "Failed to encrypt Wi-Fi password";
+                }
+                return empty;
+            }
+            json += ",\"wifiPassword\":";
+            json += wifiCipher;
+        }
+        json += "}";
+    }
+    json += "}";
+    if (!json.ok()) {
+        if (errorText != nullptr) {
+            *errorText = "Out of memory";
+        }
+        return empty;
+    }
+    return json;
+}
+
+void WebConsole::handleFullBackupPost(AsyncWebServerRequest *request) {
+    PsramJsonBuffer body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    const UserRecord *user = nullptr;
+    if (!requireAdmin(request, &user)) {
+        return;
+    }
+    if (!isMainRoleForFullBackup()) {
+        request->send(403, "text/plain", "Full backup is Main-only");
+        return;
+    }
+    bool includeWifi = true;
+    bool includeHistory = true;
+    bool includeSecrets = true;
+    extractJsonBool(body.c_str(), "includeWifi", includeWifi);
+    extractJsonBool(body.c_str(), "includeHistory", includeHistory);
+    extractJsonBool(body.c_str(), "includeSecrets", includeSecrets);
+    String passphrase;
+    extractJsonString(body.c_str(), "passphrase", passphrase);
+    String errorText;
+    PsramJsonBuffer settingsJson = buildFullBackupSettingsJson(
+        user,
+        includeWifi,
+        includeSecrets,
+        passphrase.c_str(),
+        &errorText
+    );
+    if (!settingsJson.ok() || settingsJson.length() == 0) {
+        request->send(400, "text/plain", errorText.length() > 0 ? errorText : "Failed to build settings");
+        return;
+    }
+    FullBackupOptions options;
+    options.includeWifi = includeWifi;
+    options.includeHistory = includeHistory;
+    options.includeSecrets = includeSecrets;
+    FullBackupBuildResult built = fullBackupBuildZip(
+        settingsJson.c_str(),
+        options,
+        sceneStore,
+        historyStore,
+        FIRMWARE_VERSION
+    );
+    if (built.zipBytes == nullptr || built.zipLength == 0) {
+        request->send(
+            500,
+            "text/plain",
+            built.errorText.length() > 0 ? built.errorText : "Failed to build ZIP"
+        );
+        return;
+    }
+    std::shared_ptr<OwnedZipBytes> payload = std::make_shared<OwnedZipBytes>();
+    payload->bytes = built.zipBytes;
+    payload->length = built.zipLength;
+    built.zipBytes = nullptr;
+    AsyncWebServerResponse *response = request->beginResponse(
+        "application/zip",
+        payload->length,
+        [payload](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
+            if (payload->bytes == nullptr || index >= payload->length) {
+                return 0;
+            }
+            size_t chunk = payload->length - index;
+            if (chunk > maxLen) {
+                chunk = maxLen;
+            }
+            memcpy(buffer, payload->bytes + index, chunk);
+            return chunk;
+        }
+    );
+    if (response == nullptr) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
+    }
+    response->addHeader("Cache-Control", "no-store");
+    response->addHeader("Content-Disposition", "attachment; filename=\"full-backup.zip\"");
+    request->send(response);
+}
+
+namespace {
+
+struct FullRestoreBakeContext {
+    SceneStore *sceneStore = nullptr;
+    bool ok = true;
+};
+
+bool fullRestoreWriteBakeVisitor(
+    const char *path,
+    const uint8_t *data,
+    size_t length,
+    void *context
+) {
+    auto *ctx = static_cast<FullRestoreBakeContext *>(context);
+    if (ctx == nullptr || ctx->sceneStore == nullptr || path == nullptr) {
+        return true;
+    }
+    const char *prefix = "scenes/bakes/";
+    const size_t prefixLen = 13;
+    if (strncmp(path, prefix, prefixLen) != 0) {
+        return true;
+    }
+    const char *fileName = path + prefixLen;
+    const char *dot = strrchr(fileName, '.');
+    if (dot == nullptr || strcmp(dot, ".jpg") != 0) {
+        return true;
+    }
+    char sceneId[SCENE_ID_BUF];
+    const size_t idLen = (size_t)(dot - fileName);
+    if (idLen == 0 || idLen >= sizeof(sceneId)) {
+        return true;
+    }
+    memcpy(sceneId, fileName, idLen);
+    sceneId[idLen] = '\0';
+    if (ctx->sceneStore->writeBakeJpeg(sceneId, data, length) != SceneWriteOk) {
+        ctx->ok = false;
+        return false;
+    }
+    return true;
+}
+
+bool queryFlagTrue(AsyncWebServerRequest *request, const char *name, bool defaultValue) {
+    if (request == nullptr || name == nullptr || !request->hasParam(name)) {
+        return defaultValue;
+    }
+    const String value = request->getParam(name)->value();
+    if (value == "0" || value.equalsIgnoreCase("false") || value.equalsIgnoreCase("off")) {
+        return false;
+    }
+    if (value == "1" || value.equalsIgnoreCase("true") || value.equalsIgnoreCase("on")) {
+        return true;
+    }
+    return defaultValue;
+}
+
+}  // namespace
+
+void WebConsole::handleFullRestorePost(AsyncWebServerRequest *request) {
+    PsramJsonBuffer body;
+    if (!takeRequestBody(request, &body)) {
+        return;
+    }
+    const UserRecord *user = nullptr;
+    if (!requireAdmin(request, &user)) {
+        return;
+    }
+    if (!isMainRoleForFullBackup()) {
+        request->send(403, "text/plain", "Full restore is Main-only");
+        return;
+    }
+    if (body.length() == 0) {
+        request->send(400, "text/plain", "Need ZIP body");
+        return;
+    }
+
+    const bool importWifi = queryFlagTrue(request, "importWifi", true);
+    const bool importEmail = queryFlagTrue(request, "importEmail", true);
+    const bool importHistory = queryFlagTrue(request, "importHistory", true);
+    const bool continueWithoutSecrets = queryFlagTrue(request, "continueWithoutSecrets", false);
+    String passphrase;
+    if (request->hasHeader("X-Full-Backup-Passphrase")) {
+        passphrase = request->getHeader("X-Full-Backup-Passphrase")->value();
+    }
+
+    StoreZipReader zip;
+    if (!zip.open((const uint8_t *)body.c_str(), body.length())) {
+        request->send(400, "text/plain", "Invalid ZIP archive");
+        return;
+    }
+    const uint8_t *settingsBytes = nullptr;
+    size_t settingsLen = 0;
+    if (!zip.findFile("settings.json", &settingsBytes, &settingsLen)
+        || settingsBytes == nullptr
+        || settingsLen == 0) {
+        request->send(400, "text/plain", "ZIP missing settings.json");
+        return;
+    }
+    PsramJsonBuffer settingsJson;
+    settingsJson.requireExternalMemory();
+    if (!settingsJson.appendBytes(settingsBytes, settingsLen)) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
+    }
+
+    char wifiPassword[64];
+    char emailPassword[64];
+    wifiPassword[0] = '\0';
+    emailPassword[0] = '\0';
+    bool hadSecrets = false;
+    const bool decryptOk = fullBackupDecryptSecrets(
+        settingsJson.c_str(),
+        passphrase.c_str(),
+        wifiPassword,
+        sizeof(wifiPassword),
+        emailPassword,
+        sizeof(emailPassword),
+        &hadSecrets
+    );
+    if (hadSecrets && !decryptOk && !continueWithoutSecrets) {
+        request->send(409, "text/plain", "bad_passphrase");
+        return;
+    }
+    const bool applySecrets = hadSecrets && decryptOk;
+
+    // Validate core slices exist before wipe.
+    String mqttJson;
+    String emailJson;
+    String zigbeeJson;
+    String hardwareJson;
+    String wifiJson;
+    String uiJson;
+    String interconnectJson;
+    PsramJsonBuffer devicesJson;
+    PsramJsonBuffer usersJson;
+    PsramJsonBuffer consolesJson;
+    PsramJsonBuffer automationsJson;
+    PsramJsonBuffer camerasJson;
+    PsramJsonBuffer scenesJson;
+    const bool haveMqtt = extractJsonKeyedSlice(settingsJson.c_str(), "mqtt", '{', mqttJson);
+    const bool haveEmail = extractJsonKeyedSlice(settingsJson.c_str(), "email", '{', emailJson);
+    const bool haveZigbee = extractJsonKeyedSlice(settingsJson.c_str(), "zigbee", '{', zigbeeJson);
+    const bool haveHardware = extractJsonKeyedSlice(settingsJson.c_str(), "hardware", '{', hardwareJson);
+    const bool haveWifi = extractJsonKeyedSlice(settingsJson.c_str(), "wifi", '{', wifiJson);
+    const bool haveDevices = extractJsonKeyedSlice(settingsJson.c_str(), "devices", '[', devicesJson);
+    const bool haveUsers = extractJsonKeyedSlice(settingsJson.c_str(), "users", '[', usersJson);
+    const bool haveConsoles = extractJsonKeyedSlice(settingsJson.c_str(), "consoles", '[', consolesJson);
+    const bool haveAutomations =
+        extractJsonKeyedSlice(settingsJson.c_str(), "automations", '[', automationsJson);
+    const bool haveCameras = extractJsonKeyedSlice(settingsJson.c_str(), "cameras", '[', camerasJson);
+    const bool haveScenes = extractJsonKeyedSlice(settingsJson.c_str(), "scenes", '[', scenesJson);
+    const bool haveUi = extractJsonKeyedSlice(settingsJson.c_str(), "ui", '{', uiJson);
+    const bool haveInterconnect =
+        extractJsonKeyedSlice(settingsJson.c_str(), "interconnect", '{', interconnectJson);
+    if (!devicesJson.ok() || !usersJson.ok() || !consolesJson.ok() || !automationsJson.ok()
+        || !camerasJson.ok() || !scenesJson.ok()) {
+        request->send(507, "text/plain", "Out of memory");
+        return;
+    }
+    if (!haveUsers) {
+        request->send(400, "text/plain", "Backup missing users");
+        return;
+    }
+
+    // Capture current device IEEEs so slave publishes deletes after wipe+replace.
+    DeviceTopicMap *deviceMap = settingsManager->deviceMap();
+    const int previousDeviceCount = deviceMap->usedCount();
+    uint8_t (*previousIeees)[8] = nullptr;
+    if (previousDeviceCount > 0) {
+        previousIeees = (uint8_t (*)[8])malloc((size_t)previousDeviceCount * 8);
+        if (previousIeees == nullptr) {
+            request->send(503, "text/plain", "Out of memory for device wipe");
+            return;
+        }
+        int copied = 0;
+        for (DeviceTopicEntry *entry = deviceMap->first(); entry != nullptr;
+             entry = DeviceTopicMap::nextEntry(entry)) {
+            if (!entry->used) {
+                continue;
+            }
+            memcpy(previousIeees[copied], entry->ieee, 8);
+            copied++;
+        }
+    }
+
+    // Wipe owned collections before apply.
+    if (sceneStore != nullptr) {
+        sceneStore->wipeAllIncludingBakes();
+    }
+    if (cameraStore != nullptr && cameraStore->replaceAllFromJson("[]") != CameraWriteOk) {
+        free(previousIeees);
+        request->send(500, "text/plain", "Failed to wipe cameras");
+        return;
+    }
+    if (automationStore != nullptr && !automationStore->replaceAllFromJson("[]")) {
+        free(previousIeees);
+        request->send(500, "text/plain", "Failed to wipe automations");
+        return;
+    }
+    if (consoleStore != nullptr && !consoleStore->replaceAllFromJson("[]")) {
+        free(previousIeees);
+        request->send(500, "text/plain", "Failed to wipe consoles");
+        return;
+    }
+    deviceMap->clearAll();
+
+    String errorText;
+    if (haveMqtt && !applyMqttJson(mqttJson.c_str(), &errorText)) {
+        request->send(400, "text/plain", errorText);
+        return;
+    }
+    if (importEmail && haveEmail) {
+        if (!applyEmailJson(emailJson.c_str(), &errorText, true)) {
+            request->send(400, "text/plain", errorText);
+            return;
+        }
+        if (applySecrets && emailPassword[0] != '\0') {
+            GlobalSettings *settings = settingsManager->getSettings();
+            strncpy(settings->email.password, emailPassword, sizeof(settings->email.password) - 1);
+            settings->email.password[sizeof(settings->email.password) - 1] = '\0';
+        }
+    }
+    if (haveZigbee && !applyZigbeeJson(zigbeeJson.c_str(), &errorText)) {
+        request->send(400, "text/plain", errorText);
+        return;
+    }
+    if (haveHardware && !applyHardwareJson(hardwareJson.c_str(), &errorText)) {
+        request->send(400, "text/plain", errorText);
+        return;
+    }
+    if (importWifi && haveWifi) {
+        GlobalSettings *settings = settingsManager->getSettings();
+        String bssid;
+        String deviceName;
+        String apIpText;
+        String modeText;
+        bool otgEnabled = settings->wifi.otgEnabled;
+        extractJsonString(wifiJson.c_str(), "bssid", bssid);
+        extractJsonString(wifiJson.c_str(), "deviceName", deviceName);
+        extractJsonString(wifiJson.c_str(), "apIp", apIpText);
+        extractJsonString(wifiJson.c_str(), "mode", modeText);
+        extractJsonBool(wifiJson.c_str(), "otgEnabled", otgEnabled);
+        if (bssid.length() == 0) {
+            bssid = WIFI_DEFAULT_BSSID;
+        }
+        if (deviceName.length() > 0) {
+            strncpy(settings->wifi.deviceName, deviceName.c_str(), sizeof(settings->wifi.deviceName) - 1);
+            settings->wifi.deviceName[sizeof(settings->wifi.deviceName) - 1] = '\0';
+        }
+        strncpy(settings->wifi.bssid, bssid.c_str(), sizeof(settings->wifi.bssid) - 1);
+        settings->wifi.bssid[sizeof(settings->wifi.bssid) - 1] = '\0';
+        if (apIpText.length() == 0) {
+            apIpText = WIFI_DEFAULT_AP_IP;
+        }
+        IPAddress apIp;
+        if (apIp.fromString(apIpText)) {
+            strncpy(settings->wifi.apIp, apIp.toString().c_str(), sizeof(settings->wifi.apIp) - 1);
+            settings->wifi.apIp[sizeof(settings->wifi.apIp) - 1] = '\0';
+        }
+        modeText.toUpperCase();
+        if (modeText == "STA" || modeText == "AP") {
+            settings->wifi.mode = modeText == "STA" ? WifiSettingsModeSta : WifiSettingsModeAp;
+        }
+        settings->wifi.otgEnabled = otgEnabled;
+        if (applySecrets && wifiPassword[0] != '\0') {
+            strncpy(settings->wifi.password, wifiPassword, sizeof(settings->wifi.password) - 1);
+            settings->wifi.password[sizeof(settings->wifi.password) - 1] = '\0';
+        }
+    }
+
+    char actorName[USER_NAME_MAX];
+    strncpy(actorName, user->userName, sizeof(actorName) - 1);
+    actorName[sizeof(actorName) - 1] = '\0';
+    char removedUserNames[USER_STORE_MAX][USER_NAME_MAX];
+    int removedUserCount = 0;
+    if (!userStore->replaceFromExportJson(
+            usersJson.c_str(),
+            removedUserNames,
+            &removedUserCount,
+            USER_STORE_MAX
+        )) {
+        request->send(400, "text/plain", "Need a valid users list with at least one unlocked admin");
+        return;
+    }
+    if (applyUsersRestored != nullptr
+        && !applyUsersRestored(removedUserNames, removedUserCount)) {
+        request->send(503, "text/plain", "Slave is not ready to store the user list");
+        return;
+    }
+    if (haveConsoles) {
+        if (consoleStore == nullptr || !consoleStore->replaceAllFromJson(consolesJson.c_str())) {
+            request->send(400, "text/plain", "Need a valid consoles list");
+            return;
+        }
+    }
+    if (haveAutomations) {
+        if (automationStore == nullptr
+            || !automationStore->replaceAllFromJson(automationsJson.c_str())) {
+            request->send(400, "text/plain", "Need a valid automations list");
+            return;
+        }
+    }
+    if (haveCameras) {
+        if (cameraStore == nullptr) {
+            request->send(500, "text/plain", "Cameras unavailable");
+            return;
+        }
+        if (cameraStore->replaceAllFromJson(camerasJson.c_str()) != CameraWriteOk) {
+            request->send(400, "text/plain", "Need a valid cameras list");
+            return;
+        }
+    }
+    if (haveScenes) {
+        if (sceneStore == nullptr) {
+            request->send(500, "text/plain", "Scenes unavailable");
+            return;
+        }
+        if (sceneStore->replaceAllFromJson(scenesJson.c_str()) != SceneWriteOk) {
+            request->send(400, "text/plain", "Need a valid scenes list");
+            return;
+        }
+        FullRestoreBakeContext bakeCtx;
+        bakeCtx.sceneStore = sceneStore;
+        zip.forEach(fullRestoreWriteBakeVisitor, &bakeCtx);
+        if (!bakeCtx.ok) {
+            request->send(500, "text/plain", "Failed to restore scene bake images");
+            return;
+        }
+    }
+    if (haveInterconnect) {
+        if (routerInterconnect == nullptr || routerInterconnect->store() == nullptr) {
+            request->send(503, "text/plain", "Interconnect unavailable");
+            return;
+        }
+        if (!routerInterconnect->store()->importJson(interconnectJson.c_str(), false)) {
+            request->send(400, "text/plain", "Need a valid interconnect section");
+            return;
+        }
+        routerInterconnect->begin();
+    }
+    if (haveUi) {
+        applyThemeJson(uiJson.c_str(), userStore->findByName(actorName), &errorText);
+    }
+
+    if (haveDevices) {
+        deviceMap->replaceFromJson(devicesJson.c_str());
+    }
+    int removedDeviceCount = 0;
+    uint8_t (*removedIeees)[8] = nullptr;
+    if (previousDeviceCount > 0 && previousIeees != nullptr) {
+        removedIeees = (uint8_t (*)[8])malloc((size_t)previousDeviceCount * 8);
+        if (removedIeees == nullptr) {
+            free(previousIeees);
+            request->send(503, "text/plain", "Out of memory for device restore");
+            return;
+        }
+        for (int i = 0; i < previousDeviceCount; i++) {
+            if (deviceMap->findByIeee(previousIeees[i]) == nullptr) {
+                memcpy(removedIeees[removedDeviceCount], previousIeees[i], 8);
+                removedDeviceCount++;
+            }
+        }
+    }
+    const bool devicesRestoreOk =
+        applyDevicesRestored == nullptr
+        || applyDevicesRestored(removedIeees, removedDeviceCount);
+    free(previousIeees);
+    free(removedIeees);
+    if (applyDevicesRestored != nullptr && !devicesRestoreOk) {
+        request->send(503, "text/plain", "Slave is not ready to store the device list");
+        return;
+    }
+    if (applyDevicesRestored == nullptr) {
+        settingsManager->saveDevicesJson();
+    }
+
+    if (historyStore != nullptr) {
+        const uint16_t maxKiB = settingsManager->historyMaxSizeKiB();
+        const uint16_t entrySize = settingsManager->historyEntrySize();
+        if (importHistory) {
+            const uint8_t *historyBytes = nullptr;
+            size_t historyLen = 0;
+            if (zip.findFile("history/snapshot.bin", &historyBytes, &historyLen)
+                && historyBytes != nullptr
+                && historyLen > 0) {
+                if (!historyStore->importSnapshotFromHeap(historyBytes, historyLen)) {
+                    request->send(400, "text/plain", "Failed to import history snapshot");
+                    return;
+                }
+            } else {
+                historyStore->wipeAllSamples(maxKiB, entrySize);
+            }
+        } else {
+            historyStore->wipeAllSamples(maxKiB, entrySize);
+        }
+    }
+
+    broadcastDevicesReload();
+    broadcastConsolesReload();
+    if (importEmail && haveEmail && onEmailSaved != nullptr) {
+        onEmailSaved();
+    }
+    settingsManager->saveMain(true);
+    settingsManager->requestRestart();
+    request->send(200, "text/plain", "Restored. Device will restart.");
+}
+#endif
 
 bool WebConsole::applyThemeJson(const char *json, UserRecord *user, String *errorText) {
     String themeText;

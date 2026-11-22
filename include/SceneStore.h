@@ -70,6 +70,8 @@ public:
 
     static const char *writeResultText(SceneWriteResult result);
     static bool isIdSafe(const char *sceneId);
+    // Full restore wipe: delete every bake JPEG then clear scene rows.
+    void wipeAllIncludingBakes();
 
     static bool psramAllowsAllocation(size_t bytes);
     static void *allocatePsram(size_t bytes);

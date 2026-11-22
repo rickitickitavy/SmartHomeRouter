@@ -158,6 +158,26 @@ void SceneStore::clearAll() {
     storedCount = 0;
 }
 
+void SceneStore::wipeAllIncludingBakes() {
+    for (SceneRecord *scene = head; scene != nullptr; scene = scene->next) {
+        deleteBakeFile(scene);
+    }
+    if (LittleFS.exists(SCENE_BAKES_DIR)) {
+        File dir = LittleFS.open(SCENE_BAKES_DIR);
+        if (dir && dir.isDirectory()) {
+            File child = dir.openNextFile();
+            while (child) {
+                String childPath = String(SCENE_BAKES_DIR) + "/" + child.name();
+                child.close();
+                LittleFS.remove(childPath);
+                child = dir.openNextFile();
+            }
+        }
+    }
+    clearAll();
+    requestPersist();
+}
+
 bool SceneStore::isIdSafe(const char *sceneId) {
     if (sceneId == nullptr || sceneId[0] == '\0') {
         return false;
