@@ -8,6 +8,10 @@
 #include <esp_system.h>
 #include <esp_log.h>
 #include <nvs_flash.h>
+#if defined(BOARD_HOST_P4)
+#include <esp_event.h>
+#include "esp_hosted_event.h"
+#endif
 
 static bool parseApIp(const char *text, IPAddress &address) {
     if (text == nullptr || text[0] == '\0') {
@@ -51,12 +55,18 @@ WiFiController::WiFiController(SettingsManager *settingsManager, bool forceAp)
 
     if (forceAp || settings->wifi.mode == WifiSettingsModeAp || settings->wifi.bssid[0] == '\0') {
         startAp(false);
+#if defined(BOARD_HOST_P4)
+        registerHostedTransportEvents();
+#endif
         return;
     }
 
     startSta();
     staBootJoinPending = true;
     staBootJoinStartedMs = millis();
+#if defined(BOARD_HOST_P4)
+    registerHostedTransportEvents();
+#endif
 }
 
 bool WiFiController::isApMode() const {
@@ -80,22 +90,82 @@ void WiFiController::setInterfaceReadyHandler(InterfaceReadyFn handler) {
     staNeedsWebRebind = false;
 }
 
-void WiFiController::requestStaWebRebind() {
+void WiFiController::requestStaWebRebind(const char *reason) {
     if (!staWebRebindArmed || apActive || !staEnabledAtBoot) {
         return;
+    }
+    if (!staNeedsWebRebind) {
+        LOGGER.info(
+            String("Web rebind armed: ") + (reason != nullptr ? reason : "unknown")
+        );
     }
     staNeedsWebRebind = true;
 }
 
 void WiFiController::notifyStaDisconnected() {
     LOGGER.warning("STA event: disconnected or lost IP");
-    requestStaWebRebind();
+    requestStaWebRebind("STA disconnect/lost IP");
 }
 
 void WiFiController::notifyStaGotIp() {
     LOGGER.info("STA event: got IP " + WiFi.localIP().toString());
-    requestStaWebRebind();
+    requestStaWebRebind("STA got IP");
 }
+
+#if defined(BOARD_HOST_P4)
+void WiFiController::notifyHostedTransportRecovered(const char *reason) {
+    // Only arms the flag; WebConsole::rebind runs from update()/loop.
+    requestStaWebRebind(reason != nullptr ? reason : "Hosted transport recovery");
+}
+
+namespace {
+
+WiFiController *s_wifiControllerForHosted = nullptr;
+
+void onEspHostedEvent(
+    void *arg,
+    esp_event_base_t eventBase,
+    int32_t eventId,
+    void *eventData
+) {
+    (void)arg;
+    (void)eventBase;
+    (void)eventData;
+    if (s_wifiControllerForHosted == nullptr) {
+        return;
+    }
+    // Recovery signals: transport came back (or C6 reinited). Ignore heartbeat/mem.
+    if (eventId == ESP_HOSTED_EVENT_TRANSPORT_UP) {
+        s_wifiControllerForHosted->notifyHostedTransportRecovered("Hosted TRANSPORT_UP");
+        return;
+    }
+    if (eventId == ESP_HOSTED_EVENT_CP_INIT) {
+        s_wifiControllerForHosted->notifyHostedTransportRecovered("Hosted CP_INIT");
+    }
+}
+
+}  // namespace
+
+void WiFiController::registerHostedTransportEvents() {
+    if (s_wifiControllerForHosted == this) {
+        return;
+    }
+    s_wifiControllerForHosted = this;
+    const esp_err_t err = esp_event_handler_register(
+        ESP_HOSTED_EVENT,
+        ESP_EVENT_ANY_ID,
+        &onEspHostedEvent,
+        nullptr
+    );
+    if (err != ESP_OK) {
+        LOGGER.warning(
+            String("Hosted event register failed 0x") + String((int)err, HEX)
+        );
+        return;
+    }
+    LOGGER.info("Hosted transport events armed for web console rebind");
+}
+#endif
 
 void WiFiController::runPendingStaWebRebind(bool staHasIpv4) {
     if (!staHasIpv4 || !staNeedsWebRebind || interfaceReadyHandler == nullptr) {
@@ -408,7 +478,7 @@ void WiFiController::update() {
     const bool connected = isStaConnected();
     if (!connected && staWasConnected) {
         LOGGER.warning("STA disconnected; reconnecting");
-        requestStaWebRebind();
+        requestStaWebRebind("polled STA disconnect");
         lastStaReconnectMs = millis();
         reconnectSta();
     }
