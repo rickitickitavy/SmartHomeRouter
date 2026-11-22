@@ -15,6 +15,10 @@ public:
     void setInterfaceReadyHandler(InterfaceReadyFn handler);
     void notifyStaDisconnected();
     void notifyStaGotIp();
+#if defined(BOARD_HOST_P4)
+    // Arms existing STA web rebind from ESP-Hosted transport recovery (loop runs rebind).
+    void notifyHostedTransportRecovered(const char *reason);
+#endif
     void applyStaRadio();
     void enableIeee154Coex();
     uint8_t zigbeeChannelOverlappingSta() const;
@@ -51,8 +55,11 @@ private:
     void finishStaJoinFromScan(int16_t foundCount);
     void reconnectSta();
     void onStaConnected();
-    void requestStaWebRebind();
+    void requestStaWebRebind(const char *reason);
     void runPendingStaWebRebind(bool staHasIpv4);
+#if defined(BOARD_HOST_P4)
+    void registerHostedTransportEvents();
+#endif
     String apNetworkName() const;
     String apPassword() const;
 };
