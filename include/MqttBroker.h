@@ -8,6 +8,7 @@ public:
     using LocalMessageFn = void (*)(const char *topic, const char *payload);
 
     explicit MqttBroker(SettingsManager *settingsManager);
+    ~MqttBroker();
 
     void setLocalMessageHandler(LocalMessageFn handler);
     void dispatch(bool wifiHasAddress);

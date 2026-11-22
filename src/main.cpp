@@ -129,6 +129,12 @@ static void requestHostDeviceListPersist() {
 static void requestHostMqttCommandResubscribe() {
     hostMqttCommandResubscribePending = true;
 }
+#if defined(BOARD_ROLE_HOST)
+static void onMqttLogicalMessage(const char *topic, const char *payload);
+static void onMqttRawMessage(char *topic, byte *payload, unsigned int length);
+static void onMqttBrokerLocalMessage(const char *topic, const char *payload);
+static void reconcileMqttObjectsFromSettings();
+#endif
 static void pumpHostDeferredStoreWork() {
     if (hostDeviceListPersistPending) {
         hostDeviceListPersistPending = false;
@@ -143,12 +149,7 @@ static void pumpHostDeferredStoreWork() {
 #if defined(BOARD_ROLE_HOST)
     if (hostMqttReloadPending) {
         hostMqttReloadPending = false;
-        if (mqttBroker != nullptr) {
-            mqttBroker->reloadFromSettings();
-        }
-        if (mqttClient != nullptr) {
-            mqttClient->reloadFromSettings();
-        }
+        reconcileMqttObjectsFromSettings();
     }
     if (hostZigbeeApplyPending) {
         hostZigbeeApplyPending = false;
@@ -314,7 +315,9 @@ static void applyDeviceConfigPayload(const char *payload) {
             entry->zigbeeType
         );
     }
-    mqttClient->subscribeDeviceCommands();
+    if (mqttClient != nullptr) {
+        mqttClient->subscribeDeviceCommands();
+    }
     persistHostDeviceList();
     if (!ZIGBEE_SPI_PROXY.enqueueDeviceUpsert(entry)) {
         LOGGER.error("Slave device change queue full");
@@ -788,9 +791,65 @@ static void pumpHostZigbeeBornIntervalCollect() {
     requestHostZigbeeStatusCollect();
 }
 
+static void onMqttBrokerLocalMessage(const char *topic, const char *payload) {
+    if (mqttClient == nullptr || topic == nullptr) {
+        return;
+    }
+    const char *body = payload != nullptr ? payload : "";
+    mqttClient->onMessage(const_cast<char *>(topic), (byte *)body, (unsigned int)strlen(body));
+}
+
+static void reconcileMqttObjectsFromSettings() {
+    if (settingsManager == nullptr || topicMap == nullptr) {
+        return;
+    }
+    GlobalSettings *settings = settingsManager->getSettings();
+    if (settings == nullptr) {
+        return;
+    }
+    const MqttServerType serverType = settings->mqtt.serverType;
+    const bool needClient =
+        serverType == MqttServerTypeRemote || serverType == MqttServerTypeLocal;
+    const bool needBroker = serverType == MqttServerTypeLocal;
+
+    if (!needBroker && mqttBroker != nullptr) {
+        if (mqttClient != nullptr) {
+            mqttClient->setLocalBroker(nullptr);
+        }
+        delete mqttBroker;
+        mqttBroker = nullptr;
+    }
+    if (!needClient && mqttClient != nullptr) {
+        delete mqttClient;
+        mqttClient = nullptr;
+        STATUS_RGB.setMqttConnected(false);
+    }
+    if (needBroker && mqttBroker == nullptr) {
+        mqttBroker = new MqttBroker(settingsManager);
+        mqttBroker->setLocalMessageHandler(onMqttBrokerLocalMessage);
+    }
+    if (needClient && mqttClient == nullptr) {
+        mqttClient = new MqttClient(settingsManager, topicMap);
+        mqttClient->setMessageHandler(onMqttLogicalMessage);
+        mqttClient->begin(onMqttRawMessage);
+    }
+    if (mqttClient != nullptr) {
+        mqttClient->setLocalBroker(mqttBroker);
+    }
+    if (mqttBroker != nullptr) {
+        mqttBroker->setLocalMessageHandler(onMqttBrokerLocalMessage);
+        mqttBroker->reloadFromSettings();
+    }
+    if (mqttClient != nullptr) {
+        mqttClient->reloadFromSettings();
+    }
+}
+
 static void onMqttLogicalMessage(const char *topic, const char *payload) {
-    if (mqttClient != nullptr
-        && mqttClient->serverBornTopic().length() > 0
+    if (mqttClient == nullptr || topic == nullptr) {
+        return;
+    }
+    if (mqttClient->serverBornTopic().length() > 0
         && strcmp(topic, mqttClient->serverBornTopic().c_str()) == 0) {
         // Defer collect off the MQTT callback / subscribe-attach stack.
         requestHostZigbeeStatusCollect();
@@ -857,7 +916,9 @@ static void onLightState(const char *message, const uint8_t ieee[8], uint8_t end
         LOGGER.info("Device has no state topic configured");
         return;
     }
-    mqttClient->publishDeviceState(entry, message, endpoint);
+    if (mqttClient != nullptr) {
+        mqttClient->publishDeviceState(entry, message, endpoint);
+    }
 }
 
 static uint32_t hostSpiInjectRouterId = 0;
@@ -2679,8 +2740,6 @@ static void setupHost() {
 #if defined(BOARD_HOST_P4)
     dumpP4HeapMap("after-wifi");
 #endif
-    mqttClient = new MqttClient(settingsManager, topicMap);
-    mqttBroker = new MqttBroker(settingsManager);
     webConsole = new WebConsole(settingsManager, userStore, consoleStore, automationStore, cameraStore, sceneStore);
     webConsole->setDeviceServices(
         foundDevices,
@@ -2809,16 +2868,7 @@ static void setupHost() {
         }
     });
 
-    mqttClient->setLocalBroker(mqttBroker);
-    mqttBroker->setLocalMessageHandler([](const char *topic, const char *payload) {
-        if (mqttClient == nullptr || topic == nullptr) {
-            return;
-        }
-        const char *body = payload != nullptr ? payload : "";
-        mqttClient->onMessage(const_cast<char *>(topic), (byte *)body, (unsigned int)strlen(body));
-    });
-    mqttClient->setMessageHandler(onMqttLogicalMessage);
-    mqttClient->begin(onMqttRawMessage);
+    reconcileMqttObjectsFromSettings();
     ZIGBEE_SPI_PROXY.begin();
     ZIGBEE_SPI_PROXY.setLightStateHandler(onLightState);
     ZIGBEE_SPI_PROXY.setRegistryPullDoneHandler([]() {
@@ -2976,8 +3026,12 @@ void loop() {
         interconnectStore != nullptr
         && interconnectStore->settings().role == InterconnectRoleRepeater;
     if (!hostIsRepeater) {
-        mqttBroker->dispatch(wifiController->hasUsableInterface());
-        mqttClient->dispatch(wifiController->isStaConnected());
+        if (mqttBroker != nullptr) {
+            mqttBroker->dispatch(wifiController->hasUsableInterface());
+        }
+        if (mqttClient != nullptr) {
+            mqttClient->dispatch(wifiController->isStaConnected());
+        }
     }
     pumpHostZigbeeBornIntervalCollect();
     pumpHostZigbeeStatusCollect();
