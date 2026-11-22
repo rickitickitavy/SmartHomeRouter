@@ -5247,6 +5247,7 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 }
 
 .scene-floor-color,
+.scene-floor-height,
 .scene-wall-thickness,
 .scene-wall-height {
     display: inline-flex;
@@ -5265,7 +5266,8 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
 }
 
 .scene-wall-thickness input[type="number"],
-.scene-wall-height input[type="number"] {
+.scene-wall-height input[type="number"],
+.scene-floor-height input[type="number"] {
     width: 4.5rem;
     min-height: 36px;
     padding: 0 0.4rem;
@@ -5273,6 +5275,11 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     border-radius: 4px;
     background: var(--bg);
     color: var(--text);
+}
+
+.scene-floor-height input[type="number"]:disabled {
+    background: color-mix(in srgb, var(--bg) 70%, var(--muted));
+    color: var(--muted);
 }
 
 .scene-designer-canvas-wrap,

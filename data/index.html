@@ -14473,6 +14473,7 @@
                 sceneDesigner.onChange = function () {
                     sceneGeometryDirty = true;
                     syncSceneGeometryImportButton();
+                    syncSceneFloorHeightInput();
                 };
             }
             sceneDesigner.resize();
@@ -14713,16 +14714,12 @@
         function syncSceneGeometryToolButtons() {
             var designer = sceneDesigner;
             var viewOn = designer ? !!designer.viewMode : false;
-            var buttons = document.querySelectorAll("#sceneGeometryDialog [data-scene-tool]");
             var index;
-            for (index = 0; index < buttons.length; index++) {
-                var button = buttons[index];
-                button.classList.remove("is-active");
-                button.setAttribute("aria-pressed", "false");
-                if (!viewOn && designer && button.getAttribute("data-scene-tool") === designer.tool) {
-                    button.classList.add("is-active");
-                    button.setAttribute("aria-pressed", "true");
-                }
+            // Add floor/wall/window/door are common buttons — not sticky toggles.
+            var toolButtons = document.querySelectorAll("#sceneGeometryDialog [data-scene-tool]");
+            for (index = 0; index < toolButtons.length; index++) {
+                toolButtons[index].classList.remove("is-active");
+                toolButtons[index].removeAttribute("aria-pressed");
             }
             var editOnly = document.querySelectorAll("#sceneGeometryDialog [data-scene-edit-only]");
             for (index = 0; index < editOnly.length; index++) {
@@ -14733,6 +14730,7 @@
                 viewBtn.classList.toggle("is-active", viewOn);
                 viewBtn.setAttribute("aria-pressed", viewOn ? "true" : "false");
             }
+            syncSceneFloorHeightInput();
             syncSceneGeometryImportButton();
         }
 
@@ -15442,6 +15440,20 @@
             input.value = String(designer.getWallHeight());
         }
 
+        function syncSceneFloorHeightInput() {
+            var input = document.getElementById("sceneFloorHeight");
+            var designer = sceneDesigner || ensureSceneDesigner();
+            if (!input || !designer) {
+                return;
+            }
+            var floorSelected = typeof designer.hasFloorSelection === "function"
+                && designer.hasFloorSelection();
+            input.disabled = !floorSelected;
+            if (floorSelected) {
+                input.value = String(designer.getSelectedFloorHeight());
+            }
+        }
+
         function onSceneWallThicknessInput(event) {
             var designer = ensureSceneDesigner();
             if (!designer || !event || !event.target) {
@@ -15460,12 +15472,25 @@
             sceneGeometryDirty = true;
         }
 
+        function onSceneFloorHeightInput(event) {
+            var designer = ensureSceneDesigner();
+            if (!designer || !event || !event.target) {
+                return;
+            }
+            if (typeof designer.hasFloorSelection === "function" && !designer.hasFloorSelection()) {
+                return;
+            }
+            designer.setSelectedFloorHeight(event.target.value);
+            sceneGeometryDirty = true;
+        }
+
         function sceneGeometryAddFloor() {
             var designer = ensureSceneDesigner();
             if (designer) {
                 designer.addFloor();
                 syncSceneGeometryToolButtons();
                 syncSceneFloorColorPicker();
+                syncSceneFloorHeightInput();
             }
         }
 
@@ -15473,6 +15498,7 @@
             var designer = ensureSceneDesigner();
             if (designer) {
                 designer.removeSelected();
+                syncSceneFloorHeightInput();
             }
         }
 
@@ -23850,18 +23876,23 @@
                     aria-label="Add floor" onclick="sceneGeometryAddFloor()">
                 <span class="mdi mdi-layers-plus" aria-hidden="true"></span>
             </button>
+            <div class="scene-floor-height" data-scene-edit-only title="Floor height">
+                <span class="mdi mdi-arrow-expand-vertical" aria-hidden="true"></span>
+                <input id="sceneFloorHeight" type="number" min="0.01" step="0.01" value="0.01"
+                       aria-label="Floor height" disabled oninput="onSceneFloorHeightInput(event)">
+            </div>
             <button type="button" class="btn btn-secondary btn-icon" data-scene-edit-only data-scene-tool="wall"
-                    title="Add wall" aria-label="Add wall" aria-pressed="false"
+                    title="Add wall" aria-label="Add wall"
                     onclick="setSceneGeometryTool('wall')">
                 <span class="mdi mdi-wall" aria-hidden="true"></span>
             </button>
             <button type="button" class="btn btn-secondary btn-icon" data-scene-edit-only data-scene-tool="window"
-                    title="Add window" aria-label="Add window" aria-pressed="false"
+                    title="Add window" aria-label="Add window"
                     onclick="setSceneGeometryTool('window')">
                 <span class="mdi mdi-window-closed-variant" aria-hidden="true"></span>
             </button>
             <button type="button" class="btn btn-secondary btn-icon" data-scene-edit-only data-scene-tool="door"
-                    title="Add door" aria-label="Add door" aria-pressed="false"
+                    title="Add door" aria-label="Add door"
                     onclick="setSceneGeometryTool('door')">
                 <span class="mdi mdi-door" aria-hidden="true"></span>
             </button>

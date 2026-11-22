@@ -5,6 +5,7 @@
     var DEFAULT_FLOOR_COLOR = "#6a8fad";
     var DEFAULT_WALL_THICKNESS = 0.01;
     var DEFAULT_WALL_HEIGHT = 0.15;
+    var DEFAULT_FLOOR_HEIGHT = 0.01;
     // Pixels spanning sceneSize at editZoom=1 — independent of canvas size (resize = more workspace).
     var PLAN_BASE_PX = 520;
     var THREE_SCRIPT_SRC = "/js/three.min.js";
@@ -74,7 +75,7 @@
     function defaultFloorRect(sceneSize) {
         return {
             y: 0,
-            height: 0.3,
+            height: DEFAULT_FLOOR_HEIGHT,
             color: DEFAULT_FLOOR_COLOR,
             // Floor plate only — walls/windows/doors live on the scene model.
             polygon: defaultPolygon(sceneSize)
@@ -90,6 +91,9 @@
         }
         // Keep every floor on the same ground plane.
         floor.y = 0;
+        if (!(floor.height > 0)) {
+            floor.height = DEFAULT_FLOOR_HEIGHT;
+        }
         if (!Array.isArray(floor.polygon)) {
             floor.polygon = [];
         }
@@ -614,24 +618,35 @@
             if (z > maxZ) { maxZ = z; }
         }
         var wallHeight = model.wallHeight || DEFAULT_WALL_HEIGHT;
+        // All floors share the same base height (no vertical stacking).
+        var baseY = 0;
+        var maxTop = DEFAULT_FLOOR_HEIGHT;
         (model.floors || []).forEach(function (floor) {
-            var baseY = floor.y || 0;
+            var floorHeight = (floor && floor.height > 0)
+                ? floor.height
+                : DEFAULT_FLOOR_HEIGHT;
+            if (floorHeight > maxTop) {
+                maxTop = floorHeight;
+            }
             (floor.polygon || []).forEach(function (corner) {
                 includePoint(corner.x, baseY, corner.z);
-                includePoint(corner.x, baseY + wallHeight, corner.z);
+                includePoint(corner.x, baseY + floorHeight, corner.z);
             });
         });
         ["walls", "windows", "doors"].forEach(function (listName) {
             (model[listName] || []).forEach(function (seg) {
-                includePoint(seg.x1, 0, seg.z1);
-                includePoint(seg.x2, 0, seg.z2);
-                includePoint(seg.x1, wallHeight, seg.z1);
-                includePoint(seg.x2, wallHeight, seg.z2);
+                includePoint(seg.x1, baseY, seg.z1);
+                includePoint(seg.x2, baseY, seg.z2);
+                includePoint(seg.x1, baseY + wallHeight, seg.z1);
+                includePoint(seg.x2, baseY + wallHeight, seg.z2);
             });
         });
+        if (wallHeight > maxTop) {
+            maxTop = wallHeight;
+        }
         if (!hasPoint) {
             var half = (model.sceneSize || 1) * 0.35;
-            return { minX: -half, maxX: half, minY: 0, maxY: wallHeight, minZ: -half, maxZ: half };
+            return { minX: -half, maxX: half, minY: 0, maxY: maxTop, minZ: -half, maxZ: half };
         }
         return { minX: minX, maxX: maxX, minY: minY, maxY: maxY, minZ: minZ, maxZ: maxZ };
     }
@@ -1368,6 +1383,38 @@
         };
     }
 
+    // Bottom + top plates and vertical sides so View shows floor.height (not a flat plate).
+    function makeFloorPrismFaces(points2d, baseY, height, colorHex) {
+        var faces = [];
+        if (!points2d || points2d.length < 3 || !(height > 0)) {
+            return faces;
+        }
+        var color = colorHex || DEFAULT_FLOOR_COLOR;
+        var bottom = makeFloorFace(points2d, baseY, color);
+        if (bottom) {
+            faces.push(bottom);
+        }
+        var top = makeFloorFace(points2d, baseY + height, color);
+        if (top) {
+            faces.push(top);
+        }
+        var index;
+        for (index = 0; index < points2d.length; index++) {
+            var a = points2d[index];
+            var b = points2d[(index + 1) % points2d.length];
+            var y0 = baseY;
+            var y1 = baseY + height;
+            // Outward-ish side: CCW polygon → a→b along bottom, b→a along top.
+            pushWallFace(faces, [
+                { x: a.x, y: y0, z: a.z },
+                { x: b.x, y: y0, z: b.z },
+                { x: b.x, y: y1, z: b.z },
+                { x: a.x, y: y1, z: a.z }
+            ], color, { forceDraw: true, layer: 0 });
+        }
+        return faces;
+    }
+
     function polygonAreaXZ(points) {
         var area = 0;
         var index;
@@ -1465,18 +1512,24 @@
         var wallHeight = model.wallHeight || DEFAULT_WALL_HEIGHT;
         var thickness = model.wallThickness || DEFAULT_WALL_THICKNESS;
         var wallColor = "#cfd6e0";
+        // All floors start at the same height (no per-floor vertical offset).
         var baseY = 0;
         syncModelOpenings(model);
 
-        // Floor plates only — never derived from walls.
+        var walls = model.walls || [];
+        var joinEps = Math.max(1e-3, thickness * 0.35);
+        var loop = closedLoopFromWalls(walls, joinEps);
+
         (model.floors || []).forEach(function (floor) {
-            var floorFace = makeFloorFace(floor.polygon, baseY, floor.color);
-            if (floorFace) {
-                faces.push(floorFace);
-            }
+            var floorHeight = (floor && floor.height > 0)
+                ? floor.height
+                : DEFAULT_FLOOR_HEIGHT;
+            // Floor solid uses floor.height; walls still use scene wallHeight.
+            faces = faces.concat(
+                makeFloorPrismFaces(floor.polygon, baseY, floorHeight, floor.color)
+            );
         });
 
-        var walls = model.walls || [];
         var openings = [];
         (model.doors || []).forEach(function (seg) {
             openings.push({
@@ -1499,8 +1552,6 @@
             });
         });
 
-        var joinEps = Math.max(1e-3, thickness * 0.35);
-        var loop = closedLoopFromWalls(walls, joinEps);
         if (loop) {
             faces = faces.concat(closedLoopWallFaces(
                 loop, openings, baseY, wallHeight, thickness, wallColor
@@ -2265,13 +2316,52 @@
         var last = this.model.floors[this.model.floors.length - 1];
         var floor = {
             y: 0,
-            height: 0.3,
+            height: DEFAULT_FLOOR_HEIGHT,
             color: (last && last.color) ? last.color : DEFAULT_FLOOR_COLOR,
             polygon: defaultPolygon(this.model.sceneSize || 1)
         };
         this.model.floors.push(floor);
         this.floorIndex = this.model.floors.length - 1;
         this.selection = { list: "floor", floorIndex: this.floorIndex };
+        this.notify();
+        this.draw();
+    };
+
+    SceneDesigner.prototype.selectedFloor = function () {
+        var sel = this.selection;
+        // Floor plate or a corner on that floor both count as the floor being selected.
+        if (!sel || (sel.list !== "floor" && sel.list !== "polygon")) {
+            return null;
+        }
+        var index = typeof sel.floorIndex === "number" ? sel.floorIndex : this.floorIndex;
+        return this.model.floors[index] || null;
+    };
+
+    SceneDesigner.prototype.hasFloorSelection = function () {
+        return !!this.selectedFloor();
+    };
+
+    SceneDesigner.prototype.getSelectedFloorHeight = function () {
+        var floor = this.selectedFloor();
+        if (!floor) {
+            return DEFAULT_FLOOR_HEIGHT;
+        }
+        return floor.height > 0 ? floor.height : DEFAULT_FLOOR_HEIGHT;
+    };
+
+    SceneDesigner.prototype.setSelectedFloorHeight = function (value) {
+        var floor = this.selectedFloor();
+        if (!floor) {
+            return;
+        }
+        var next = Number(value);
+        if (!isFinite(next) || next <= 0) {
+            return;
+        }
+        floor.height = next;
+        if (this.viewMode && this._three) {
+            this.rebuildThreeRoot();
+        }
         this.notify();
         this.draw();
     };
@@ -2399,7 +2489,7 @@
             var color = this.getCurrentFloorColor();
             this.model.floors[0] = {
                 y: 0,
-                height: 0.3,
+                height: DEFAULT_FLOOR_HEIGHT,
                 color: color,
                 polygon: defaultPolygon(this.model.sceneSize || 1)
             };
@@ -2632,6 +2722,7 @@
         });
         if (best) {
             this.selection = best;
+            this.notify();
             this.draw();
             return best;
         }
@@ -2656,6 +2747,7 @@
             this.floorIndex = best.floorIndex;
         }
         this.selection = best;
+        this.notify();
         this.draw();
         return best;
     };
@@ -2779,6 +2871,7 @@
             this.dragShiftHeld = !!event.shiftKey;
             this.lastDragClientX = event.clientX;
             this.lastDragClientY = event.clientY;
+            this.notify();
             this.draw();
             return;
         }
@@ -2791,6 +2884,7 @@
         if (floorHit >= 0) {
             this.floorIndex = floorHit;
             this.selection = { list: "floor", floorIndex: floorHit };
+            this.notify();
             this.draw();
         }
     };
