@@ -32,8 +32,45 @@ A scene pin whose view style is **Gauge** MUST support optional title fields lik
 - **WHEN** a scene pin uses Icon view style
 - **THEN** no pin title is shown even if title fields are present in storage
 
+### Requirement: Each floor has its own height
+Each floor MUST store its own positive height. Default for a new floor MUST be **0.01**. There is no upper bound on floor height (value MUST be greater than zero). Heights MUST persist with the scene. In View/bake, each floor MUST be rendered with that height (prism). All floors MUST share the same base height (MUST NOT be vertically stacked at different start levels). Wall height remains a separate scene control for walls.
+
+#### Scenario: Per-floor heights persist
+- **WHEN** the operator sets different heights on two floors and saves
+- **THEN** after reload each floor still has its own height
+
+#### Scenario: Floors share base height
+- **WHEN** two floors have different heights and View scene is open
+- **THEN** both floors start at the same base height
+
+#### Scenario: New floor default height
+- **WHEN** the operator adds a floor
+- **THEN** that floor’s height is `0.01` when no other value is chosen
+
+### Requirement: Floor height spinner
+The scene editor MUST provide a separate Floor height spinner immediately after the Add floor button, without a text label (arrows only). The spinner MUST be enabled only when a floor is selected, MUST display that floor’s height, and MUST edit only that floor. When no floor is selected, the spinner MUST be disabled.
+
+#### Scenario: Placement
+- **WHEN** the operator opens Edit scene
+- **THEN** the Floor height spinner is immediately after the Add floor button
+
+#### Scenario: Enabled when floor selected
+- **WHEN** a floor is selected
+- **THEN** the Floor height spinner is enabled and shows that floor’s height
+
+#### Scenario: Disabled when no floor selected
+- **WHEN** no floor is selected
+- **THEN** the Floor height spinner is disabled
+
+### Requirement: Geometry Add buttons are not toggles
+Add floor, Add wall, Add window, and Add door MUST be ordinary buttons and MUST NOT appear selected/active/outlined as toggles.
+
+#### Scenario: Click Add wall
+- **WHEN** the operator clicks Add wall
+- **THEN** the button does not stay outlined as selected/active
+
 ### Requirement: Scene designer and bake
-The Scenes editor MUST provide top-view authorship for floors, walls, windows, and doors with the geometry rules previously defined for this change (defaults: sceneSize 1.0, wall height 0.15, wall length sceneSize/7; multi-floor; no furniture props). View scene MUST toggle 3D-style preview with camera orbit about the scene center. Save MUST commit the model and regenerate the bake; Cancel MUST discard editor changes. Plan edit projection MUST use a **uniform** X/Z scale whose pixels-per-world-unit does **not** depend on canvas aspect ratio (fixed base × edit zoom / sceneSize). Resizing the editor window MUST enlarge or shrink the visible workspace (more or fewer grid cells) without stretching or compressing scheme geometry. The plan MUST NOT map X by canvas width and Z by canvas height independently. View/bake floor meshes MUST use concave-safe triangulation so floor plates match plan fill.
+The Scenes editor MUST provide top-view authorship for floors, walls, windows, and doors with the geometry rules previously defined for this change (defaults: sceneSize 1.0, wall height 0.15, per-floor height default 0.01, wall length sceneSize/7; multi-floor; no furniture props). View scene MUST toggle 3D-style preview with camera orbit about the scene center. Save MUST commit the model and regenerate the bake; Cancel MUST discard editor changes. Plan edit projection MUST use a **uniform** X/Z scale whose pixels-per-world-unit does **not** depend on canvas aspect ratio (fixed base × edit zoom / sceneSize). Resizing the editor window MUST enlarge or shrink the visible workspace (more or fewer grid cells) without stretching or compressing scheme geometry. The plan MUST NOT map X by canvas width and Z by canvas height independently. View/bake floor meshes MUST use concave-safe triangulation so floor plates match plan fill.
 
 #### Scenario: Save regenerates bake
 - **WHEN** the editor changes walls under View scene angles and activates Save

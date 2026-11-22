@@ -368,7 +368,7 @@ SceneWriteResult SceneStore::parseOneObject(const char *objectJson, SceneRecord 
         copyBounded(scene->bakePath, sizeof(scene->bakePath), bakePathText.c_str());
     }
     if (modelJson.length() == 0) {
-        modelJson = "{\"sceneSize\":1,\"wallHeight\":0.15,\"floors\":[{\"y\":0,\"height\":0.3,\"walls\":[],\"windows\":[],\"doors\":[]}]}";
+        modelJson = "{\"sceneSize\":1,\"wallHeight\":0.15,\"floors\":[{\"y\":0,\"height\":0.01,\"walls\":[],\"windows\":[],\"doors\":[]}]}";
     }
     if (!assignOwnedJson(&scene->modelJson, modelJson.c_str(), SCENE_MODEL_MAX)
         || !assignOwnedJson(&scene->pinsJson, pinsJson.c_str(), SCENE_PINS_JSON_MAX)) {
