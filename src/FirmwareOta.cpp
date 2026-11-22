@@ -493,12 +493,12 @@ bool FirmwareOta::prepareJoinedPackage() {
         }
         char runningHosted[SPI_STATUS_VERSION_MAX + 1]{};
         if (!readRunningHostedC6Version(runningHosted, sizeof(runningHosted))) {
-            givePackageFs();
-            closePackageStream();
-            fail("Hosted C6 version unreadable");
-            return false;
-        }
-        if (strcmp(runningHosted, expectedHostedC6Version) == 0) {
+            hostedC6UpdateRequired = true;
+            LOGGER.warning(
+                "Hosted C6 version unreadable; applying package version "
+                + String(expectedHostedC6Version)
+            );
+        } else if (strcmp(runningHosted, expectedHostedC6Version) == 0) {
             hostedC6UpdateRequired = false;
             LOGGER.info(
                 "Hosted C6 already at package version "
