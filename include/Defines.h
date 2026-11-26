@@ -52,10 +52,10 @@
 
 // One host version string per SoC: bump the shared MAJOR.MINOR.BUILD in both.
 // Prefix is only S3- or P4- (no separate CORE macro).
-#define FIRMWARE_VERSION_HOST "S3-4.6.44"
+#define FIRMWARE_VERSION_HOST "S3-4.6.49"
 #if defined(BOARD_HOST_P4)
 #undef FIRMWARE_VERSION_HOST
-#define FIRMWARE_VERSION_HOST "P4-4.6.44"
+#define FIRMWARE_VERSION_HOST "P4-4.6.49"
 #endif
 #define FIRMWARE_VERSION_SLAVE "4.2.19"
 
@@ -251,6 +251,8 @@
 #define SCENE_REFRESH_INTERVAL_MIN 1
 #define SCENE_REFRESH_INTERVAL_MAX 60
 #define SCENE_BAKES_DIR "/scene-bakes"
+#define SCENE_CUSTOM_DIR "/scene-custom"
+#define SCENE_CUSTOM_IMAGE_MAX_BYTES (1024UL * 1024UL)
 #define CONSOLE_COMPOSITE_ROWS_MAX 16
 #define CONSOLE_COMPOSITE_CELLS_MAX 8
 #define CONSOLE_COMPOSITE_TEXT_MAX 64

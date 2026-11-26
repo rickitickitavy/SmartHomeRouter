@@ -1582,6 +1582,12 @@
                         "statusSdFreeMb",
                         payload && payload.sdFreeMb != null ? String(payload.sdFreeMb) : "—"
                     );
+                    setStatusText(
+                        "statusSdUserData",
+                        payload && payload.sdUserDataKb != null
+                            ? String(payload.sdUserDataKb) + " kB"
+                            : "—"
+                    );
                 } else {
                     sdGroup.hidden = true;
                 }
@@ -1849,7 +1855,8 @@
             appendStatusGroup(stack, "SD card", [
                 ["Status", "statusSdStatus"],
                 ["Capacity Mb", "statusSdCapacityMb"],
-                ["Free Mb", "statusSdFreeMb"]
+                ["Free Mb", "statusSdFreeMb"],
+                ["user data", "statusSdUserData"]
             ], "statusSdCardGroup");
             appendStatusGroup(stack, "File system", [
                 ["Total capacity", "statusFsTotal"],

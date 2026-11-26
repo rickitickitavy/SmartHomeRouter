@@ -2254,6 +2254,10 @@ void WebConsole::sendSceneWriteResult(AsyncWebServerRequest *request, SceneWrite
         request->send(400, "text/plain", SceneStore::writeResultText(result));
         return;
     }
+    if (result == SceneWriteSdUnavailable) {
+        request->send(503, "text/plain", "SD card unavailable for custom background");
+        return;
+    }
     if (result == SceneWriteBakeFailed) {
         request->send(500, "text/plain", "Bake write failed");
         return;
@@ -2490,11 +2494,48 @@ void WebConsole::handleSceneBakeGet(AsyncWebServerRequest *request) {
         sceneId = request->getParam("id")->value();
     }
     const SceneRecord *scene = sceneStore->findById(sceneId.c_str());
-    if (scene == nullptr || scene->bakePath[0] == '\0' || !LittleFS.exists(scene->bakePath)) {
+    if (scene == nullptr || scene->bakePath[0] == '\0') {
         request->send(404, "text/plain", "Bake not found");
         return;
     }
     // Any signed-in user with console access may load bake for Place/user scene cells.
+    if (SceneStore::isCustomKind(scene)) {
+        uint8_t *imageBytes = nullptr;
+        size_t imageLength = 0;
+        const char *contentType = "image/jpeg";
+        if (!sceneStore->readBakeImage(sceneId.c_str(), &imageBytes, &imageLength, &contentType)
+            || imageBytes == nullptr
+            || imageLength == 0) {
+            request->send(404, "text/plain", "Bake not found");
+            return;
+        }
+        AsyncWebServerResponse *response = request->beginResponse(
+            contentType,
+            imageLength,
+            [imageBytes, imageLength](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
+                if (index >= imageLength) {
+                    free(imageBytes);
+                    return 0;
+                }
+                size_t chunk = imageLength - index;
+                if (chunk > maxLen) {
+                    chunk = maxLen;
+                }
+                memcpy(buffer, imageBytes + index, chunk);
+                if (index + chunk >= imageLength) {
+                    free(imageBytes);
+                }
+                return chunk;
+            }
+        );
+        response->addHeader("Cache-Control", "no-store");
+        request->send(response);
+        return;
+    }
+    if (!LittleFS.exists(scene->bakePath)) {
+        request->send(404, "text/plain", "Bake not found");
+        return;
+    }
     request->send(LittleFS, scene->bakePath, "image/jpeg");
 }
 
@@ -4985,14 +5026,21 @@ bool fullRestoreWriteBakeVisitor(
     if (ctx == nullptr || ctx->sceneStore == nullptr || path == nullptr) {
         return true;
     }
-    const char *prefix = "scenes/bakes/";
-    const size_t prefixLen = 13;
-    if (strncmp(path, prefix, prefixLen) != 0) {
+    const char *planPrefix = "scenes/bakes/";
+    const char *customPrefix = "scenes/custom/";
+    const char *fileName = nullptr;
+    if (strncmp(path, planPrefix, 13) == 0) {
+        fileName = path + 13;
+    } else if (strncmp(path, customPrefix, 14) == 0) {
+        fileName = path + 14;
+    } else {
         return true;
     }
-    const char *fileName = path + prefixLen;
     const char *dot = strrchr(fileName, '.');
-    if (dot == nullptr || strcmp(dot, ".jpg") != 0) {
+    if (dot == nullptr) {
+        return true;
+    }
+    if (strcmp(dot, ".jpg") != 0 && strcmp(dot, ".jpeg") != 0 && strcmp(dot, ".png") != 0) {
         return true;
     }
     char sceneId[SCENE_ID_BUF];
@@ -5002,7 +5050,13 @@ bool fullRestoreWriteBakeVisitor(
     }
     memcpy(sceneId, fileName, idLen);
     sceneId[idLen] = '\0';
-    if (ctx->sceneStore->writeBakeJpeg(sceneId, data, length) != SceneWriteOk) {
+    const SceneWriteResult writeResult = ctx->sceneStore->writeBakeJpeg(sceneId, data, length);
+    if (writeResult == SceneWriteSdUnavailable) {
+        LOGGER.error("Full restore: SD unavailable for custom background " + String(sceneId));
+        ctx->ok = false;
+        return false;
+    }
+    if (writeResult != SceneWriteOk) {
         ctx->ok = false;
         return false;
     }

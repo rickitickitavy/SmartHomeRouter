@@ -3656,7 +3656,14 @@
     }
 
     function sceneKindOf(view) {
-        return view && String(view.kind || "").toLowerCase() === "camera" ? "camera" : "plan";
+        var kind = String(view && view.kind || "").toLowerCase();
+        if (kind === "camera") {
+            return "camera";
+        }
+        if (kind === "custom") {
+            return "custom";
+        }
+        return "plan";
     }
 
     function clampSceneRefreshSec(value) {
@@ -3971,12 +3978,14 @@
                 return response.json();
             })
             .then(function (view) {
-                if (sceneKindOf(view) === "camera") {
+                var kind = sceneKindOf(view);
+                if (kind === "camera") {
                     mountCameraSceneCell(host, view, options);
                     return;
                 }
                 stopSceneCameraRefresh(host);
-                host.setAttribute("data-scene-kind", "plan");
+                // Plan and Custom background share pin + still-image path.
+                host.setAttribute("data-scene-kind", kind === "custom" ? "custom" : "plan");
                 var reuse = host.getAttribute("data-scene-id") === sceneKey
                     && host.querySelector("img.scene-cell-bake")
                     && host.querySelector(".scene-cell-overlays")

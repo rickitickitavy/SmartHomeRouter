@@ -6,6 +6,7 @@
 #include "SceneStore.h"
 
 #include <LittleFS.h>
+#include <SD_MMC.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -67,6 +68,12 @@ void FullBackupStreamSession::closeBakeFile() {
         bakeFile.close();
         bakeFileOpen = false;
     }
+    if (bakeFileFromSd) {
+        if (sceneStore != nullptr) {
+            sceneStore->endSdImageSession();
+        }
+        bakeFileFromSd = false;
+    }
 }
 
 void FullBackupStreamSession::freeHistory() {
@@ -98,6 +105,7 @@ bool FullBackupStreamSession::begin(
     bodyLength = 0;
     bodyOffset = 0;
     bodyFromFile = false;
+    bakeFileFromSd = false;
     bakeMemberPath[0] = '\0';
 
     if (!settingsJson.ok() || settingsJson.length() == 0) {
@@ -157,18 +165,53 @@ bool FullBackupStreamSession::beginCurrentMember() {
     }
     if (stage == StageBakes) {
         while (bakeScene != nullptr) {
-            if (bakeScene->id[0] == '\0' || bakeScene->bakePath[0] == '\0'
-                || !LittleFS.exists(bakeScene->bakePath)) {
+            if (bakeScene->id[0] == '\0' || bakeScene->bakePath[0] == '\0') {
                 bakeScene = bakeScene->next;
                 continue;
             }
-            bakeFile = LittleFS.open(bakeScene->bakePath, "r");
-            if (!bakeFile) {
-                bakeScene = bakeScene->next;
-                continue;
+            bakeFileFromSd = false;
+            if (SceneStore::isCustomKind(bakeScene)) {
+                if (sceneStore == nullptr || !sceneStore->beginSdImageSession()) {
+                    bakeScene = bakeScene->next;
+                    continue;
+                }
+                if (!SD_MMC.exists(bakeScene->bakePath)) {
+                    sceneStore->endSdImageSession();
+                    bakeScene = bakeScene->next;
+                    continue;
+                }
+                bakeFile = SD_MMC.open(bakeScene->bakePath, "r");
+                if (!bakeFile) {
+                    sceneStore->endSdImageSession();
+                    bakeScene = bakeScene->next;
+                    continue;
+                }
+                bakeFileOpen = true;
+                bakeFileFromSd = true;
+                const char *ext = "jpg";
+                if (strstr(bakeScene->bakePath, ".png") != nullptr) {
+                    ext = "png";
+                }
+                snprintf(
+                    bakeMemberPath,
+                    sizeof(bakeMemberPath),
+                    "scenes/custom/%s.%s",
+                    bakeScene->id,
+                    ext
+                );
+            } else {
+                if (!LittleFS.exists(bakeScene->bakePath)) {
+                    bakeScene = bakeScene->next;
+                    continue;
+                }
+                bakeFile = LittleFS.open(bakeScene->bakePath, "r");
+                if (!bakeFile) {
+                    bakeScene = bakeScene->next;
+                    continue;
+                }
+                bakeFileOpen = true;
+                snprintf(bakeMemberPath, sizeof(bakeMemberPath), "scenes/bakes/%s.jpg", bakeScene->id);
             }
-            bakeFileOpen = true;
-            snprintf(bakeMemberPath, sizeof(bakeMemberPath), "scenes/bakes/%s.jpg", bakeScene->id);
             if (!encoder.startFile(bakeMemberPath)) {
                 closeBakeFile();
                 fail("Failed to start bake member");

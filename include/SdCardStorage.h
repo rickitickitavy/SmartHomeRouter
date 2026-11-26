@@ -27,6 +27,13 @@ public:
     void setHistorySnapshotBytes(uint64_t bytes);
     void clearHistorySnapshotSize();
 
+    // Operator-uploaded SD content (e.g. scene-custom/) from last I/O mount (0 if none).
+    uint32_t userDataKiB() const { return cachedUserDataKiB; }
+    void setUserDataBytes(uint64_t bytes);
+    void clearUserDataSize();
+    // Sum SCENE_CUSTOM_DIR while mounted; no-op if unmounted.
+    void refreshUserDataCache();
+
     // Refresh capacity/free while mounted; no-op if unmounted.
     void refreshSizeCache();
 
@@ -41,6 +48,7 @@ private:
     uint32_t cachedCapacityMb = 0;
     uint32_t cachedFreeMb = 0;
     uint32_t cachedHistorySnapshotKiB = 0;
+    uint32_t cachedUserDataKiB = 0;
 
     void ensurePowerOn();
     bool configurePins();

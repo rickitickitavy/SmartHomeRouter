@@ -467,6 +467,12 @@
                         "statusSdFreeMb",
                         payload && payload.sdFreeMb != null ? String(payload.sdFreeMb) : "—"
                     );
+                    setStatusText(
+                        "statusSdUserData",
+                        payload && payload.sdUserDataKb != null
+                            ? String(payload.sdUserDataKb) + " kB"
+                            : "—"
+                    );
                 } else {
                     sdGroup.hidden = true;
                 }
@@ -14387,6 +14393,7 @@
         var sceneEditorZones = [];
         var sceneDraftZones = [];
         var sceneDraftKind = "plan";
+        var sceneSdCardUsable = null;
         var sceneDraftCameraId = "";
         var sceneDraftRefreshInterval = 3;
         var sceneDraftModel = null;
@@ -14532,7 +14539,14 @@
         }
 
         function normalizeSceneKind(kind) {
-            return String(kind || "").toLowerCase() === "camera" ? "camera" : "plan";
+            var text = String(kind || "").toLowerCase();
+            if (text === "camera") {
+                return "camera";
+            }
+            if (text === "custom") {
+                return "custom";
+            }
+            return "plan";
         }
 
         function clampSceneRefreshInterval(value) {
@@ -14552,6 +14566,7 @@
         function syncSceneKindChrome() {
             var kindSelect = document.getElementById("sceneKindSelect");
             var editSceneBtn = document.getElementById("sceneEditSceneBtn");
+            var uploadImageBtn = document.getElementById("sceneUploadImageBtn");
             var cameraSelect = document.getElementById("sceneCameraSelect");
             var refreshField = document.getElementById("sceneRefreshField");
             var refreshInput = document.getElementById("sceneRefreshInterval");
@@ -14560,12 +14575,17 @@
             var addZoneBtn = document.getElementById("sceneBindAddZoneBtn");
             var deleteZoneBtn = document.getElementById("sceneBindDeleteZoneBtn");
             var isCamera = sceneDraftKind === "camera";
+            var isCustom = sceneDraftKind === "custom";
+            var isPlan = !isCamera && !isCustom;
             if (kindSelect) {
-                kindSelect.value = isCamera ? "camera" : "plan";
+                kindSelect.value = sceneDraftKind;
             }
-            // Plan-only geometry editor — Camera authors zones on the bind preview.
+            // Plan-only geometry editor — Camera authors zones; Custom uploads a still.
             if (editSceneBtn) {
-                editSceneBtn.hidden = isCamera;
+                editSceneBtn.hidden = !isPlan;
+            }
+            if (uploadImageBtn) {
+                uploadImageBtn.hidden = !isCustom;
             }
             if (cameraSelect) {
                 cameraSelect.hidden = !isCamera;
@@ -14600,6 +14620,21 @@
                 sceneZoneDrag = null;
             }
             syncSceneBindZoneChrome();
+            syncSceneBindEmptyMessage();
+        }
+
+        function syncSceneBindEmptyMessage() {
+            var empty = document.getElementById("sceneBindEmpty");
+            if (!empty) {
+                return;
+            }
+            if (sceneDraftKind === "custom") {
+                empty.textContent = "No image — upload an image";
+            } else if (sceneDraftKind === "camera") {
+                empty.textContent = "No image — select a camera";
+            } else {
+                empty.textContent = "No image — use Edit scene to create one";
+            }
         }
 
         function sceneZoneOpacityPercent(zone) {
@@ -14778,15 +14813,75 @@
             });
         }
 
-        function onSceneKindChanged() {
+        function refreshSceneSdCardUsable() {
+            return fetch("/api/hardware", { cache: "no-store" }).then(function (response) {
+                return response.json().then(function (hardware) {
+                    if (!response.ok) {
+                        throw new Error("hardware");
+                    }
+                    sceneSdCardUsable = !!(hardware && hardware.sdCardUsable);
+                    return sceneSdCardUsable;
+                });
+            }).catch(function () {
+                sceneSdCardUsable = false;
+                return false;
+            });
+        }
+
+        function revertSceneKindWithoutSd(previousKind) {
             var kindSelect = document.getElementById("sceneKindSelect");
-            sceneDraftKind = normalizeSceneKind(kindSelect && kindSelect.value);
-            sceneBindDirty = true;
+            var errorLine = document.getElementById("sceneDialogError");
+            var restored = normalizeSceneKind(previousKind);
+            if (kindSelect) {
+                kindSelect.value = restored;
+            }
+            sceneDraftKind = restored;
+            if (errorLine) {
+                errorLine.hidden = false;
+                errorLine.textContent = "SD card must be installed for Custom background";
+            }
             syncSceneKindChrome();
             updateSceneBindPreview();
-            if (sceneDraftKind === "camera") {
-                ensureSceneCamerasLoaded();
+        }
+
+        function onSceneKindChanged() {
+            var kindSelect = document.getElementById("sceneKindSelect");
+            var previousKind = sceneDraftKind;
+            var nextKind = normalizeSceneKind(kindSelect && kindSelect.value);
+            function applyKind(kind) {
+                sceneDraftKind = kind;
+                sceneBindDirty = true;
+                syncSceneKindChrome();
+                updateSceneBindPreview();
+                if (sceneDraftKind === "camera") {
+                    ensureSceneCamerasLoaded();
+                }
             }
+            if (nextKind === "custom") {
+                function allowOrRevert(usable) {
+                    if (!usable) {
+                        revertSceneKindWithoutSd(previousKind);
+                        return;
+                    }
+                    var errorLine = document.getElementById("sceneDialogError");
+                    if (errorLine
+                        && errorLine.textContent === "SD card must be installed for Custom background") {
+                        errorLine.hidden = true;
+                    }
+                    applyKind("custom");
+                }
+                if (sceneSdCardUsable === true) {
+                    allowOrRevert(true);
+                    return;
+                }
+                if (sceneSdCardUsable === false) {
+                    allowOrRevert(false);
+                    return;
+                }
+                refreshSceneSdCardUsable().then(allowOrRevert);
+                return;
+            }
+            applyKind(nextKind);
         }
 
         function onSceneCameraChanged() {
@@ -14806,11 +14901,155 @@
         }
 
         function openSceneEditForKind() {
-            if (sceneDraftKind === "camera") {
-                // Edit scene is hidden for Camera; zones are edited on the bind preview.
+            if (sceneDraftKind === "camera" || sceneDraftKind === "custom") {
+                // Edit scene is Plan-only; Camera uses zones, Custom uses Upload image.
                 return;
             }
             openSceneGeometryEditor();
+        }
+
+        function chooseSceneCustomImageUpload() {
+            if (sceneDraftKind !== "custom") {
+                return;
+            }
+            if (sceneSdCardUsable === false) {
+                var errorLine = document.getElementById("sceneDialogError");
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = "SD card must be installed for Custom background";
+                }
+                return;
+            }
+            var input = document.getElementById("sceneCustomImageFile");
+            if (input) {
+                input.click();
+            }
+        }
+
+        function onSceneCustomImageFileSelected(event) {
+            var input = event && event.target;
+            var file = input && input.files && input.files[0];
+            if (input) {
+                input.value = "";
+            }
+            if (!file || sceneDraftKind !== "custom") {
+                return;
+            }
+            var errorLine = document.getElementById("sceneDialogError");
+            if (file.size > 1024 * 1024) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = "Image must be 1 MB or smaller";
+                }
+                return;
+            }
+            var type = String(file.type || "").toLowerCase();
+            var name = String(file.name || "").toLowerCase();
+            var typeOk = type === "image/jpeg" || type === "image/png"
+                || /\.(jpe?g|png)$/.test(name);
+            if (!typeOk) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = "Use PNG or JPEG";
+                }
+                return;
+            }
+            function uploadToScene(sceneId) {
+                return file.arrayBuffer().then(function (buffer) {
+                    return fetch("/api/scenes/bake?id=" + encodeURIComponent(sceneId), {
+                        method: "POST",
+                        headers: { "Content-Type": type || "application/octet-stream" },
+                        body: buffer
+                    }).then(function (response) {
+                        return response.text().then(function (text) {
+                            if (!response.ok) {
+                                throw new Error(text || ("HTTP " + response.status));
+                            }
+                        });
+                    });
+                }).then(function () {
+                    sceneServerHasBake = true;
+                    if (scenePendingBakeUrl && String(scenePendingBakeUrl).indexOf("blob:") === 0) {
+                        try {
+                            URL.revokeObjectURL(scenePendingBakeUrl);
+                        } catch (ignoreRevoke) {
+                            // ignore
+                        }
+                    }
+                    scenePendingBakeBlob = null;
+                    scenePendingBakeUrl = "/api/scenes/bake?id="
+                        + encodeURIComponent(sceneId)
+                        + "&v="
+                        + Date.now();
+                    if (errorLine) {
+                        errorLine.hidden = true;
+                    }
+                    updateSceneBindPreview();
+                    if (window.SceneKit && typeof SceneKit.invalidateSceneCellHost === "function") {
+                        SceneKit.invalidateSceneCellHost(sceneId);
+                    }
+                }).catch(function (error) {
+                    if (errorLine) {
+                        errorLine.hidden = false;
+                        errorLine.textContent = error && error.message
+                            ? error.message
+                            : "Upload failed";
+                    }
+                });
+            }
+            if (sceneDialogOriginalId) {
+                uploadToScene(sceneDialogOriginalId);
+                return;
+            }
+            var nameInput = document.getElementById("sceneName");
+            var sceneName = nameInput ? String(nameInput.value || "").trim() : "";
+            if (!sceneName) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = "Enter a scene name before uploading";
+                }
+                return;
+            }
+            var createBody = {
+                name: sceneName,
+                kind: "custom",
+                cameraId: "",
+                refreshInterval: clampSceneRefreshInterval(sceneDraftRefreshInterval),
+                sceneModel: sceneDraftModel || (window.SceneKit ? SceneKit.defaultModel() : {}),
+                pins: sceneEditorPins || [],
+                zones: []
+            };
+            fetch("/api/scenes", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(createBody)
+            }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    var created = {};
+                    try {
+                        created = JSON.parse(text);
+                    } catch (ignoreParse) {
+                        created = {};
+                    }
+                    if (!created.id) {
+                        throw new Error("Scene create did not return id");
+                    }
+                    sceneDialogOriginalId = created.id;
+                    sceneDialogIsEdit = true;
+                    sceneBindDirty = false;
+                    return uploadToScene(sceneDialogOriginalId);
+                });
+            }).catch(function (error) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = error && error.message
+                        ? error.message
+                        : "Save failed";
+                }
+            });
         }
 
         function disposeSceneDesigner() {
@@ -15686,7 +15925,7 @@
             }
             if (!previewUrl) {
                 empty.hidden = false;
-                empty.textContent = "No image — use Edit scene to create one";
+                syncSceneBindEmptyMessage();
                 frame.hidden = true;
                 img.removeAttribute("src");
                 overlays.innerHTML = "";
@@ -15964,6 +16203,8 @@
             document.getElementById("sceneDeleteBtn").hidden = !sceneDialogIsEdit;
             document.getElementById("sceneEditDialog").hidden = false;
             sceneDraftModel = SceneKit.defaultModel();
+            sceneSdCardUsable = null;
+            refreshSceneSdCardUsable();
             syncSceneKindChrome();
             ensureSceneCamerasLoaded();
             updateSceneBindPreview();
@@ -17085,7 +17326,8 @@
                             sceneDialogOriginalId = "";
                         }
                     }
-                    if (sceneDraftKind === "camera" || !scenePendingBakeBlob || !sceneDialogOriginalId) {
+                    // Plan geometry bake only — Custom uses Upload image; Camera has no bake file.
+                    if (sceneDraftKind !== "plan" || !scenePendingBakeBlob || !sceneDialogOriginalId) {
                         return null;
                     }
                     return fetch("/api/scenes/bake?id=" + encodeURIComponent(sceneDialogOriginalId), {
@@ -23938,6 +24180,10 @@
                                 <span class="status-row-label">Free Mb</span>
                                 <p id="statusSdFreeMb" class="status-value">—</p>
                             </div>
+                            <div class="status-row">
+                                <span class="status-row-label">user data</span>
+                                <p id="statusSdUserData" class="status-value">—</p>
+                            </div>
                         </div>
                         <div class="status-group">
                             <h3 class="group-title">File system</h3>
@@ -25637,9 +25883,14 @@
                     onchange="onSceneKindChanged()">
                 <option value="plan">Plan</option>
                 <option value="camera">Camera</option>
+                <option value="custom">Custom background</option>
             </select>
             <button type="button" id="sceneEditSceneBtn" class="btn btn-secondary"
                     onclick="openSceneEditForKind()">Edit scene</button>
+            <button type="button" id="sceneUploadImageBtn" class="btn btn-secondary" hidden
+                    onclick="chooseSceneCustomImageUpload()">Upload image</button>
+            <input id="sceneCustomImageFile" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" hidden
+                   onchange="onSceneCustomImageFileSelected(event)">
             <select id="sceneCameraSelect" class="scene-toolbar-select" aria-label="Camera" hidden
                     onchange="onSceneCameraChanged()">
                 <option value="">Select camera</option>

@@ -58,7 +58,7 @@ After the P4 host has completed the boot SD probe, it SHALL expose SD **status**
 - **THEN** status indicates absent (or equivalent) and does not claim a mounted card
 
 ### Requirement: SD statistics come only from real I/O mounts
-The host SHALL update cached SD capacity, free space, and on-card history snapshot size only during mount sessions that already perform probe, restore/read, or save/write. Status polling and other read-only UI/API paths MUST NOT remount the SD card solely to refresh those statistics.
+The host SHALL update cached SD capacity, free space, on-card history snapshot size, and operator **user data** size (custom scene backgrounds under the SD custom directory) only during mount sessions that already perform probe, restore/read, or save/write. Status polling and other read-only UI/API paths MUST NOT remount the SD card solely to refresh those statistics.
 
 #### Scenario: Status does not remount for free space
 - **WHEN** Status is polled while the card is unmounted between saves
@@ -67,3 +67,18 @@ The host SHALL update cached SD capacity, free space, and on-card history snapsh
 #### Scenario: Cache refreshes on save
 - **WHEN** a periodic SD history save mounts, writes, and unmounts
 - **THEN** cached free space and on-SD history size are updated from that session before unmount
+
+### Requirement: Custom scene backgrounds on SD
+On P4 with usable MicroSD, Custom background images MUST live in a dedicated SD directory (not LittleFS). The host MUST mount for upload/serve/backup/restore I/O, then unmount when the session ends. Hosts without usable SD MUST NOT silently store those images on flash.
+
+#### Scenario: Upload writes under SD custom directory
+- **WHEN** a Custom background image is uploaded successfully on P4 with SD ready
+- **THEN** the file exists under the SD custom-background directory and not under LittleFS scene-bakes
+
+#### Scenario: Unmount after custom image session
+- **WHEN** a custom-background upload or serve mount session finishes
+- **THEN** the SD filesystem is unmounted afterward (unless another in-progress SD session still needs it)
+
+#### Scenario: No flash fallback without SD
+- **WHEN** SD is missing or unusable and a custom background image write is requested
+- **THEN** the host does not write that image to LittleFS as a substitute
