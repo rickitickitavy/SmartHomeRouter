@@ -315,7 +315,9 @@
         return { x: lockX, z: raw.z };
     }
 
-    function pointInPolygon(point, polygon) {
+    // Plan floor plates use world {x,z}. Do not share the name with the
+    // normalized {x,y} zone helper below — duplicate function decls hoist and shadow.
+    function pointInFloorPolygon(point, polygon) {
         if (!point || !polygon || polygon.length < 3) {
             return false;
         }
@@ -2601,7 +2603,7 @@
         var index;
         // Top-most drawn floor wins (later index painted later).
         for (index = floors.length - 1; index >= 0; index--) {
-            if (pointInPolygon(point, floors[index].polygon || [])) {
+            if (pointInFloorPolygon(point, floors[index].polygon || [])) {
                 return index;
             }
         }
@@ -3698,7 +3700,8 @@
         return 1 - t;
     }
 
-    function pointInPolygon(nx, ny, points) {
+    // Camera-zone normalized {x,y} hit test. Exported as SceneKit.pointInPolygon.
+    function pointInNormPolygon(nx, ny, points) {
         var inside = false;
         var i;
         var j;
@@ -4062,7 +4065,8 @@
         clampSceneRefreshSec: clampSceneRefreshSec,
         hexToRgba: hexToRgba,
         zoneFillOpacity: zoneFillOpacity,
-        pointInPolygon: pointInPolygon,
+        pointInPolygon: pointInNormPolygon,
+        pointInFloorPolygon: pointInFloorPolygon,
         paintSceneCellZones: paintSceneCellZones,
         stopSceneCameraRefresh: stopSceneCameraRefresh
     };
