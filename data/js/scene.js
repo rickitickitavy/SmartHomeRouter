@@ -3838,11 +3838,41 @@
 
     function mountCameraSceneCell(host, view, options) {
         options = options || {};
-        stopSceneCameraRefresh(host);
+        var cameraId = view && view.cameraId ? String(view.cameraId) : "";
+        var sceneKey = String(view && view.id || "");
+        var refreshSec = clampSceneRefreshSec(view && view.refreshInterval);
+        var refreshMs = refreshSec * 1000;
         host.classList.add("scene-cell", "scene-cell--camera");
         host.classList.remove("scene-cell--empty");
-        host.setAttribute("data-scene-id", String(view && view.id || ""));
+
+        // Reuse live camera DOM on Place refresh (zone click / console redraw) — avoid JPEG blink.
+        var reuseFrame = host.querySelector(".scene-cell-frame--camera");
+        var reuseStack = host.querySelector(".scene-cell-camera-stack");
+        var reuseOverlays = host.querySelector(".scene-cell-overlays--zones");
+        var canReuse = !!reuseFrame
+            && !!reuseStack
+            && !!reuseOverlays
+            && host.getAttribute("data-scene-id") === sceneKey
+            && host.getAttribute("data-scene-kind") === "camera"
+            && host.getAttribute("data-camera-id") === cameraId
+            && !!host._sceneCameraSnapshotUrl
+            && !!host._sceneCameraFrontImg;
+        if (canReuse) {
+            host.setAttribute("data-scene-id", sceneKey);
+            host.setAttribute("data-scene-kind", "camera");
+            host.setAttribute("data-camera-id", cameraId);
+            bindSceneOverlayLayout(reuseFrame, host._sceneCameraFrontImg, reuseOverlays);
+            paintSceneCellZones(reuseOverlays, view.zones || [], options);
+            if (!host._sceneCameraTimer && !host._sceneCameraArmed) {
+                armSceneCameraJpegRefresh(host, refreshMs);
+            }
+            return;
+        }
+
+        stopSceneCameraRefresh(host);
+        host.setAttribute("data-scene-id", sceneKey);
         host.setAttribute("data-scene-kind", "camera");
+        host.setAttribute("data-camera-id", cameraId);
         host.innerHTML = "";
         var frame = document.createElement("div");
         frame.className = "scene-cell-frame scene-cell-frame--camera";
@@ -3861,9 +3891,6 @@
         frame.appendChild(stack);
         frame.appendChild(overlays);
         host.appendChild(frame);
-        var cameraId = view && view.cameraId ? String(view.cameraId) : "";
-        var refreshSec = clampSceneRefreshSec(view && view.refreshInterval);
-        var refreshMs = refreshSec * 1000;
         if (!cameraId) {
             host.classList.add("scene-cell--empty");
             overlays.remove();

@@ -14380,8 +14380,23 @@
         var sceneSelectedZoneVertex = -1;
         var sceneZoneDraftPoints = [];
         var sceneZoneDrag = null;
+        // dblclick dies when pointerup rebuilds SVG — detect corner remove via timed double-tap.
+        var sceneZoneHandleLastTap = null;
         var sceneZonesCameraPreviewUrl = "";
         var consoleEditorScenes = [];
+
+        function trySceneZoneHandleDoubleTap(scope, zoneIndex, vertexIndex) {
+            var now = Date.now();
+            var key = String(scope) + ":" + String(zoneIndex) + ":" + String(vertexIndex);
+            if (sceneZoneHandleLastTap
+                && sceneZoneHandleLastTap.key === key
+                && (now - sceneZoneHandleLastTap.at) <= 450) {
+                sceneZoneHandleLastTap = null;
+                return true;
+            }
+            sceneZoneHandleLastTap = { key: key, at: now };
+            return false;
+        }
 
         function setScenesError(message) {
             var line = document.getElementById("scenesSaveError");
@@ -15439,6 +15454,25 @@
                         }
                         event.preventDefault();
                         event.stopPropagation();
+                        // Second tap on same corner → remove (keep ≥3). Native dblclick is lost
+                        // because pointerup rebuilds the SVG between clicks.
+                        if (trySceneZoneHandleDoubleTap("bind", index, vertexIndex)) {
+                            var zRemove = sceneEditorZones[index];
+                            if (zRemove
+                                && Array.isArray(zRemove.points)
+                                && zRemove.points.length > 3
+                                && vertexIndex >= 0
+                                && vertexIndex < zRemove.points.length) {
+                                zRemove.points.splice(vertexIndex, 1);
+                                sceneSelectedZoneIndex = index;
+                                sceneSelectedZoneVertex = -1;
+                                sceneZoneDrag = null;
+                                sceneBindDirty = true;
+                                syncSceneBindZoneChrome();
+                                paintSceneBindZonesInteractive();
+                            }
+                            return;
+                        }
                         sceneSelectedZoneIndex = index;
                         sceneSelectedZoneVertex = vertexIndex;
                         // No Shift axis-lock for camera zones (same tools as floor, without Shift).
@@ -15448,7 +15482,8 @@
                             pointerId: event.pointerId,
                             handleEl: handle,
                             polyEl: shape,
-                            bindPreview: true
+                            bindPreview: true,
+                            moved: false
                         };
                         try {
                             handle.setPointerCapture(event.pointerId);
@@ -15456,24 +15491,6 @@
                         }
                         // Do not repaint here — that would drop pointer capture mid-drag.
                         syncSceneBindZoneChrome();
-                    });
-                    handle.addEventListener("dblclick", function (event) {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        var z = sceneEditorZones[index];
-                        if (!z || !Array.isArray(z.points) || z.points.length <= 3) {
-                            return;
-                        }
-                        if (vertexIndex < 0 || vertexIndex >= z.points.length) {
-                            return;
-                        }
-                        z.points.splice(vertexIndex, 1);
-                        sceneSelectedZoneIndex = index;
-                        sceneSelectedZoneVertex = -1;
-                        sceneZoneDrag = null;
-                        sceneBindDirty = true;
-                        syncSceneBindZoneChrome();
-                        paintSceneBindZonesInteractive();
                     });
                     svg.appendChild(handle);
                 });
@@ -15514,9 +15531,20 @@
             }
             var norm = sceneBindZoneNormFromEvent(event);
             // Floor-like free drag — Shift does not axis-lock camera zones.
+            var nextX = SceneKit.clamp01(norm.x);
+            var nextY = SceneKit.clamp01(norm.y);
+            var prev = zone.points[sceneZoneDrag.vertexIndex];
+            // Ignore tiny jitter so a double-tap is not treated as a drag.
+            if (!prev
+                || Math.abs(prev.x - nextX) > 0.003
+                || Math.abs(prev.y - nextY) > 0.003) {
+                sceneZoneDrag.moved = true;
+                // Moving cancels pending double-tap remove.
+                sceneZoneHandleLastTap = null;
+            }
             zone.points[sceneZoneDrag.vertexIndex] = {
-                x: SceneKit.clamp01(norm.x),
-                y: SceneKit.clamp01(norm.y)
+                x: nextX,
+                y: nextY
             };
             sceneBindDirty = true;
             if (sceneZoneDrag.handleEl) {
@@ -15543,8 +15571,14 @@
             if (sceneZoneDrag.pointerId != null && event.pointerId !== sceneZoneDrag.pointerId) {
                 return;
             }
+            var moved = !!sceneZoneDrag.moved;
             sceneZoneDrag = null;
-            paintSceneBindZonesInteractive();
+            // Only rebuild after a real drag — click-only keeps the node so a second tap works.
+            if (moved) {
+                paintSceneBindZonesInteractive();
+            } else {
+                syncSceneBindZoneChrome();
+            }
         }
 
         function updateSceneBindCameraPreview(empty, frame, img, overlays) {
@@ -16396,6 +16430,24 @@
                     handle.addEventListener("pointerdown", function (event) {
                         event.preventDefault();
                         event.stopPropagation();
+                        if (trySceneZoneHandleDoubleTap("zones", index, vertexIndex)) {
+                            var zRemove = sceneDraftZones[index];
+                            if (zRemove
+                                && Array.isArray(zRemove.points)
+                                && zRemove.points.length > 3
+                                && vertexIndex >= 0
+                                && vertexIndex < zRemove.points.length) {
+                                zRemove.points.splice(vertexIndex, 1);
+                                sceneSelectedZoneIndex = index;
+                                sceneSelectedZoneVertex = -1;
+                                sceneZoneDrag = null;
+                                sceneZonesDirty = true;
+                                syncSceneZoneToolButtons();
+                                syncSceneZoneInspector();
+                                paintSceneZonesEditor();
+                            }
+                            return;
+                        }
                         sceneSelectedZoneIndex = index;
                         sceneSelectedZoneVertex = vertexIndex;
                         sceneZoneDrag = {
@@ -16403,7 +16455,8 @@
                             vertexIndex: vertexIndex,
                             pointerId: event.pointerId,
                             handleEl: handle,
-                            polyEl: poly
+                            polyEl: poly,
+                            moved: false
                         };
                         try {
                             handle.setPointerCapture(event.pointerId);
@@ -16411,25 +16464,6 @@
                         }
                         syncSceneZoneToolButtons();
                         syncSceneZoneInspector();
-                    });
-                    handle.addEventListener("dblclick", function (event) {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        var z = sceneDraftZones[index];
-                        if (!z || !Array.isArray(z.points) || z.points.length <= 3) {
-                            return;
-                        }
-                        if (vertexIndex < 0 || vertexIndex >= z.points.length) {
-                            return;
-                        }
-                        z.points.splice(vertexIndex, 1);
-                        sceneSelectedZoneIndex = index;
-                        sceneSelectedZoneVertex = -1;
-                        sceneZoneDrag = null;
-                        sceneZonesDirty = true;
-                        syncSceneZoneToolButtons();
-                        syncSceneZoneInspector();
-                        paintSceneZonesEditor();
                     });
                     svg.appendChild(handle);
                 });
@@ -16464,9 +16498,18 @@
             }
             var norm = sceneZonesNormFromEvent(event);
             // No Shift axis-lock for camera zones (spec).
+            var nextX = SceneKit.clamp01(norm.x);
+            var nextY = SceneKit.clamp01(norm.y);
+            var prev = zone.points[sceneZoneDrag.vertexIndex];
+            if (!prev
+                || Math.abs(prev.x - nextX) > 0.003
+                || Math.abs(prev.y - nextY) > 0.003) {
+                sceneZoneDrag.moved = true;
+                sceneZoneHandleLastTap = null;
+            }
             zone.points[sceneZoneDrag.vertexIndex] = {
-                x: SceneKit.clamp01(norm.x),
-                y: SceneKit.clamp01(norm.y)
+                x: nextX,
+                y: nextY
             };
             sceneZonesDirty = true;
             var handle = sceneZoneDrag.handleEl;
@@ -16489,8 +16532,14 @@
             if (sceneZoneDrag.pointerId != null && event.pointerId !== sceneZoneDrag.pointerId) {
                 return;
             }
+            var moved = !!sceneZoneDrag.moved;
             sceneZoneDrag = null;
-            paintSceneZonesEditor();
+            if (moved) {
+                paintSceneZonesEditor();
+            } else {
+                syncSceneZoneToolButtons();
+                syncSceneZoneInspector();
+            }
         }
 
         function insertSceneZoneVertexAtEvent(zoneIndex, event) {
@@ -19491,15 +19540,48 @@
             return isBinaryStateOn(stateText);
         }
 
+        function runSceneZoneDefaultDeviceCommand(binding, currentlyOn) {
+            if (!binding || binding.automation) {
+                return;
+            }
+            var device = typeof findRegisteredDevice === "function"
+                ? findRegisteredDevice(binding.ieee)
+                : null;
+            if (!device) {
+                return;
+            }
+            // Controllable On/Off actuators: toggle. Binary sensors have no command path.
+            if ((device.type || "") !== "onOff") {
+                return;
+            }
+            var channel = typeof placeBindingChannel === "function"
+                ? placeBindingChannel(binding)
+                : (binding.channel != null ? binding.channel : 1);
+            var nextOn = !currentlyOn;
+            if (typeof setActuatorOptimistic === "function") {
+                setActuatorOptimistic(device.ieee, channel, nextOn);
+            }
+            if (typeof placeSendCommand === "function") {
+                placeSendCommand(device.ieee, nextOn ? "ON" : "OFF", channel);
+            }
+            if (typeof refreshPlaceConsolesIfActive === "function") {
+                refreshPlaceConsolesIfActive();
+            }
+        }
+
         function runSceneZoneClick(zone, isOn) {
             if (!zone) {
                 return;
             }
             var binding = sceneZoneToBinding(zone);
-            var handler = makeBindingClickActionHandler(binding, !!isOn);
+            var currentlyOn = !!isOn;
+            // Current state ON → actionOn replaces OFF command; OFF → actionOff replaces ON.
+            var handler = makeBindingClickActionHandler(binding, currentlyOn);
             if (handler) {
                 handler();
+                return;
             }
+            runSceneZoneDefaultDeviceCommand(binding, currentlyOn);
         }
 
         function mountLiveSceneCell(host, sceneId) {
@@ -21980,6 +22062,14 @@
             if (viewStyleSelect) {
                 viewStyleSelect.value = "default";
             }
+            var clickHint = document.querySelector("#consoleDeviceClickActionSection > .field-hint");
+            if (clickHint) {
+                clickHint.textContent = "Optional automations for binary state (empty = send device command)";
+            }
+            var enableRow = document.querySelector(
+                "#consoleDeviceClickActionSection .console-binding-general-row"
+            );
+            setHidden(enableRow, true);
         }
 
         function refreshConsoleDeviceGaugeFields() {
@@ -22122,10 +22212,88 @@
             renderConsoleDeviceClickActionEditor();
         }
 
+        function zoneStateAutomationNameFromDraft(draft) {
+            if (!draft || typeof draft !== "object") {
+                return "";
+            }
+            if (draft.target === "automation" || draft.automation || draft.name) {
+                return String(draft.name || draft.automation || "");
+            }
+            return "";
+        }
+
+        function makeZoneStateAutomationDraft(name) {
+            var trimmed = String(name || "").trim();
+            if (!trimmed) {
+                return null;
+            }
+            return { target: "automation", name: trimmed, op: "RUN" };
+        }
+
+        function renderZoneStateActionPickers(host) {
+            host.hidden = false;
+            host.innerHTML = "";
+            var automationSelect = document.getElementById("consoleAutomationSelect");
+            var names = [];
+            if (automationSelect) {
+                Array.prototype.forEach.call(automationSelect.options || [], function (opt) {
+                    if (opt && opt.value) {
+                        names.push(opt.value);
+                    }
+                });
+            }
+            if (!names.length && Array.isArray(automationNameListCache)) {
+                names = automationNameListCache.slice();
+            }
+            function renderPicker(which, labelText) {
+                var section = document.createElement("div");
+                section.className = "console-click-action-section-state";
+                var label = document.createElement("p");
+                label.className = "field-hint";
+                label.textContent = labelText;
+                var select = document.createElement("select");
+                select.setAttribute("aria-label", labelText);
+                var noneOpt = document.createElement("option");
+                noneOpt.value = "";
+                noneOpt.textContent = "(none)";
+                select.appendChild(noneOpt);
+                var i;
+                for (i = 0; i < names.length; i++) {
+                    var opt = document.createElement("option");
+                    opt.value = names[i];
+                    opt.textContent = names[i];
+                    select.appendChild(opt);
+                }
+                select.value = zoneStateAutomationNameFromDraft(getConsoleClickActionDraft(which));
+                if (select.value && !names.some(function (n) { return n === select.value; })) {
+                    var orphan = document.createElement("option");
+                    orphan.value = select.value;
+                    orphan.textContent = select.value;
+                    select.appendChild(orphan);
+                }
+                select.onchange = function () {
+                    setConsoleClickActionDraft(which, makeZoneStateAutomationDraft(select.value));
+                };
+                section.appendChild(label);
+                section.appendChild(select);
+                host.appendChild(section);
+            }
+            // OFF state action replaces the ON command; ON state action replaces OFF.
+            renderPicker("false", "Action for OFF");
+            renderPicker("true", "Action for ON");
+        }
+
         function renderConsoleDeviceClickActionEditor() {
             var host = document.getElementById("consoleDeviceClickActionEditor");
             var enableInput = document.getElementById("consoleDeviceClickActionEnable");
             if (!host) {
+                return;
+            }
+            if (consoleDeviceDialogSceneZone) {
+                if (enableInput) {
+                    enableInput.checked = false;
+                }
+                renderZoneStateActionPickers(host);
                 return;
             }
             if (enableInput) {
@@ -22707,6 +22875,33 @@
                     consoleDeviceClickActionEnabled = false;
                     consoleDeviceClickActionFalseDraft = null;
                     consoleDeviceClickActionTrueDraft = null;
+                } else if (consoleDeviceDialogSceneZone) {
+                    // Optional Action for ON/OFF — keep null when empty (device command fallback).
+                    consoleDeviceClickActionEnabled = false;
+                    consoleDeviceClickActionFalseDraft = loadedFalse
+                        || (loadedLegacy ? cloneAutomationActionObject(loadedLegacy) : null)
+                        || null;
+                    consoleDeviceClickActionTrueDraft = loadedTrue
+                        || (loadedLegacy ? cloneAutomationActionObject(loadedLegacy) : null)
+                        || null;
+                    if (consoleDeviceClickActionFalseDraft
+                        && zoneStateAutomationNameFromDraft(consoleDeviceClickActionFalseDraft) === ""
+                        && consoleDeviceClickActionFalseDraft.target !== "automation") {
+                        consoleDeviceClickActionFalseDraft = makeZoneStateAutomationDraft(
+                            consoleDeviceClickActionFalseDraft.name
+                            || consoleDeviceClickActionFalseDraft.automation
+                            || ""
+                        );
+                    }
+                    if (consoleDeviceClickActionTrueDraft
+                        && zoneStateAutomationNameFromDraft(consoleDeviceClickActionTrueDraft) === ""
+                        && consoleDeviceClickActionTrueDraft.target !== "automation") {
+                        consoleDeviceClickActionTrueDraft = makeZoneStateAutomationDraft(
+                            consoleDeviceClickActionTrueDraft.name
+                            || consoleDeviceClickActionTrueDraft.automation
+                            || ""
+                        );
+                    }
                 } else if (loadedFalse || loadedTrue || loadedLegacy) {
                     consoleDeviceClickActionEnabled = true;
                     consoleDeviceClickActionFalseDraft = loadedFalse
@@ -22719,6 +22914,19 @@
                     consoleDeviceClickActionEnabled = false;
                     consoleDeviceClickActionFalseDraft = null;
                     consoleDeviceClickActionTrueDraft = null;
+                }
+                if (!consoleDeviceDialogSceneZone) {
+                    var clickHintRestore = document.querySelector(
+                        "#consoleDeviceClickActionSection > .field-hint"
+                    );
+                    if (clickHintRestore) {
+                        clickHintRestore.textContent =
+                            "Click actions (one icon; OFF and ON may each run a different action)";
+                    }
+                    var enableRowRestore = document.querySelector(
+                        "#consoleDeviceClickActionSection .console-binding-general-row"
+                    );
+                    setHidden(enableRowRestore, false);
                 }
                 renderConsoleDeviceClickActionEditor();
                 var dialogTitle = document.querySelector("#consoleDeviceDialog .upload-title");
@@ -22900,6 +23108,18 @@
 
 
         function applyClickActionsToBindingBody(body) {
+            // Zone bind: optional Action for ON/OFF automations (empty = device command).
+            if (consoleDeviceDialogSceneZone) {
+                if (consoleDeviceClickActionFalseDraft) {
+                    body.clickActionFalse = cloneAutomationActionObject(consoleDeviceClickActionFalseDraft)
+                        || consoleDeviceClickActionFalseDraft;
+                }
+                if (consoleDeviceClickActionTrueDraft) {
+                    body.clickActionTrue = cloneAutomationActionObject(consoleDeviceClickActionTrueDraft)
+                        || consoleDeviceClickActionTrueDraft;
+                }
+                return body;
+            }
             if (!consoleDeviceClickActionEnabled) {
                 return body;
             }

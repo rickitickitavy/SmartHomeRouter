@@ -4646,15 +4646,48 @@
             return isBinaryStateOn(bindingResolvedState(device, binding));
         }
 
+        function runSceneZoneDefaultDeviceCommand(binding, currentlyOn) {
+            if (!binding || binding.automation) {
+                return;
+            }
+            var device = typeof findRegisteredDevice === "function"
+                ? findRegisteredDevice(binding.ieee)
+                : null;
+            if (!device) {
+                return;
+            }
+            // Controllable On/Off actuators: toggle. Binary sensors have no command path.
+            if ((device.type || "") !== "onOff") {
+                return;
+            }
+            var channel = typeof bindingChannel === "function"
+                ? bindingChannel(binding)
+                : (binding.channel != null ? binding.channel : 1);
+            var nextOn = !currentlyOn;
+            if (typeof setActuatorOptimistic === "function") {
+                setActuatorOptimistic(device.ieee, channel, nextOn);
+            }
+            if (typeof sendDeviceCommand === "function") {
+                sendDeviceCommand(device.ieee, nextOn ? "ON" : "OFF", channel);
+            }
+            if (typeof refreshConsoleControls === "function") {
+                refreshConsoleControls();
+            }
+        }
+
         function runSceneZoneClick(zone, isOn) {
             if (!zone) {
                 return;
             }
             var binding = sceneZoneToBinding(zone);
-            var handler = makeBindingClickActionHandler(binding, !!isOn);
+            var currentlyOn = !!isOn;
+            // Current state ON → actionOn replaces OFF command; OFF → actionOff replaces ON.
+            var handler = makeBindingClickActionHandler(binding, currentlyOn);
             if (handler) {
                 handler();
+                return;
             }
+            runSceneZoneDefaultDeviceCommand(binding, currentlyOn);
         }
 
         function buildBindingRow(binding, layoutOptions) {
