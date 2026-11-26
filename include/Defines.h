@@ -52,12 +52,12 @@
 
 // One host version string per SoC: bump the shared MAJOR.MINOR.BUILD in both.
 // Prefix is only S3- or P4- (no separate CORE macro).
-#define FIRMWARE_VERSION_HOST "S3-4.6.36"
+#define FIRMWARE_VERSION_HOST "S3-4.6.37"
 #if defined(BOARD_HOST_P4)
 #undef FIRMWARE_VERSION_HOST
-#define FIRMWARE_VERSION_HOST "P4-4.6.36"
+#define FIRMWARE_VERSION_HOST "P4-4.6.37"
 #endif
-#define FIRMWARE_VERSION_SLAVE "4.2.18"
+#define FIRMWARE_VERSION_SLAVE "4.2.19"
 
 // USB CDC / UART0 console (S3 host, P4 host Serial+Serial0, C6 slave).
 #define SERIAL_CONSOLE_BAUD 921600

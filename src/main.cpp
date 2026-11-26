@@ -791,6 +791,7 @@ static void pumpHostZigbeeBornIntervalCollect() {
     requestHostZigbeeStatusCollect();
 }
 
+#if defined(BOARD_ROLE_HOST)
 static void onMqttBrokerLocalMessage(const char *topic, const char *payload) {
     if (mqttClient == nullptr || topic == nullptr) {
         return;
@@ -905,6 +906,7 @@ static void onMqttLogicalMessage(const char *topic, const char *payload) {
     }
     applyRegisteredDeviceCommand(entry, payload, topicEndpoint);
 }
+#endif
 
 static void onLightState(const char *message, const uint8_t ieee[8], uint8_t endpoint, uint16_t shortAddr) {
     (void)shortAddr;
