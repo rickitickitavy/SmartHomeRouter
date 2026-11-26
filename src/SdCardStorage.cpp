@@ -33,7 +33,18 @@ void SdCardStorage::clearHistorySnapshotSize() {
     cachedHistorySnapshotKiB = 0;
 }
 
+void SdCardStorage::setUserDataBytes(uint64_t bytes) {
+    cachedUserDataKiB = (uint32_t)((bytes + 512ULL) / 1024ULL);
+}
+
+void SdCardStorage::clearUserDataSize() {
+    cachedUserDataKiB = 0;
+}
+
 #if !(defined(BOARD_ROLE_HOST) && defined(BOARD_HOST_P4))
+
+void SdCardStorage::refreshUserDataCache() {
+}
 
 bool SdCardStorage::beginBootProbe() {
     cardUsable = false;
@@ -41,6 +52,7 @@ bool SdCardStorage::beginBootProbe() {
     cachedCapacityMb = 0;
     cachedFreeMb = 0;
     clearHistorySnapshotSize();
+    clearUserDataSize();
     mounted = false;
     return false;
 }
@@ -102,6 +114,27 @@ void SdCardStorage::refreshSizeCache() {
     const uint64_t freeBytes = totalBytes > usedBytes ? (totalBytes - usedBytes) : 0;
     cachedCapacityMb = (uint32_t)((totalBytes + (1024ULL * 1024ULL / 2ULL)) / (1024ULL * 1024ULL));
     cachedFreeMb = (uint32_t)((freeBytes + (1024ULL * 1024ULL / 2ULL)) / (1024ULL * 1024ULL));
+}
+
+void SdCardStorage::refreshUserDataCache() {
+    if (!mounted) {
+        return;
+    }
+    uint64_t totalBytes = 0;
+    if (SD_MMC.exists(SCENE_CUSTOM_DIR)) {
+        File dir = SD_MMC.open(SCENE_CUSTOM_DIR);
+        if (dir && dir.isDirectory()) {
+            File child = dir.openNextFile();
+            while (child) {
+                if (!child.isDirectory()) {
+                    totalBytes += (uint64_t)child.size();
+                }
+                child.close();
+                child = dir.openNextFile();
+            }
+        }
+    }
+    setUserDataBytes(totalBytes);
 }
 
 bool SdCardStorage::mountInternal(bool formatIfNeeded) {
@@ -166,6 +199,7 @@ bool SdCardStorage::beginBootProbe() {
     cachedCapacityMb = 0;
     cachedFreeMb = 0;
     clearHistorySnapshotSize();
+    clearUserDataSize();
     LOGGER.info("SD boot probe start");
     ensurePowerOn();
     if (!configurePins()) {
@@ -176,6 +210,7 @@ bool SdCardStorage::beginBootProbe() {
     if (mountInternal(false)) {
         cardUsable = true;
         cardStatus = SdCardStatusReady;
+        refreshUserDataCache();
         LOGGER.info("SD boot probe ok (pre-formatted)");
         unmount();
         return true;
@@ -185,6 +220,7 @@ bool SdCardStorage::beginBootProbe() {
     if (mountInternal(true)) {
         cardUsable = true;
         cardStatus = SdCardStatusReady;
+        refreshUserDataCache();
         LOGGER.info("SD boot probe ok after format");
         unmount();
         return true;
@@ -196,6 +232,7 @@ bool SdCardStorage::beginBootProbe() {
     cachedCapacityMb = 0;
     cachedFreeMb = 0;
     clearHistorySnapshotSize();
+    clearUserDataSize();
     LOGGER.info("SD absent or unusable; history stays on LittleFS");
     return false;
 }

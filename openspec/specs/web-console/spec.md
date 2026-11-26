@@ -2297,15 +2297,19 @@ Status SHALL show an **Internal database** group with entries count, pages count
 - **THEN** Internal database does not show time before save or on-SD size
 
 ### Requirement: Status SD card group
-On the P4 host, Status SHALL show an **SD card** group with **status**, **capacity Mb**, and **free Mb** from the gateway status API. Operator Status and simple-user Status MUST both show this group when the viewer can open Status on P4. Non-P4 builds SHALL omit the group.
+On the P4 host, Status SHALL show an **SD card** group with **status**, **capacity Mb**, **free Mb**, and **user data** (kibibytes of operator-uploaded SD content such as custom scene backgrounds, from the gateway status API cache). Operator Status and simple-user Status MUST both show this group when the viewer can open Status on P4. Non-P4 builds SHALL omit the group. Status MUST NOT remount SD solely to refresh user data.
 
 #### Scenario: Available card figures
 - **WHEN** Status is open on P4 and a usable SD card was found (even if currently unmounted between saves) with known capacity and free space
-- **THEN** SD card shows status plus capacity Mb and free Mb
+- **THEN** SD card shows status, capacity Mb, free Mb, and user data in kB
 
 #### Scenario: Absent card
 - **WHEN** Status is open on P4 and no usable SD was found
 - **THEN** SD card shows an absent/error status and does not claim capacity as if a card were present
+
+#### Scenario: User data after custom background upload
+- **WHEN** a Custom background image was stored on SD and Status is polled without remounting
+- **THEN** user data reflects the cached size of that SD user content in kB
 
 ### Requirement: Hardware edits born interval
 System → Hardware SHALL show and allow saving **BORN_INTERVAL_MIN** (minutes), using the same clamp rules as today (5–120, default 20). The control SHALL persist the existing `bornIntervalMin` setting (shared with MQTT born publish cadence when a topic is set). Only `isAdmin` SHALL edit it. GET/POST hardware (or the Hardware save path that already persists related gateway fields) SHALL round-trip this value; settings export/restore SHALL keep including it.
@@ -2488,7 +2492,7 @@ Place view-mode and the simple-user control page MUST both render composite scen
 - **THEN** bake, pin positions, and click behavior match between those surfaces
 
 ### Requirement: Scene kind and camera selectors
-On the Scenes editor, a fixed dropdown for scene kind (**Camera** | **Plan**) MUST appear before the **Edit scene** control. **Edit scene** MUST be visible only when kind is **Plan** (geometry bake editor) and MUST be hidden when kind is **Camera**. When kind is **Camera**, a fixed dropdown of registered cameras MUST appear after the kind control (where Edit scene would be for Plan). Changing kind MUST switch the authoring model (Plan → bake/pins; Camera → camera + zones on the bind preview) without inventing Plan geometry tools on Camera scenes.
+On the Scenes editor, a fixed dropdown for scene kind (**Plan** | **Camera** | **Custom background**) MUST appear before the **Edit scene** control. The kind selector MUST be wide enough for the Custom background label. **Edit scene** MUST be visible only when kind is **Plan** and MUST be hidden for **Camera** and **Custom background**. **Upload image** MUST be visible only for **Custom background**. When kind is **Camera**, a fixed dropdown of registered cameras MUST appear after the kind control. Changing kind MUST switch the authoring model (Plan → bake/pins; Camera → camera + zones; Custom background → uploaded image + pins) without inventing Plan geometry tools on Camera or Custom scenes. Selecting **Custom background** when no usable SD card is present MUST show a warning that an SD card must be installed and MUST restore the previous kind value.
 
 #### Scenario: Kind before Edit scene
 - **WHEN** the operator views the scene editor chrome with kind Plan
@@ -2505,6 +2509,37 @@ On the Scenes editor, a fixed dropdown for scene kind (**Camera** | **Plan**) MU
 #### Scenario: No camera picker for Plan
 - **WHEN** kind is Plan
 - **THEN** the camera dropdown is not shown
+
+#### Scenario: Custom background option and wider kind select
+- **WHEN** the operator opens the scene editor kind dropdown
+- **THEN** Custom background is listed and the kind control is about twice the prior width
+
+#### Scenario: Upload image only for Custom background
+- **WHEN** kind is Custom background
+- **THEN** Upload image is shown and Edit scene is hidden
+
+#### Scenario: Upload image hidden for Plan
+- **WHEN** kind is Plan
+- **THEN** Upload image is not shown
+
+#### Scenario: Custom background blocked without SD
+- **WHEN** the operator selects Custom background and no usable SD card is present
+- **THEN** a warning states that an SD card must be installed and the kind selector returns to the previous value
+
+### Requirement: Full backup includes custom background images
+Full backup MUST include each Custom background scene’s stored image bytes from SD in the ZIP (alongside Plan bake JPEGs from LittleFS). Ordinary Export settings MUST continue to omit image bytes and only carry scene metadata (including kind and bakePath/hasBake). Full restore MUST wipe prior custom background files on SD together with Plan bake wipe, then restore custom images from the archive when SD is usable.
+
+#### Scenario: Full backup packs custom image
+- **WHEN** the operator runs Full backup and a Custom background scene has an uploaded image on SD
+- **THEN** that image is present as a member in the downloaded ZIP
+
+#### Scenario: Full restore restores custom image
+- **WHEN** Full restore applies an archive that contains a custom background image member and SD is usable
+- **THEN** after apply/reboot that Custom background scene serves the restored image
+
+#### Scenario: Settings export omits custom image bytes
+- **WHEN** the operator uses ordinary Export settings
+- **THEN** the JSON does not embed custom background image bytes
 
 ### Requirement: Camera scene live view on Place and simple-user
 Place and the simple-user page MUST render Camera scenes with the refreshing camera JPEG and active zones (hit-tested polygons). Zone clicks MUST use console-equivalent current-state action handling. Both pages MUST stay behaviorally synchronized for Camera scene display and click.

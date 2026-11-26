@@ -1,8 +1,10 @@
 #include "SceneStore.h"
 #include "JsonField.h"
 #include "Logger.h"
+#include "SdCardStorage.h"
 
 #include <LittleFS.h>
+#include <SD_MMC.h>
 #include <esp_heap_caps.h>
 #include <esp_random.h>
 #include <stdio.h>
@@ -114,10 +116,124 @@ SceneStore::SceneStore()
     : head(nullptr),
       storedCount(0),
       persistEnabled(false),
-      persistPending(false) {}
+      persistPending(false),
+      sdBackend(nullptr) {}
 
 SceneStore::~SceneStore() {
     clearAll();
+}
+
+void SceneStore::setSdBackend(SdCardStorage *sdStorage) {
+    sdBackend = sdStorage;
+}
+
+bool SceneStore::beginSdImageSession() {
+    if (sdBackend == nullptr || !sdBackend->usable()) {
+        return false;
+    }
+    if (sdBackend->isMounted()) {
+        return true;
+    }
+    return sdBackend->remount();
+}
+
+void SceneStore::endSdImageSession() {
+    if (sdBackend == nullptr) {
+        return;
+    }
+    if (sdBackend->isMounted()) {
+        sdBackend->refreshUserDataCache();
+        sdBackend->refreshSizeCache();
+        sdBackend->unmount();
+    }
+}
+
+bool SceneStore::isCustomKind(const SceneRecord *scene) {
+    return scene != nullptr && strcasecmp(scene->kind, "custom") == 0;
+}
+
+bool SceneStore::isCameraKind(const SceneRecord *scene) {
+    return scene != nullptr && strcasecmp(scene->kind, "camera") == 0;
+}
+
+void SceneStore::defaultBakePathForScene(SceneRecord *scene) {
+    if (scene == nullptr || scene->bakePath[0] != '\0' || scene->id[0] == '\0') {
+        return;
+    }
+    if (isCustomKind(scene)) {
+        snprintf(scene->bakePath, sizeof(scene->bakePath), "%s/%s.jpg", SCENE_CUSTOM_DIR, scene->id);
+    } else {
+        snprintf(scene->bakePath, sizeof(scene->bakePath), "%s/%s.jpg", SCENE_BAKES_DIR, scene->id);
+    }
+}
+
+bool SceneStore::detectImageFormat(
+    const uint8_t *data,
+    size_t length,
+    const char **extOut,
+    const char **mimeOut
+) const {
+    if (data == nullptr || length < 3) {
+        return false;
+    }
+    if (data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) {
+        if (extOut != nullptr) {
+            *extOut = "jpg";
+        }
+        if (mimeOut != nullptr) {
+            *mimeOut = "image/jpeg";
+        }
+        return true;
+    }
+    if (length >= 8
+        && data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47
+        && data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A) {
+        if (extOut != nullptr) {
+            *extOut = "png";
+        }
+        if (mimeOut != nullptr) {
+            *mimeOut = "image/png";
+        }
+        return true;
+    }
+    return false;
+}
+
+void SceneStore::ensureCustomDirMounted() const {
+    if (!SD_MMC.exists(SCENE_CUSTOM_DIR)) {
+        SD_MMC.mkdir(SCENE_CUSTOM_DIR);
+    }
+}
+
+void SceneStore::wipeCustomImagesOnSd() const {
+    if (sdBackend == nullptr || !sdBackend->usable()) {
+        return;
+    }
+    if (!sdBackend->remount()) {
+        return;
+    }
+    if (SD_MMC.exists(SCENE_CUSTOM_DIR)) {
+        File dir = SD_MMC.open(SCENE_CUSTOM_DIR);
+        if (dir && dir.isDirectory()) {
+            File child = dir.openNextFile();
+            while (child) {
+                String childName = child.name();
+                child.close();
+                String childPath = String(SCENE_CUSTOM_DIR) + "/";
+                // SD_MMC may return bare name or full path.
+                if (childName.indexOf('/') >= 0) {
+                    childPath = childName;
+                } else {
+                    childPath += childName;
+                }
+                SD_MMC.remove(childPath);
+                child = dir.openNextFile();
+            }
+        }
+    }
+    sdBackend->refreshUserDataCache();
+    sdBackend->refreshSizeCache();
+    sdBackend->unmount();
 }
 
 bool SceneStore::psramAllowsAllocation(size_t bytes) {
@@ -175,6 +291,7 @@ void SceneStore::wipeAllIncludingBakes() {
             }
         }
     }
+    wipeCustomImagesOnSd();
     clearAll();
     requestPersist();
 }
@@ -220,6 +337,8 @@ const char *SceneStore::writeResultText(SceneWriteResult result) {
             return "parse error";
         case SceneWriteBakeFailed:
             return "bake failed";
+        case SceneWriteSdUnavailable:
+            return "SD card unavailable";
         default:
             return "error";
     }
@@ -377,6 +496,8 @@ SceneWriteResult SceneStore::parseOneObject(const char *objectJson, SceneRecord 
     copyBounded(scene->name, sizeof(scene->name), nameText.c_str());
     if (kindText.length() > 0 && kindText.equalsIgnoreCase("camera")) {
         copyBounded(scene->kind, sizeof(scene->kind), "camera");
+    } else if (kindText.length() > 0 && kindText.equalsIgnoreCase("custom")) {
+        copyBounded(scene->kind, sizeof(scene->kind), "custom");
     } else {
         copyBounded(scene->kind, sizeof(scene->kind), "plan");
     }
@@ -533,8 +654,29 @@ bool SceneStore::loadFromFile() {
     return true;
 }
 
+bool SceneStore::sceneHasBakeImage(const SceneRecord *scene) const {
+    if (scene == nullptr || scene->bakePath[0] == '\0') {
+        return false;
+    }
+    if (isCustomKind(scene)) {
+        if (sdBackend == nullptr || !sdBackend->usable()) {
+            return false;
+        }
+        const bool alreadyMounted = sdBackend->isMounted();
+        if (!alreadyMounted && !sdBackend->remount()) {
+            return false;
+        }
+        const bool exists = SD_MMC.exists(scene->bakePath);
+        if (!alreadyMounted) {
+            sdBackend->unmount();
+        }
+        return exists;
+    }
+    return LittleFS.exists(scene->bakePath);
+}
+
 void SceneStore::appendSceneFull(PsramJsonBuffer &json, const SceneRecord *scene) const {
-    const bool hasBake = scene->bakePath[0] != '\0' && LittleFS.exists(scene->bakePath);
+    const bool hasBake = sceneHasBakeImage(scene);
     const char *kindText = scene->kind[0] != '\0' ? scene->kind : "plan";
     int refreshInterval = scene->refreshInterval;
     if (refreshInterval < SCENE_REFRESH_INTERVAL_MIN
@@ -565,7 +707,7 @@ void SceneStore::appendSceneFull(PsramJsonBuffer &json, const SceneRecord *scene
 }
 
 void SceneStore::appendSceneListItem(PsramJsonBuffer &json, const SceneRecord *scene) const {
-    const bool hasBake = scene->bakePath[0] != '\0' && LittleFS.exists(scene->bakePath);
+    const bool hasBake = sceneHasBakeImage(scene);
     const char *kindText = scene->kind[0] != '\0' ? scene->kind : "plan";
     json += "{\"id\":\"";
     appendJsonEscaped(json, scene->id, SCENE_ID_BUF);
@@ -586,12 +728,19 @@ PsramJsonBuffer SceneStore::listJson() const {
     PsramJsonBuffer json;
     json += "[";
     bool firstItem = true;
+    bool mountedForList = false;
+    if (sdBackend != nullptr && sdBackend->usable() && !sdBackend->isMounted()) {
+        mountedForList = sdBackend->remount();
+    }
     for (const SceneRecord *scene = head; scene != nullptr; scene = scene->next) {
         if (!firstItem) {
             json += ",";
         }
         firstItem = false;
         appendSceneListItem(json, scene);
+    }
+    if (mountedForList) {
+        sdBackend->unmount();
     }
     json += "]";
     return json;
@@ -610,12 +759,19 @@ PsramJsonBuffer SceneStore::exportJson() const {
     PsramJsonBuffer json;
     json += "[";
     bool firstItem = true;
+    bool mountedForExport = false;
+    if (sdBackend != nullptr && sdBackend->usable() && !sdBackend->isMounted()) {
+        mountedForExport = sdBackend->remount();
+    }
     for (const SceneRecord *scene = head; scene != nullptr; scene = scene->next) {
         if (!firstItem) {
             json += ",";
         }
         firstItem = false;
         appendSceneFull(json, scene);
+    }
+    if (mountedForExport) {
+        sdBackend->unmount();
     }
     json += "]";
     return json;
@@ -642,9 +798,7 @@ SceneWriteResult SceneStore::createFromJson(const char *json, SceneRecord **crea
         freeScene(scene);
         return SceneWriteDuplicateId;
     }
-    if (scene->bakePath[0] == '\0') {
-        snprintf(scene->bakePath, sizeof(scene->bakePath), "%s/%s.jpg", SCENE_BAKES_DIR, scene->id);
-    }
+    defaultBakePathForScene(scene);
     scene->next = head;
     head = scene;
     storedCount++;
@@ -675,10 +829,11 @@ SceneWriteResult SceneStore::replaceFromJson(const char *sceneId, const char *js
         return SceneWriteDuplicateId;
     }
     if (replacement->bakePath[0] == '\0') {
-        if (existing->bakePath[0] != '\0') {
+        if (existing->bakePath[0] != '\0'
+            && strcasecmp(existing->kind, replacement->kind) == 0) {
             copyBounded(replacement->bakePath, sizeof(replacement->bakePath), existing->bakePath);
         } else {
-            snprintf(replacement->bakePath, sizeof(replacement->bakePath), "%s/%s.jpg", SCENE_BAKES_DIR, replacement->id);
+            defaultBakePathForScene(replacement);
         }
     }
     free(existing->modelJson);
@@ -703,6 +858,21 @@ SceneWriteResult SceneStore::replaceFromJson(const char *sceneId, const char *js
 
 void SceneStore::deleteBakeFile(const SceneRecord *scene) const {
     if (scene == nullptr || scene->bakePath[0] == '\0') {
+        return;
+    }
+    if (isCustomKind(scene)) {
+        if (sdBackend == nullptr || !sdBackend->usable()) {
+            return;
+        }
+        if (!sdBackend->remount()) {
+            return;
+        }
+        if (SD_MMC.exists(scene->bakePath)) {
+            SD_MMC.remove(scene->bakePath);
+        }
+        sdBackend->refreshUserDataCache();
+        sdBackend->refreshSizeCache();
+        sdBackend->unmount();
         return;
     }
     if (LittleFS.exists(scene->bakePath)) {
@@ -823,9 +993,7 @@ SceneWriteResult SceneStore::importOnlyNewFromJson(
             }
             return SceneWriteBadId;
         }
-        if (scene->bakePath[0] == '\0') {
-            snprintf(scene->bakePath, sizeof(scene->bakePath), "%s/%s.jpg", SCENE_BAKES_DIR, scene->id);
-        }
+        defaultBakePathForScene(scene);
         scene->next = head;
         head = scene;
         storedCount++;
@@ -844,10 +1012,69 @@ SceneWriteResult SceneStore::importOnlyNewFromJson(
     return SceneWriteOk;
 }
 
+SceneWriteResult SceneStore::writeCustomBackground(
+    SceneRecord *scene,
+    const uint8_t *data,
+    size_t length
+) {
+    if (scene == nullptr) {
+        return SceneWriteNotFound;
+    }
+    if (data == nullptr || length == 0) {
+        return SceneWriteBakeFailed;
+    }
+    if (length > SCENE_CUSTOM_IMAGE_MAX_BYTES) {
+        return SceneWriteBakeFailed;
+    }
+    const char *ext = nullptr;
+    const char *mime = nullptr;
+    if (!detectImageFormat(data, length, &ext, &mime)) {
+        return SceneWriteValidation;
+    }
+    (void)mime;
+    if (sdBackend == nullptr || !sdBackend->usable()) {
+        return SceneWriteSdUnavailable;
+    }
+    if (!sdBackend->remount()) {
+        return SceneWriteSdUnavailable;
+    }
+    ensureCustomDirMounted();
+    char newPath[SCENE_BAKE_PATH_MAX];
+    snprintf(newPath, sizeof(newPath), "%s/%s.%s", SCENE_CUSTOM_DIR, scene->id, ext);
+    // Remove previous custom image if extension changed.
+    if (scene->bakePath[0] != '\0'
+        && strcmp(scene->bakePath, newPath) != 0
+        && SD_MMC.exists(scene->bakePath)) {
+        SD_MMC.remove(scene->bakePath);
+    }
+    File file = SD_MMC.open(newPath, "w");
+    if (!file) {
+        sdBackend->unmount();
+        return SceneWriteBakeFailed;
+    }
+    const size_t written = file.write(data, length);
+    file.close();
+    if (written != length) {
+        SD_MMC.remove(newPath);
+        sdBackend->refreshSizeCache();
+        sdBackend->unmount();
+        return SceneWriteBakeFailed;
+    }
+    copyBounded(scene->bakePath, sizeof(scene->bakePath), newPath);
+    sdBackend->refreshUserDataCache();
+    sdBackend->refreshSizeCache();
+    sdBackend->unmount();
+    requestPersist();
+    return SceneWriteOk;
+}
+
 SceneWriteResult SceneStore::writeBakeJpeg(const char *sceneId, const uint8_t *data, size_t length) {
     SceneRecord *scene = findById(sceneId);
     if (scene == nullptr) {
         return SceneWriteNotFound;
+    }
+    if (isCustomKind(scene)) {
+        return writeCustomBackground(scene, data, length);
     }
     if (data == nullptr || length == 0 || length > 512 * 1024) {
         return SceneWriteBakeFailed;
@@ -871,34 +1098,88 @@ SceneWriteResult SceneStore::writeBakeJpeg(const char *sceneId, const uint8_t *d
 }
 
 bool SceneStore::readBakeJpeg(const char *sceneId, uint8_t **dataOut, size_t *lengthOut) const {
+    return readBakeImage(sceneId, dataOut, lengthOut, nullptr);
+}
+
+bool SceneStore::readBakeImage(
+    const char *sceneId,
+    uint8_t **dataOut,
+    size_t *lengthOut,
+    const char **contentTypeOut
+) const {
     if (dataOut == nullptr || lengthOut == nullptr) {
         return false;
     }
     *dataOut = nullptr;
     *lengthOut = 0;
+    if (contentTypeOut != nullptr) {
+        *contentTypeOut = "image/jpeg";
+    }
     const SceneRecord *scene = findById(sceneId);
-    if (scene == nullptr || scene->bakePath[0] == '\0' || !LittleFS.exists(scene->bakePath)) {
+    if (scene == nullptr || scene->bakePath[0] == '\0') {
         return false;
     }
-    File file = LittleFS.open(scene->bakePath, "r");
+    File file;
+    size_t maxBytes = 512 * 1024;
+    bool mountedSd = false;
+    if (isCustomKind(scene)) {
+        maxBytes = SCENE_CUSTOM_IMAGE_MAX_BYTES;
+        if (sdBackend == nullptr || !sdBackend->usable() || !sdBackend->remount()) {
+            return false;
+        }
+        mountedSd = true;
+        if (!SD_MMC.exists(scene->bakePath)) {
+            sdBackend->unmount();
+            return false;
+        }
+        file = SD_MMC.open(scene->bakePath, "r");
+    } else {
+        if (!LittleFS.exists(scene->bakePath)) {
+            return false;
+        }
+        file = LittleFS.open(scene->bakePath, "r");
+    }
     if (!file) {
+        if (mountedSd) {
+            sdBackend->unmount();
+        }
         return false;
     }
     const size_t length = file.size();
-    if (length == 0 || length > 512 * 1024) {
+    if (length == 0 || length > maxBytes) {
         file.close();
+        if (mountedSd) {
+            sdBackend->unmount();
+        }
         return false;
     }
     uint8_t *buffer = (uint8_t *)allocatePsram(length);
     if (buffer == nullptr) {
         file.close();
+        if (mountedSd) {
+            sdBackend->unmount();
+        }
         return false;
     }
     const size_t readCount = file.read(buffer, length);
     file.close();
+    if (mountedSd) {
+        sdBackend->unmount();
+    }
     if (readCount != length) {
         free(buffer);
         return false;
+    }
+    if (contentTypeOut != nullptr) {
+        const char *ext = nullptr;
+        const char *mime = "image/jpeg";
+        if (detectImageFormat(buffer, length, &ext, &mime)) {
+            *contentTypeOut = mime;
+        } else if (isCustomKind(scene) && strstr(scene->bakePath, ".png") != nullptr) {
+            *contentTypeOut = "image/png";
+        } else {
+            *contentTypeOut = "image/jpeg";
+        }
     }
     *dataOut = buffer;
     *lengthOut = length;

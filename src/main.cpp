@@ -1478,6 +1478,12 @@ static String hostGatewayStatusJson() {
     } else {
         json += "null";
     }
+    json += ",\"sdUserDataKb\":";
+    if (sdCardStorage.status() == SdCardStatusReady) {
+        json += String((unsigned long)sdCardStorage.userDataKiB());
+    } else {
+        json += "null";
+    }
 #endif
     {
         const size_t fsTotal = LittleFS.totalBytes();
@@ -2610,6 +2616,7 @@ static void setupHost() {
     cameraStore = new CameraStore();
     cameraStore->begin(loadOperatorFeatureStores);
     sceneStore = new SceneStore();
+    sceneStore->setSdBackend(&sdCardStorage);
     sceneStore->begin(loadOperatorFeatureStores);
     routerInterconnect = new RouterInterconnect(interconnectStore);
     routerInterconnect->setLocalZigbeeChannelProvider([]() -> uint8_t {

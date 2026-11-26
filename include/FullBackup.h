@@ -71,6 +71,7 @@ private:
     const SceneRecord *bakeScene = nullptr;
     File bakeFile;
     bool bakeFileOpen = false;
+    bool bakeFileFromSd = false;
     char bakeMemberPath[96];
 
     const uint8_t *bodyBytes = nullptr;

@@ -6,6 +6,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+class SdCardStorage;
+
 // Scene registry (host). Records and large JSON blobs live in PSRAM when available.
 
 struct SceneRecord {
@@ -21,7 +23,7 @@ struct SceneRecord {
     SceneRecord *next;
 };
 
-enum SceneWriteResult {
+    enum SceneWriteResult {
     SceneWriteOk = 0,
     SceneWriteNotFound,
     SceneWriteFull,
@@ -31,7 +33,8 @@ enum SceneWriteResult {
     SceneWriteValidation,
     SceneWriteOutOfMemory,
     SceneWriteParseError,
-    SceneWriteBakeFailed
+    SceneWriteBakeFailed,
+    SceneWriteSdUnavailable
 };
 
 class SceneStore {
@@ -43,6 +46,7 @@ public:
     SceneStore &operator=(const SceneStore &) = delete;
 
     bool begin(bool persistToLittleFs);
+    void setSdBackend(SdCardStorage *sdStorage);
     void requestPersist();
     void persistIfDue();
 
@@ -66,7 +70,21 @@ public:
 
     SceneWriteResult writeBakeJpeg(const char *sceneId, const uint8_t *data, size_t length);
     bool readBakeJpeg(const char *sceneId, uint8_t **dataOut, size_t *lengthOut) const;
+    // Reads bake/custom image into PSRAM; sets contentTypeOut when non-null ("image/jpeg" or "image/png").
+    bool readBakeImage(
+        const char *sceneId,
+        uint8_t **dataOut,
+        size_t *lengthOut,
+        const char **contentTypeOut = nullptr
+    ) const;
     void deleteBakeFile(const SceneRecord *scene) const;
+    bool sceneHasBakeImage(const SceneRecord *scene) const;
+    static bool isCustomKind(const SceneRecord *scene);
+    static bool isCameraKind(const SceneRecord *scene);
+    static void defaultBakePathForScene(SceneRecord *scene);
+    // Mount SD for streaming custom images (Full backup). Pair with endSdImageSession.
+    bool beginSdImageSession();
+    void endSdImageSession();
 
     PsramJsonBuffer listJson() const;
     PsramJsonBuffer sceneFullJson(const SceneRecord *scene) const;
@@ -74,7 +92,7 @@ public:
 
     static const char *writeResultText(SceneWriteResult result);
     static bool isIdSafe(const char *sceneId);
-    // Full restore wipe: delete every bake JPEG then clear scene rows.
+    // Full restore wipe: delete every bake JPEG / custom SD image then clear scene rows.
     void wipeAllIncludingBakes();
 
     static bool psramAllowsAllocation(size_t bytes);
@@ -87,6 +105,7 @@ private:
     int storedCount;
     bool persistEnabled;
     bool persistPending;
+    SdCardStorage *sdBackend;
 
     bool saveToFile() const;
     bool loadFromFile();
@@ -98,4 +117,8 @@ private:
     void appendSceneFull(PsramJsonBuffer &json, const SceneRecord *scene) const;
     void appendSceneListItem(PsramJsonBuffer &json, const SceneRecord *scene) const;
     void ensureBakesDir() const;
+    void ensureCustomDirMounted() const;
+    void wipeCustomImagesOnSd() const;
+    SceneWriteResult writeCustomBackground(SceneRecord *scene, const uint8_t *data, size_t length);
+    bool detectImageFormat(const uint8_t *data, size_t length, const char **extOut, const char **mimeOut) const;
 };
