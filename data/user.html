@@ -2564,6 +2564,20 @@
             return scale;
         }
 
+        function normalizeIconFlip(value) {
+            var text = String(value || "").trim().toLowerCase();
+            if (text === "vertical") {
+                return "vertical";
+            }
+            if (text === "horizontal") {
+                return "horizontal";
+            }
+            if (text === "both") {
+                return "both";
+            }
+            return "normal";
+        }
+
         function normalizeTitlePosition(value) {
             if (value === "right" || value === "top" || value === "bottom") {
                 return value;
@@ -2735,6 +2749,10 @@
             var iconScaleValue = normalizeIconScale(binding && binding.iconScale);
             wrap.style.setProperty("--console-icon-scale", String(iconScaleValue));
             wrap.setAttribute("data-binding-scale", String(iconScaleValue));
+            var iconFlipValue = normalizeIconFlip(binding && binding.iconFlip);
+            if (iconFlipValue !== "normal") {
+                wrap.setAttribute("data-icon-flip", iconFlipValue);
+            }
             if (binding && binding.iconOnColor) {
                 wrap.style.setProperty("--console-icon-on-color", String(binding.iconOnColor));
             }

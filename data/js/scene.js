@@ -3424,7 +3424,8 @@
             pin && (pin.automation || pin.automationId) ? (pin.automation || pin.automationId) : "",
             pin && pin.param ? pin.param : "",
             pin && pin.channel != null ? pin.channel : "",
-            pin && pin.icon ? pin.icon : ""
+            pin && pin.icon ? pin.icon : "",
+            pin && pin.iconFlip ? pin.iconFlip : ""
         ].join("|");
     }
 

@@ -300,6 +300,32 @@ const char *ConsoleStore::iconAlignJsonId(uint8_t iconAlign) {
     return "center";
 }
 
+uint8_t ConsoleStore::parseIconFlipId(const char *text) {
+    if (text != nullptr && strcmp(text, "vertical") == 0) {
+        return CONSOLE_ICON_FLIP_VERTICAL;
+    }
+    if (text != nullptr && strcmp(text, "horizontal") == 0) {
+        return CONSOLE_ICON_FLIP_HORIZONTAL;
+    }
+    if (text != nullptr && strcmp(text, "both") == 0) {
+        return CONSOLE_ICON_FLIP_BOTH;
+    }
+    return CONSOLE_ICON_FLIP_NORMAL;
+}
+
+const char *ConsoleStore::iconFlipJsonId(uint8_t iconFlip) {
+    if (iconFlip == CONSOLE_ICON_FLIP_VERTICAL) {
+        return "vertical";
+    }
+    if (iconFlip == CONSOLE_ICON_FLIP_HORIZONTAL) {
+        return "horizontal";
+    }
+    if (iconFlip == CONSOLE_ICON_FLIP_BOTH) {
+        return "both";
+    }
+    return "normal";
+}
+
 uint8_t ConsoleStore::parseAlignVId(const char *text) {
     if (text != nullptr && strcmp(text, "top") == 0) {
         return CONSOLE_ALIGN_V_TOP;
@@ -361,6 +387,11 @@ void ConsoleStore::appendBindingLayoutJson(PsramJsonBuffer &json, const ConsoleB
         if (binding->iconCfg->iconScale > 0.0f && binding->iconCfg->iconScale != 1.0f) {
             json += ",\"iconScale\":";
             json += String(binding->iconCfg->iconScale, 4);
+        }
+        if (binding->iconCfg->iconFlip != CONSOLE_ICON_FLIP_NORMAL) {
+            json += ",\"iconFlip\":\"";
+            json += iconFlipJsonId(binding->iconCfg->iconFlip);
+            json += "\"";
         }
     }
 }
@@ -824,6 +855,8 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
         String iconOffColorText;
         extractJsonString(object.c_str(), "iconOnColor", iconOnColorText);
         extractJsonString(object.c_str(), "iconOffColor", iconOffColorText);
+        String iconFlipText;
+        extractJsonString(object.c_str(), "iconFlip", iconFlipText);
         extractJsonString(object.c_str(), "titlePosition", titlePositionText);
         extractJsonString(object.c_str(), "iconAlign", iconAlignText);
         extractJsonString(object.c_str(), "alignH", alignHText);
@@ -1044,6 +1077,7 @@ bool ConsoleStore::parseBindings(const char *widgetJson, ConsoleBinding **outBin
                 binding->iconCfg->iconScale = 1.0f;
             }
             binding->iconCfg->iconAlign = binding->alignH;
+            binding->iconCfg->iconFlip = parseIconFlipId(iconFlipText.c_str());
             if (iconText.length() > 0) {
                 binding->iconCfg->icon =
                     duplicateBoundedString(iconText.c_str(), CONSOLE_ICON_MAX - 1);

@@ -3380,6 +3380,19 @@ html, body {
 .console-binary-icon .mdi {
     font-size: calc(2rem * var(--console-icon-scale, 1));
     line-height: 1;
+    display: inline-block;
+}
+
+.console-binary-icon[data-icon-flip="vertical"] .mdi {
+    transform: scaleY(-1);
+}
+
+.console-binary-icon[data-icon-flip="horizontal"] .mdi {
+    transform: scaleX(-1);
+}
+
+.console-binary-icon[data-icon-flip="both"] .mdi {
+    transform: scale(-1);
 }
 
 .console-binary-icon.is-on {
