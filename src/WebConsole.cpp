@@ -51,17 +51,6 @@ struct OwnedJsonBytes {
     }
 };
 
-#if defined(BOARD_ROLE_HOST)
-struct OwnedZipBytes {
-    uint8_t *bytes = nullptr;
-    size_t length = 0;
-    ~OwnedZipBytes() {
-        fullBackupFreeZip(bytes);
-        bytes = nullptr;
-    }
-};
-#endif
-
 // LED3 hold until the HTTP response is finished (not TCP disconnect).
 constexpr size_t kWebLedHoldSlots = 32;
 struct WebLedHoldSlot {
@@ -4903,38 +4892,37 @@ void WebConsole::handleFullBackupPost(AsyncWebServerRequest *request) {
     options.includeWifi = includeWifi;
     options.includeHistory = includeHistory;
     options.includeSecrets = includeSecrets;
-    FullBackupBuildResult built = fullBackupBuildZip(
-        settingsJson.c_str(),
-        options,
-        sceneStore,
-        historyStore,
-        FIRMWARE_VERSION
-    );
-    if (built.zipBytes == nullptr || built.zipLength == 0) {
+    std::shared_ptr<FullBackupStreamSession> stream = std::make_shared<FullBackupStreamSession>();
+    if (!stream->begin(
+            static_cast<PsramJsonBuffer &&>(settingsJson),
+            options,
+            sceneStore,
+            historyStore,
+            FIRMWARE_VERSION
+        )) {
         request->send(
             500,
             "text/plain",
-            built.errorText.length() > 0 ? built.errorText : "Failed to build ZIP"
+            stream->errorText()[0] != '\0' ? stream->errorText() : "Failed to start backup"
         );
         return;
     }
-    std::shared_ptr<OwnedZipBytes> payload = std::make_shared<OwnedZipBytes>();
-    payload->bytes = built.zipBytes;
-    payload->length = built.zipLength;
-    built.zipBytes = nullptr;
-    AsyncWebServerResponse *response = request->beginResponse(
+    // Prefer 8 KiB work chunks; AsyncWebServer picks maxLen per callback (often smaller).
+    AsyncWebServerResponse *response = request->beginChunkedResponse(
         "application/zip",
-        payload->length,
-        [payload](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
-            if (payload->bytes == nullptr || index >= payload->length) {
+        [stream](uint8_t *buffer, size_t maxLen, size_t /*index*/) -> size_t {
+            if (stream == nullptr || buffer == nullptr || maxLen == 0) {
                 return 0;
             }
-            size_t chunk = payload->length - index;
-            if (chunk > maxLen) {
-                chunk = maxLen;
+            size_t room = maxLen;
+            if (room > FullBackupStreamSession::kWorkBufferMax) {
+                room = FullBackupStreamSession::kWorkBufferMax;
             }
-            memcpy(buffer, payload->bytes + index, chunk);
-            return chunk;
+            const size_t written = stream->fill(buffer, room);
+            if (!stream->ok()) {
+                return 0;
+            }
+            return written;
         }
     );
     if (response == nullptr) {
