@@ -14357,6 +14357,11 @@
         var sceneDialogOriginalId = "";
         var sceneDesigner = null;
         var sceneEditorPins = [];
+        var sceneEditorZones = [];
+        var sceneDraftZones = [];
+        var sceneDraftKind = "plan";
+        var sceneDraftCameraId = "";
+        var sceneDraftRefreshInterval = 3;
         var sceneDraftModel = null;
         var scenePendingBakeBlob = null;
         var scenePendingBakeUrl = "";
@@ -14365,8 +14370,33 @@
         var sceneSelectedPinIndex = -1;
         var sceneBindDirty = false;
         var sceneGeometryDirty = false;
+        var sceneZonesDirty = false;
         var scenePendingPin = null;
+        var scenePendingZone = null;
+        var sceneZoneDialogIsNew = false;
+        var consoleDeviceDialogSceneZone = false;
+        var sceneZoneTool = "";
+        var sceneSelectedZoneIndex = -1;
+        var sceneSelectedZoneVertex = -1;
+        var sceneZoneDraftPoints = [];
+        var sceneZoneDrag = null;
+        // dblclick dies when pointerup rebuilds SVG — detect corner remove via timed double-tap.
+        var sceneZoneHandleLastTap = null;
+        var sceneZonesCameraPreviewUrl = "";
         var consoleEditorScenes = [];
+
+        function trySceneZoneHandleDoubleTap(scope, zoneIndex, vertexIndex) {
+            var now = Date.now();
+            var key = String(scope) + ":" + String(zoneIndex) + ":" + String(vertexIndex);
+            if (sceneZoneHandleLastTap
+                && sceneZoneHandleLastTap.key === key
+                && (now - sceneZoneHandleLastTap.at) <= 450) {
+                sceneZoneHandleLastTap = null;
+                return true;
+            }
+            sceneZoneHandleLastTap = { key: key, at: now };
+            return false;
+        }
 
         function setScenesError(message) {
             var line = document.getElementById("scenesSaveError");
@@ -14442,17 +14472,318 @@
             scenePendingBakeBlob = null;
             sceneDraftModel = window.SceneKit ? SceneKit.defaultModel() : null;
             sceneEditorPins = [];
+            sceneEditorZones = [];
+            sceneDraftZones = [];
+            sceneDraftKind = "plan";
+            sceneDraftCameraId = "";
+            sceneDraftRefreshInterval = 3;
             sceneServerHasBake = false;
             sceneBindTool = "";
             sceneSelectedPinIndex = -1;
             sceneBindDirty = false;
             sceneGeometryDirty = false;
+            sceneZonesDirty = false;
             scenePendingPin = null;
+            scenePendingZone = null;
+            sceneZoneDialogIsNew = false;
+            consoleDeviceDialogSceneZone = false;
+            sceneZoneTool = "";
+            sceneSelectedZoneIndex = -1;
+            sceneSelectedZoneVertex = -1;
+            sceneZoneDraftPoints = [];
+            sceneZoneDrag = null;
+            sceneZonesCameraPreviewUrl = "";
             var sceneEditOverlay = document.getElementById("sceneEditDialog");
             if (sceneEditOverlay) {
                 sceneEditOverlay.classList.remove("is-covered");
             }
+            var zonesDialog = document.getElementById("sceneZonesDialog");
+            if (zonesDialog) {
+                zonesDialog.hidden = true;
+            }
             disposeSceneDesigner();
+        }
+
+        function normalizeSceneKind(kind) {
+            return String(kind || "").toLowerCase() === "camera" ? "camera" : "plan";
+        }
+
+        function clampSceneRefreshInterval(value) {
+            if (window.SceneKit && typeof SceneKit.clampSceneRefreshSec === "function") {
+                return SceneKit.clampSceneRefreshSec(value);
+            }
+            var n = Math.round(Number(value));
+            if (!isFinite(n) || n < 1) {
+                return 3;
+            }
+            if (n > 60) {
+                return 60;
+            }
+            return n;
+        }
+
+        function syncSceneKindChrome() {
+            var kindSelect = document.getElementById("sceneKindSelect");
+            var editSceneBtn = document.getElementById("sceneEditSceneBtn");
+            var cameraSelect = document.getElementById("sceneCameraSelect");
+            var refreshField = document.getElementById("sceneRefreshField");
+            var refreshInput = document.getElementById("sceneRefreshInterval");
+            var addPinBtn = document.getElementById("sceneBindAddPinBtn");
+            var removePinBtn = document.getElementById("sceneBindRemovePinBtn");
+            var addZoneBtn = document.getElementById("sceneBindAddZoneBtn");
+            var deleteZoneBtn = document.getElementById("sceneBindDeleteZoneBtn");
+            var isCamera = sceneDraftKind === "camera";
+            if (kindSelect) {
+                kindSelect.value = isCamera ? "camera" : "plan";
+            }
+            // Plan-only geometry editor — Camera authors zones on the bind preview.
+            if (editSceneBtn) {
+                editSceneBtn.hidden = isCamera;
+            }
+            if (cameraSelect) {
+                cameraSelect.hidden = !isCamera;
+            }
+            if (refreshField) {
+                refreshField.hidden = !isCamera;
+            }
+            if (refreshInput) {
+                refreshInput.value = String(clampSceneRefreshInterval(sceneDraftRefreshInterval));
+            }
+            if (addPinBtn) {
+                addPinBtn.hidden = isCamera;
+            }
+            if (removePinBtn) {
+                removePinBtn.hidden = isCamera;
+            }
+            if (addZoneBtn) {
+                addZoneBtn.hidden = !isCamera;
+            }
+            if (deleteZoneBtn) {
+                deleteZoneBtn.hidden = !isCamera;
+            }
+            if (isCamera) {
+                sceneBindTool = "";
+                sceneSelectedPinIndex = -1;
+                syncSceneBindToolButtons();
+            } else {
+                sceneZoneTool = "";
+                sceneSelectedZoneIndex = -1;
+                sceneSelectedZoneVertex = -1;
+                sceneZoneDraftPoints = [];
+                sceneZoneDrag = null;
+            }
+            syncSceneBindZoneChrome();
+        }
+
+        function sceneZoneOpacityPercent(zone) {
+            var transparency = zone && zone.transparency != null ? Number(zone.transparency) : 0.9;
+            if (!isFinite(transparency)) {
+                transparency = 0.9;
+            }
+            if (transparency < 0) {
+                transparency = 0;
+            }
+            if (transparency > 1) {
+                transparency = 1;
+            }
+            return Math.round(transparency * 100);
+        }
+
+        function ensureSceneZoneColorPickers() {
+            var onHost = document.getElementById("sceneZoneColorOnControl");
+            var offHost = document.getElementById("sceneZoneColorOffControl");
+            if (onHost && !onHost._zoneColorControl) {
+                var onControl = buildConsoleColorPickerControl("#22c55e", function (hex) {
+                    var zone = sceneSelectedZoneIndex >= 0
+                        ? sceneEditorZones[sceneSelectedZoneIndex]
+                        : null;
+                    if (!zone) {
+                        return;
+                    }
+                    zone.colorOn = hex || "#22c55e";
+                    sceneBindDirty = true;
+                    paintSceneBindZonesInteractive();
+                });
+                onHost.innerHTML = "";
+                onHost.appendChild(onControl);
+                onHost._zoneColorControl = onControl;
+            }
+            if (offHost && !offHost._zoneColorControl) {
+                var offControl = buildConsoleColorPickerControl("#ef4444", function (hex) {
+                    var zone = sceneSelectedZoneIndex >= 0
+                        ? sceneEditorZones[sceneSelectedZoneIndex]
+                        : null;
+                    if (!zone) {
+                        return;
+                    }
+                    zone.colorOff = hex || "#ef4444";
+                    sceneBindDirty = true;
+                    paintSceneBindZonesInteractive();
+                });
+                offHost.innerHTML = "";
+                offHost.appendChild(offControl);
+                offHost._zoneColorControl = offControl;
+            }
+        }
+
+        function syncSceneBindZoneChrome() {
+            var addZoneBtn = document.getElementById("sceneBindAddZoneBtn");
+            var deleteZoneBtn = document.getElementById("sceneBindDeleteZoneBtn");
+            var opacityField = document.getElementById("sceneZoneOpacityField");
+            var opacityInput = document.getElementById("sceneZoneOpacity");
+            var colorOnField = document.getElementById("sceneZoneColorOnField");
+            var colorOffField = document.getElementById("sceneZoneColorOffField");
+            var isCamera = sceneDraftKind === "camera";
+            var zone = isCamera && sceneSelectedZoneIndex >= 0
+                ? sceneEditorZones[sceneSelectedZoneIndex]
+                : null;
+            var hasSelection = !!zone;
+            var opacityPct = hasSelection ? sceneZoneOpacityPercent(zone) : 90;
+            var showColors = hasSelection && opacityPct < 100;
+            if (addZoneBtn) {
+                addZoneBtn.hidden = !isCamera;
+            }
+            if (deleteZoneBtn) {
+                deleteZoneBtn.hidden = !isCamera;
+                deleteZoneBtn.disabled = !hasSelection;
+            }
+            if (opacityField) {
+                opacityField.hidden = !hasSelection;
+            }
+            if (opacityInput && hasSelection) {
+                opacityInput.value = String(opacityPct);
+            }
+            if (colorOnField) {
+                colorOnField.hidden = !showColors;
+            }
+            if (colorOffField) {
+                colorOffField.hidden = !showColors;
+            }
+            if (showColors) {
+                ensureSceneZoneColorPickers();
+                var onHost = document.getElementById("sceneZoneColorOnControl");
+                var offHost = document.getElementById("sceneZoneColorOffControl");
+                if (onHost && onHost._zoneColorControl) {
+                    onHost._zoneColorControl.setColor(zone.colorOn || "#22c55e");
+                }
+                if (offHost && offHost._zoneColorControl) {
+                    offHost._zoneColorControl.setColor(zone.colorOff || "#ef4444");
+                }
+            }
+        }
+
+        function onSceneZoneOpacityInput() {
+            var zone = sceneSelectedZoneIndex >= 0
+                ? sceneEditorZones[sceneSelectedZoneIndex]
+                : null;
+            var input = document.getElementById("sceneZoneOpacity");
+            if (!zone || !input) {
+                return;
+            }
+            var pct = Math.round(Number(input.value));
+            if (!isFinite(pct)) {
+                pct = 90;
+            }
+            if (pct < 0) {
+                pct = 0;
+            }
+            if (pct > 100) {
+                pct = 100;
+            }
+            input.value = String(pct);
+            zone.transparency = pct / 100;
+            if (pct < 100) {
+                if (!zone.colorOn) {
+                    zone.colorOn = "#22c55e";
+                }
+                if (!zone.colorOff) {
+                    zone.colorOff = "#ef4444";
+                }
+            }
+            sceneBindDirty = true;
+            syncSceneBindZoneChrome();
+            paintSceneBindZonesInteractive();
+        }
+
+        function fillSceneCameraSelect() {
+            var select = document.getElementById("sceneCameraSelect");
+            if (!select) {
+                return;
+            }
+            var previous = sceneDraftCameraId || "";
+            select.innerHTML = "";
+            var placeholder = document.createElement("option");
+            placeholder.value = "";
+            placeholder.textContent = "Select camera";
+            select.appendChild(placeholder);
+            (Array.isArray(cameraListCache) ? cameraListCache : []).forEach(function (cam) {
+                var option = document.createElement("option");
+                option.value = cam.id || "";
+                option.textContent = cam.name || cam.id || "Camera";
+                select.appendChild(option);
+            });
+            select.value = previous;
+            if (select.value !== previous) {
+                sceneDraftCameraId = select.value || "";
+            }
+        }
+
+        function ensureSceneCamerasLoaded() {
+            if (Array.isArray(cameraListCache) && cameraListCache.length > 0) {
+                fillSceneCameraSelect();
+                return Promise.resolve(cameraListCache);
+            }
+            return fetch("/api/cameras", { cache: "no-store" }).then(function (response) {
+                return response.text().then(function (text) {
+                    if (!response.ok) {
+                        throw new Error(text || ("HTTP " + response.status));
+                    }
+                    return JSON.parse(text || "[]");
+                });
+            }).then(function (rows) {
+                cameraListCache = Array.isArray(rows) ? rows : [];
+                fillSceneCameraSelect();
+                return cameraListCache;
+            }).catch(function () {
+                cameraListCache = cameraListCache || [];
+                fillSceneCameraSelect();
+                return cameraListCache;
+            });
+        }
+
+        function onSceneKindChanged() {
+            var kindSelect = document.getElementById("sceneKindSelect");
+            sceneDraftKind = normalizeSceneKind(kindSelect && kindSelect.value);
+            sceneBindDirty = true;
+            syncSceneKindChrome();
+            updateSceneBindPreview();
+            if (sceneDraftKind === "camera") {
+                ensureSceneCamerasLoaded();
+            }
+        }
+
+        function onSceneCameraChanged() {
+            var cameraSelect = document.getElementById("sceneCameraSelect");
+            sceneDraftCameraId = cameraSelect ? String(cameraSelect.value || "") : "";
+            sceneBindDirty = true;
+            updateSceneBindPreview();
+        }
+
+        function onSceneRefreshIntervalChanged() {
+            var input = document.getElementById("sceneRefreshInterval");
+            sceneDraftRefreshInterval = clampSceneRefreshInterval(input && input.value);
+            if (input) {
+                input.value = String(sceneDraftRefreshInterval);
+            }
+            sceneBindDirty = true;
+        }
+
+        function openSceneEditForKind() {
+            if (sceneDraftKind === "camera") {
+                // Edit scene is hidden for Camera; zones are edited on the bind preview.
+                return;
+            }
+            openSceneGeometryEditor();
         }
 
         function disposeSceneDesigner() {
@@ -14803,6 +15134,511 @@
             }
         }
 
+        function sceneBindZoneNormFromEvent(event) {
+            var frame = document.getElementById("sceneBindFrame");
+            var img = document.getElementById("sceneBindImage");
+            if (typeof SceneKit.normFromClientInContentBox === "function") {
+                return SceneKit.normFromClientInContentBox(event.clientX, event.clientY, frame, img);
+            }
+            return { x: 0, y: 0 };
+        }
+
+        function defaultSceneZonePolygon() {
+            // Same idea as floor defaultPolygon: centered rectangle you then reshape.
+            return [
+                { x: 0.3, y: 0.3 },
+                { x: 0.7, y: 0.3 },
+                { x: 0.7, y: 0.7 },
+                { x: 0.3, y: 0.7 }
+            ];
+        }
+
+        function addSceneBindZone() {
+            if (sceneDraftKind !== "camera") {
+                return;
+            }
+            var zone = defaultSceneZone();
+            zone.points = defaultSceneZonePolygon();
+            sceneEditorZones.push(zone);
+            sceneSelectedZoneIndex = sceneEditorZones.length - 1;
+            sceneSelectedZoneVertex = -1;
+            sceneZoneTool = "";
+            sceneZoneDraftPoints = [];
+            sceneBindDirty = true;
+            syncSceneBindZoneChrome();
+            paintSceneBindZonesInteractive();
+        }
+
+        function deleteSelectedSceneBindZone() {
+            if (sceneDraftKind !== "camera") {
+                return;
+            }
+            if (sceneSelectedZoneIndex < 0 || sceneSelectedZoneIndex >= sceneEditorZones.length) {
+                return;
+            }
+            var zone = sceneEditorZones[sceneSelectedZoneIndex];
+            // Floor-like: selected vertex with >3 points → remove vertex; else remove zone.
+            if (sceneSelectedZoneVertex >= 0
+                && zone
+                && Array.isArray(zone.points)
+                && zone.points.length > 3
+                && sceneSelectedZoneVertex < zone.points.length) {
+                zone.points.splice(sceneSelectedZoneVertex, 1);
+                sceneSelectedZoneVertex = -1;
+            } else {
+                sceneEditorZones.splice(sceneSelectedZoneIndex, 1);
+                sceneSelectedZoneIndex = -1;
+                sceneSelectedZoneVertex = -1;
+            }
+            sceneBindDirty = true;
+            syncSceneBindZoneChrome();
+            paintSceneBindZonesInteractive();
+        }
+
+        function onSceneBindZoneKeyDown(event) {
+            var dialog = document.getElementById("sceneEditDialog");
+            if (!dialog || dialog.hidden || sceneDraftKind !== "camera") {
+                return;
+            }
+            if (event.key !== "Delete" && event.key !== "Del") {
+                return;
+            }
+            var tag = event.target && event.target.tagName
+                ? String(event.target.tagName).toLowerCase()
+                : "";
+            if (tag === "input" || tag === "textarea" || tag === "select") {
+                return;
+            }
+            if (sceneSelectedZoneIndex < 0 || sceneSelectedZoneIndex >= sceneEditorZones.length) {
+                return;
+            }
+            event.preventDefault();
+            deleteSelectedSceneBindZone();
+        }
+
+        function ensureSceneBindZoneKeyHandler() {
+            if (window._sceneBindZoneKeyHandlerBound) {
+                return;
+            }
+            window._sceneBindZoneKeyHandlerBound = true;
+            document.addEventListener("keydown", onSceneBindZoneKeyDown);
+        }
+
+        function sceneZonePointInPolygon(nx, ny, points) {
+            if (window.SceneKit && typeof SceneKit.pointInPolygon === "function") {
+                return SceneKit.pointInPolygon(nx, ny, points);
+            }
+            return false;
+        }
+
+        function distPointToZoneEdge(nx, ny, a, b) {
+            var dx = b.x - a.x;
+            var dy = b.y - a.y;
+            var len2 = dx * dx + dy * dy;
+            if (len2 < 1e-12) {
+                var ex = nx - a.x;
+                var ey = ny - a.y;
+                return Math.sqrt(ex * ex + ey * ey);
+            }
+            var t = ((nx - a.x) * dx + (ny - a.y) * dy) / len2;
+            if (t < 0) {
+                t = 0;
+            } else if (t > 1) {
+                t = 1;
+            }
+            var px = a.x + t * dx;
+            var py = a.y + t * dy;
+            var ox = nx - px;
+            var oy = ny - py;
+            return Math.sqrt(ox * ox + oy * oy);
+        }
+
+        function findSceneBindZoneEdgeInsert(zoneIndex, norm, threshold) {
+            var zone = sceneEditorZones[zoneIndex];
+            var points = zone && Array.isArray(zone.points) ? zone.points : [];
+            if (points.length < 3) {
+                return null;
+            }
+                var limit = threshold != null ? threshold : 0.012;
+            var bestIndex = -1;
+            var bestDist = limit;
+            var bestPoint = null;
+            var i;
+            for (i = 0; i < points.length; i++) {
+                var a = points[i];
+                var b = points[(i + 1) % points.length];
+                var dx = b.x - a.x;
+                var dy = b.y - a.y;
+                var len2 = dx * dx + dy * dy;
+                var t = len2 > 1e-12
+                    ? ((norm.x - a.x) * dx + (norm.y - a.y) * dy) / len2
+                    : 0;
+                if (t <= 0.05 || t >= 0.95) {
+                    continue;
+                }
+                var dist = distPointToZoneEdge(norm.x, norm.y, a, b);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestIndex = i;
+                    bestPoint = {
+                        x: SceneKit.clamp01(a.x + t * dx),
+                        y: SceneKit.clamp01(a.y + t * dy)
+                    };
+                }
+            }
+            if (bestIndex < 0 || !bestPoint) {
+                return null;
+            }
+            return { edgeIndex: bestIndex, point: bestPoint };
+        }
+
+        function insertSceneBindZoneVertexAt(zoneIndex, norm) {
+            var indices = [];
+            if (zoneIndex >= 0 && zoneIndex < sceneEditorZones.length) {
+                indices.push(zoneIndex);
+            } else {
+                sceneEditorZones.forEach(function (_zone, index) {
+                    indices.push(index);
+                });
+            }
+            var best = null;
+            var bestZone = -1;
+            indices.forEach(function (index) {
+                var hit = findSceneBindZoneEdgeInsert(index, norm, 0.012);
+                if (!hit) {
+                    return;
+                }
+                var dist = distPointToZoneEdge(
+                    norm.x,
+                    norm.y,
+                    sceneEditorZones[index].points[hit.edgeIndex],
+                    sceneEditorZones[index].points[
+                        (hit.edgeIndex + 1) % sceneEditorZones[index].points.length
+                    ]
+                );
+                if (!best || dist < best.dist) {
+                    best = { hit: hit, dist: dist };
+                    bestZone = index;
+                }
+            });
+            if (!best || bestZone < 0) {
+                return false;
+            }
+            sceneEditorZones[bestZone].points.splice(
+                best.hit.edgeIndex + 1,
+                0,
+                best.hit.point
+            );
+            sceneSelectedZoneIndex = bestZone;
+            sceneSelectedZoneVertex = best.hit.edgeIndex + 1;
+            sceneBindDirty = true;
+            return true;
+        }
+
+        function openSceneBindZoneBinding(zoneIndex) {
+            if (zoneIndex == null) {
+                zoneIndex = sceneSelectedZoneIndex;
+            }
+            if (zoneIndex < 0 || zoneIndex >= sceneEditorZones.length) {
+                return;
+            }
+            sceneSelectedZoneIndex = zoneIndex;
+            sceneSelectedZoneVertex = -1;
+            scenePendingZone = sceneEditorZones[zoneIndex];
+            sceneZoneDialogIsNew = false;
+            consoleDeviceDialogSceneZone = true;
+            syncSceneBindZoneChrome();
+            openConsoleDeviceDialog(-1, -1);
+        }
+
+        function sceneZoneEditorHandleRadii(frameEl, overlayEl) {
+            // Compensates viewBox 0..1 + preserveAspectRatio=none so handles stay circular in CSS px.
+            var fw = Math.max(1, (frameEl && frameEl.clientWidth) || (overlayEl && overlayEl.clientWidth) || 1);
+            var fh = Math.max(1, (frameEl && frameEl.clientHeight) || (overlayEl && overlayEl.clientHeight) || 1);
+            var px = 7;
+            return { rx: px / fw, ry: px / fh };
+        }
+
+        function paintSceneBindZonesInteractive() {
+            var overlays = document.getElementById("sceneBindOverlays");
+            var frame = document.getElementById("sceneBindFrame");
+            if (!overlays || !frame || frame.hidden || sceneDraftKind !== "camera") {
+                return;
+            }
+            overlays.innerHTML = "";
+            overlays.classList.add("scene-cell-overlays--zones");
+            var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            svg.setAttribute("class", "scene-cell-zones-svg");
+            svg.setAttribute("viewBox", "0 0 1 1");
+            svg.setAttribute("preserveAspectRatio", "none");
+            var handleRadii = sceneZoneEditorHandleRadii(frame, overlays);
+
+            sceneEditorZones.forEach(function (zone, index) {
+                var points = Array.isArray(zone.points) ? zone.points : [];
+                if (points.length < 3) {
+                    return;
+                }
+                var selected = index === sceneSelectedZoneIndex;
+                var shape = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+                shape.setAttribute("data-zone-index", String(index));
+                shape.setAttribute("points", points.map(function (p) {
+                    return SceneKit.clamp01(p.x) + "," + SceneKit.clamp01(p.y);
+                }).join(" "));
+                var opacityPct = sceneZoneOpacityPercent(zone);
+                var fillAlpha = opacityPct >= 100 ? 0 : Math.max(0.08, 1 - (opacityPct / 100));
+                shape.setAttribute(
+                    "fill",
+                    opacityPct >= 100
+                        ? "rgba(0,0,0,0)"
+                        : SceneKit.hexToRgba(zone.colorOn || "#38bdf8", fillAlpha)
+                );
+                shape.setAttribute(
+                    "stroke",
+                    selected ? "#fbbf24" : "rgba(255,255,255,0.55)"
+                );
+                // Screen-pixel stroke — not stretched by non-square viewBox scale.
+                shape.setAttribute("stroke-width", selected ? "2" : "1");
+                shape.setAttribute("vector-effect", "non-scaling-stroke");
+                shape.style.cursor = "pointer";
+                shape.style.pointerEvents = "auto";
+                shape.addEventListener("pointerdown", function (event) {
+                    if (event.button != null && event.button !== 0) {
+                        return;
+                    }
+                    event.preventDefault();
+                    event.stopPropagation();
+                    // Select in place — rebuilding SVG between clicks kills dblclick (floor keeps canvas).
+                    sceneSelectedZoneIndex = index;
+                    sceneSelectedZoneVertex = -1;
+                    Array.prototype.forEach.call(svg.querySelectorAll("polygon"), function (poly) {
+                        var zi = parseInt(poly.getAttribute("data-zone-index"), 10);
+                        var isSel = zi === index;
+                        poly.setAttribute("stroke", isSel ? "#fbbf24" : "rgba(255,255,255,0.55)");
+                        poly.setAttribute("stroke-width", isSel ? "2" : "1");
+                    });
+                    Array.prototype.forEach.call(svg.querySelectorAll("ellipse.scene-zone-handle"), function (el) {
+                        el.setAttribute("fill", "#a78bfa");
+                    });
+                    syncSceneBindZoneChrome();
+                });
+                shape.addEventListener("dblclick", function (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    var norm = sceneBindZoneNormFromEvent(event);
+                    // Edge (rib) double-click → insert corner (floor editor behavior).
+                    if (insertSceneBindZoneVertexAt(index, norm)) {
+                        paintSceneBindZonesInteractive();
+                        return;
+                    }
+                    // Fill double-click → bind dialog (device / automation actions).
+                    openSceneBindZoneBinding(index);
+                });
+                svg.appendChild(shape);
+
+                points.forEach(function (point, vertexIndex) {
+                    var handle = document.createElementNS("http://www.w3.org/2000/svg", "ellipse");
+                    handle.setAttribute("class", "scene-zone-handle");
+                    handle.setAttribute("cx", String(SceneKit.clamp01(point.x)));
+                    handle.setAttribute("cy", String(SceneKit.clamp01(point.y)));
+                    handle.setAttribute("rx", String(handleRadii.rx));
+                    handle.setAttribute("ry", String(handleRadii.ry));
+                    handle.setAttribute(
+                        "fill",
+                        selected && vertexIndex === sceneSelectedZoneVertex
+                            ? "#fbbf24"
+                            : (selected ? "#22c55e" : "#a78bfa")
+                    );
+                    handle.setAttribute("stroke", "#111827");
+                    handle.setAttribute("stroke-width", "1");
+                    handle.setAttribute("vector-effect", "non-scaling-stroke");
+                    handle.style.cursor = "move";
+                    handle.style.pointerEvents = "auto";
+                    handle.addEventListener("pointerdown", function (event) {
+                        if (event.button != null && event.button !== 0) {
+                            return;
+                        }
+                        event.preventDefault();
+                        event.stopPropagation();
+                        // Second tap on same corner → remove (keep ≥3). Native dblclick is lost
+                        // because pointerup rebuilds the SVG between clicks.
+                        if (trySceneZoneHandleDoubleTap("bind", index, vertexIndex)) {
+                            var zRemove = sceneEditorZones[index];
+                            if (zRemove
+                                && Array.isArray(zRemove.points)
+                                && zRemove.points.length > 3
+                                && vertexIndex >= 0
+                                && vertexIndex < zRemove.points.length) {
+                                zRemove.points.splice(vertexIndex, 1);
+                                sceneSelectedZoneIndex = index;
+                                sceneSelectedZoneVertex = -1;
+                                sceneZoneDrag = null;
+                                sceneBindDirty = true;
+                                syncSceneBindZoneChrome();
+                                paintSceneBindZonesInteractive();
+                            }
+                            return;
+                        }
+                        sceneSelectedZoneIndex = index;
+                        sceneSelectedZoneVertex = vertexIndex;
+                        // No Shift axis-lock for camera zones (same tools as floor, without Shift).
+                        sceneZoneDrag = {
+                            zoneIndex: index,
+                            vertexIndex: vertexIndex,
+                            pointerId: event.pointerId,
+                            handleEl: handle,
+                            polyEl: shape,
+                            bindPreview: true,
+                            moved: false
+                        };
+                        try {
+                            handle.setPointerCapture(event.pointerId);
+                        } catch (ignore) {
+                        }
+                        // Do not repaint here — that would drop pointer capture mid-drag.
+                        syncSceneBindZoneChrome();
+                    });
+                    svg.appendChild(handle);
+                });
+            });
+
+            svg.addEventListener("pointerdown", function (event) {
+                if (sceneZoneDrag) {
+                    return;
+                }
+                if (event.target !== svg) {
+                    return;
+                }
+                if (event.button != null && event.button !== 0) {
+                    return;
+                }
+                sceneSelectedZoneIndex = -1;
+                sceneSelectedZoneVertex = -1;
+                syncSceneBindZoneChrome();
+                paintSceneBindZonesInteractive();
+            });
+            svg.addEventListener("pointermove", onSceneBindZonesSvgPointerMove);
+            svg.addEventListener("pointerup", onSceneBindZonesSvgPointerUp);
+            svg.addEventListener("pointercancel", onSceneBindZonesSvgPointerUp);
+            overlays.appendChild(svg);
+            syncSceneBindZoneChrome();
+        }
+
+        function onSceneBindZonesSvgPointerMove(event) {
+            if (!sceneZoneDrag || !sceneZoneDrag.bindPreview) {
+                return;
+            }
+            if (sceneZoneDrag.pointerId != null && event.pointerId !== sceneZoneDrag.pointerId) {
+                return;
+            }
+            var zone = sceneEditorZones[sceneZoneDrag.zoneIndex];
+            if (!zone || !Array.isArray(zone.points)) {
+                return;
+            }
+            var norm = sceneBindZoneNormFromEvent(event);
+            // Floor-like free drag — Shift does not axis-lock camera zones.
+            var nextX = SceneKit.clamp01(norm.x);
+            var nextY = SceneKit.clamp01(norm.y);
+            var prev = zone.points[sceneZoneDrag.vertexIndex];
+            // Ignore tiny jitter so a double-tap is not treated as a drag.
+            if (!prev
+                || Math.abs(prev.x - nextX) > 0.003
+                || Math.abs(prev.y - nextY) > 0.003) {
+                sceneZoneDrag.moved = true;
+                // Moving cancels pending double-tap remove.
+                sceneZoneHandleLastTap = null;
+            }
+            zone.points[sceneZoneDrag.vertexIndex] = {
+                x: nextX,
+                y: nextY
+            };
+            sceneBindDirty = true;
+            if (sceneZoneDrag.handleEl) {
+                sceneZoneDrag.handleEl.setAttribute(
+                    "cx",
+                    String(zone.points[sceneZoneDrag.vertexIndex].x)
+                );
+                sceneZoneDrag.handleEl.setAttribute(
+                    "cy",
+                    String(zone.points[sceneZoneDrag.vertexIndex].y)
+                );
+            }
+            if (sceneZoneDrag.polyEl) {
+                sceneZoneDrag.polyEl.setAttribute("points", zone.points.map(function (p) {
+                    return SceneKit.clamp01(p.x) + "," + SceneKit.clamp01(p.y);
+                }).join(" "));
+            }
+        }
+
+        function onSceneBindZonesSvgPointerUp(event) {
+            if (!sceneZoneDrag || !sceneZoneDrag.bindPreview) {
+                return;
+            }
+            if (sceneZoneDrag.pointerId != null && event.pointerId !== sceneZoneDrag.pointerId) {
+                return;
+            }
+            var moved = !!sceneZoneDrag.moved;
+            sceneZoneDrag = null;
+            // Only rebuild after a real drag — click-only keeps the node so a second tap works.
+            if (moved) {
+                paintSceneBindZonesInteractive();
+            } else {
+                syncSceneBindZoneChrome();
+            }
+        }
+
+        function updateSceneBindCameraPreview(empty, frame, img, overlays) {
+            ensureSceneBindZoneKeyHandler();
+            if (!sceneDraftCameraId) {
+                empty.hidden = false;
+                empty.textContent = "Select a camera";
+                frame.hidden = true;
+                img.removeAttribute("src");
+                overlays.innerHTML = "";
+                syncSceneBindZoneChrome();
+                return;
+            }
+            empty.hidden = true;
+            empty.textContent = "Select a camera";
+            frame.hidden = false;
+            fetch("/api/cameras/media?id=" + encodeURIComponent(sceneDraftCameraId), { cache: "no-store" })
+                .then(function (response) {
+                    if (!response.ok) {
+                        return null;
+                    }
+                    return response.json();
+                })
+                .then(function (media) {
+                    if (sceneDraftKind !== "camera"
+                        || sceneDraftCameraId !== (document.getElementById("sceneCameraSelect")
+                            && document.getElementById("sceneCameraSelect").value || sceneDraftCameraId)) {
+                        return;
+                    }
+                    var channel = media && Array.isArray(media.channels) ? media.channels[0] : null;
+                    var snapshotUrl = channel && channel.snapshotUrl ? String(channel.snapshotUrl) : "";
+                    if (!snapshotUrl) {
+                        empty.hidden = false;
+                        empty.textContent = "Camera unavailable";
+                        frame.hidden = true;
+                        overlays.innerHTML = "";
+                        return;
+                    }
+                    var previewUrl = snapshotUrl + (snapshotUrl.indexOf("?") >= 0 ? "&" : "?") + "_=bind";
+                    if (img.getAttribute("src") !== previewUrl) {
+                        img.src = previewUrl;
+                    }
+                    if (typeof SceneKit.bindSceneOverlayLayout === "function") {
+                        SceneKit.bindSceneOverlayLayout(frame, img, overlays);
+                    }
+                    paintSceneBindZonesInteractive();
+                })
+                .catch(function () {
+                    empty.hidden = false;
+                    empty.textContent = "Camera unavailable";
+                    frame.hidden = true;
+                    overlays.innerHTML = "";
+                });
+        }
+
         function updateSceneBindPreview() {
             var empty = document.getElementById("sceneBindEmpty");
             var frame = document.getElementById("sceneBindFrame");
@@ -14811,12 +15647,19 @@
             if (!empty || !frame || !img || !overlays) {
                 return;
             }
+            if (sceneDraftKind === "camera") {
+                img.classList.add("is-fill");
+                updateSceneBindCameraPreview(empty, frame, img, overlays);
+                return;
+            }
+            img.classList.remove("is-fill");
             var previewUrl = scenePendingBakeUrl;
             if (!previewUrl && sceneDialogIsEdit && sceneDialogOriginalId && sceneServerHasBake) {
                 previewUrl = "/api/scenes/bake?id=" + encodeURIComponent(sceneDialogOriginalId);
             }
             if (!previewUrl) {
                 empty.hidden = false;
+                empty.textContent = "No image — use Edit scene to create one";
                 frame.hidden = true;
                 img.removeAttribute("src");
                 overlays.innerHTML = "";
@@ -15094,6 +15937,8 @@
             document.getElementById("sceneDeleteBtn").hidden = !sceneDialogIsEdit;
             document.getElementById("sceneEditDialog").hidden = false;
             sceneDraftModel = SceneKit.defaultModel();
+            syncSceneKindChrome();
+            ensureSceneCamerasLoaded();
             updateSceneBindPreview();
             syncSceneBindToolButtons();
             syncSceneGeometryImportButton();
@@ -15111,9 +15956,15 @@
                 })
                 .then(function (scene) {
                     document.getElementById("sceneName").value = scene.name || "";
+                    sceneDraftKind = normalizeSceneKind(scene.kind);
+                    sceneDraftCameraId = scene.cameraId || "";
+                    sceneDraftRefreshInterval = clampSceneRefreshInterval(scene.refreshInterval);
                     sceneDraftModel = scene.sceneModel || SceneKit.defaultModel();
                     sceneEditorPins = Array.isArray(scene.pins) ? scene.pins : [];
+                    sceneEditorZones = Array.isArray(scene.zones) ? scene.zones : [];
                     sceneServerHasBake = !!scene.hasBake;
+                    syncSceneKindChrome();
+                    fillSceneCameraSelect();
                     updateSceneBindPreview();
                     syncSceneGeometryImportButton();
                 })
@@ -15127,17 +15978,27 @@
         function closeSceneDialog() {
             document.getElementById("sceneEditDialog").hidden = true;
             document.getElementById("sceneGeometryDialog").hidden = true;
+            var zonesDialog = document.getElementById("sceneZonesDialog");
+            if (zonesDialog) {
+                zonesDialog.hidden = true;
+            }
             if (consoleDeviceDialogScenePin) {
                 consoleDeviceDialogScenePin = false;
                 scenePendingPin = null;
                 scenePinDialogIsNew = false;
                 closeConsoleDeviceDialog();
             }
+            if (consoleDeviceDialogSceneZone) {
+                consoleDeviceDialogSceneZone = false;
+                scenePendingZone = null;
+                sceneZoneDialogIsNew = false;
+                closeConsoleDeviceDialog();
+            }
             clearSceneDraftState();
         }
 
         function requestCloseSceneDialog() {
-            if (sceneBindDirty || scenePendingBakeBlob || sceneGeometryDirty) {
+            if (sceneBindDirty || scenePendingBakeBlob || sceneGeometryDirty || sceneZonesDirty) {
                 openUnsavedChangesDialog(closeSceneDialog);
                 return;
             }
@@ -15146,7 +16007,7 @@
 
         function onSceneBindOverlayClick(event) {
             var frame = document.getElementById("sceneBindFrame");
-            if (!frame || frame.hidden) {
+            if (!frame || frame.hidden || sceneDraftKind === "camera") {
                 return;
             }
             var norm = sceneBindFrameNormFromEvent(event, frame);
@@ -15309,6 +16170,607 @@
 
         function saveScenePinDialog() {
             saveConsoleDeviceDialog();
+        }
+
+        function defaultSceneZone() {
+            return {
+                id: "zone-" + Date.now().toString(16),
+                points: [],
+                transparency: 0.9,
+                colorOn: "#22c55e",
+                colorOff: "#ef4444",
+                ieee: "",
+                channel: 1,
+                param: "",
+                actionOn: null,
+                actionOff: null
+            };
+        }
+
+        function cloneSceneZones(zones) {
+            try {
+                return JSON.parse(JSON.stringify(Array.isArray(zones) ? zones : []));
+            } catch (ignore) {
+                return [];
+            }
+        }
+
+        function openSceneZonesEditor() {
+            var errorLine = document.getElementById("sceneZonesError");
+            if (errorLine) {
+                errorLine.hidden = true;
+            }
+            if (!sceneDraftCameraId) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = "Select a camera first";
+                }
+                var dialog = document.getElementById("sceneZonesDialog");
+                if (dialog) {
+                    // Still open so the message is visible, but require camera.
+                }
+            }
+            var sceneEditOverlay = document.getElementById("sceneEditDialog");
+            if (sceneEditOverlay) {
+                sceneEditOverlay.classList.add("is-covered");
+            }
+            sceneDraftZones = cloneSceneZones(sceneEditorZones);
+            sceneZoneTool = "";
+            sceneSelectedZoneIndex = -1;
+            sceneSelectedZoneVertex = -1;
+            sceneZoneDraftPoints = [];
+            sceneZonesDirty = false;
+            document.getElementById("sceneZonesDialog").hidden = false;
+            syncSceneZoneToolButtons();
+            syncSceneZoneInspector();
+            refreshSceneZonesEditorFrame();
+        }
+
+        function forceCloseSceneZonesEditor() {
+            document.getElementById("sceneZonesDialog").hidden = true;
+            var sceneEditOverlay = document.getElementById("sceneEditDialog");
+            if (sceneEditOverlay) {
+                sceneEditOverlay.classList.remove("is-covered");
+            }
+            sceneZoneTool = "";
+            sceneSelectedZoneIndex = -1;
+            sceneSelectedZoneVertex = -1;
+            sceneZoneDraftPoints = [];
+            sceneZoneDrag = null;
+            if (consoleDeviceDialogSceneZone) {
+                consoleDeviceDialogSceneZone = false;
+                scenePendingZone = null;
+                sceneZoneDialogIsNew = false;
+                closeConsoleDeviceDialog();
+            }
+        }
+
+        function requestCloseSceneZonesEditor() {
+            if (sceneZonesDirty) {
+                openUnsavedChangesDialog(forceCloseSceneZonesEditor);
+                return;
+            }
+            forceCloseSceneZonesEditor();
+        }
+
+        function saveSceneZonesTemp() {
+            var errorLine = document.getElementById("sceneZonesError");
+            if (errorLine) {
+                errorLine.hidden = true;
+            }
+            var invalid = sceneDraftZones.some(function (zone) {
+                var points = Array.isArray(zone.points) ? zone.points : [];
+                if (points.length < 3) {
+                    return true;
+                }
+                var transparency = Number(zone.transparency);
+                if (!isFinite(transparency)) {
+                    transparency = 0;
+                }
+                if (transparency < 1 && (!zone.colorOn || !zone.colorOff)) {
+                    return true;
+                }
+                return false;
+            });
+            if (invalid) {
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = "Each zone needs ≥3 points; ON/OFF colors when not fully transparent";
+                }
+                return;
+            }
+            sceneEditorZones = cloneSceneZones(sceneDraftZones);
+            sceneZonesDirty = false;
+            sceneBindDirty = true;
+            forceCloseSceneZonesEditor();
+            updateSceneBindPreview();
+        }
+
+        function syncSceneZoneToolButtons() {
+            var deleteBtn = document.getElementById("sceneZoneDeleteBtn");
+            if (deleteBtn) {
+                deleteBtn.disabled = !(sceneSelectedZoneIndex >= 0
+                    && sceneSelectedZoneIndex < sceneDraftZones.length);
+            }
+        }
+
+        function addSceneZonesDialogZone() {
+            var zone = defaultSceneZone();
+            zone.points = defaultSceneZonePolygon();
+            sceneDraftZones.push(zone);
+            sceneSelectedZoneIndex = sceneDraftZones.length - 1;
+            sceneSelectedZoneVertex = -1;
+            sceneZoneTool = "";
+            sceneZoneDraftPoints = [];
+            sceneZonesDirty = true;
+            syncSceneZoneToolButtons();
+            syncSceneZoneInspector();
+            paintSceneZonesEditor();
+        }
+
+        function refreshSceneZonesEditorFrame() {
+            var empty = document.getElementById("sceneZonesEmpty");
+            var frame = document.getElementById("sceneZonesFrame");
+            var img = document.getElementById("sceneZonesImage");
+            var overlays = document.getElementById("sceneZonesOverlays");
+            if (!empty || !frame || !img || !overlays) {
+                return;
+            }
+            if (!sceneDraftCameraId) {
+                empty.hidden = false;
+                empty.textContent = "Select a camera first";
+                frame.hidden = true;
+                overlays.innerHTML = "";
+                return;
+            }
+            fetch("/api/cameras/media?id=" + encodeURIComponent(sceneDraftCameraId), { cache: "no-store" })
+                .then(function (response) {
+                    if (!response.ok) {
+                        return null;
+                    }
+                    return response.json();
+                })
+                .then(function (media) {
+                    var channel = media && Array.isArray(media.channels) ? media.channels[0] : null;
+                    var snapshotUrl = channel && channel.snapshotUrl ? String(channel.snapshotUrl) : "";
+                    if (!snapshotUrl) {
+                        empty.hidden = false;
+                        empty.textContent = "Camera unavailable";
+                        frame.hidden = true;
+                        overlays.innerHTML = "";
+                        return;
+                    }
+                    empty.hidden = true;
+                    frame.hidden = false;
+                    img.classList.add("is-fill");
+                    sceneZonesCameraPreviewUrl = snapshotUrl
+                        + (snapshotUrl.indexOf("?") >= 0 ? "&" : "?") + "_=zones";
+                    if (img.getAttribute("src") !== sceneZonesCameraPreviewUrl) {
+                        img.src = sceneZonesCameraPreviewUrl;
+                    }
+                    if (typeof SceneKit.bindSceneOverlayLayout === "function") {
+                        SceneKit.bindSceneOverlayLayout(frame, img, overlays);
+                    }
+                    paintSceneZonesEditor();
+                })
+                .catch(function () {
+                    empty.hidden = false;
+                    empty.textContent = "Camera unavailable";
+                    frame.hidden = true;
+                    overlays.innerHTML = "";
+                });
+        }
+
+        function sceneZonesNormFromEvent(event) {
+            var frame = document.getElementById("sceneZonesFrame");
+            var img = document.getElementById("sceneZonesImage");
+            if (typeof SceneKit.normFromClientInContentBox === "function") {
+                return SceneKit.normFromClientInContentBox(event.clientX, event.clientY, frame, img);
+            }
+            return { x: 0, y: 0 };
+        }
+
+        function paintSceneZonesEditor() {
+            var overlays = document.getElementById("sceneZonesOverlays");
+            var frame = document.getElementById("sceneZonesFrame");
+            if (!overlays || !frame || frame.hidden) {
+                return;
+            }
+            overlays.innerHTML = "";
+            var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            svg.setAttribute("class", "scene-zones-edit-svg");
+            svg.setAttribute("viewBox", "0 0 1 1");
+            svg.setAttribute("preserveAspectRatio", "none");
+            var handleRadii = sceneZoneEditorHandleRadii(frame, overlays);
+            sceneDraftZones.forEach(function (zone, index) {
+                var points = Array.isArray(zone.points) ? zone.points : [];
+                if (points.length < 3) {
+                    return;
+                }
+                var selected = index === sceneSelectedZoneIndex;
+                var poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+                poly.setAttribute("points", points.map(function (p) {
+                    return SceneKit.clamp01(p.x) + "," + SceneKit.clamp01(p.y);
+                }).join(" "));
+                poly.setAttribute("fill", SceneKit.hexToRgba(zone.colorOn || "#38bdf8", 0.3));
+                poly.setAttribute("stroke", selected ? "#fbbf24" : "rgba(255,255,255,0.7)");
+                poly.setAttribute("stroke-width", selected ? "2" : "1");
+                poly.setAttribute("vector-effect", "non-scaling-stroke");
+                poly.style.cursor = "pointer";
+                poly.addEventListener("pointerdown", function (event) {
+                    if (event.button != null && event.button !== 0) {
+                        return;
+                    }
+                    event.preventDefault();
+                    event.stopPropagation();
+                    sceneSelectedZoneIndex = index;
+                    sceneSelectedZoneVertex = -1;
+                    syncSceneZoneToolButtons();
+                    syncSceneZoneInspector();
+                    paintSceneZonesEditor();
+                });
+                poly.addEventListener("dblclick", function (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    insertSceneZoneVertexAtEvent(index, event);
+                });
+                svg.appendChild(poly);
+                points.forEach(function (point, vertexIndex) {
+                    var handle = document.createElementNS("http://www.w3.org/2000/svg", "ellipse");
+                    handle.setAttribute("class", "scene-zone-handle");
+                    handle.setAttribute("cx", String(SceneKit.clamp01(point.x)));
+                    handle.setAttribute("cy", String(SceneKit.clamp01(point.y)));
+                    handle.setAttribute("rx", String(handleRadii.rx));
+                    handle.setAttribute("ry", String(handleRadii.ry));
+                    handle.setAttribute(
+                        "fill",
+                        selected && vertexIndex === sceneSelectedZoneVertex
+                            ? "#fbbf24"
+                            : (selected ? "#22c55e" : "#a78bfa")
+                    );
+                    handle.setAttribute("stroke", "#111827");
+                    handle.setAttribute("stroke-width", "1");
+                    handle.setAttribute("vector-effect", "non-scaling-stroke");
+                    handle.style.cursor = "move";
+                    handle.addEventListener("pointerdown", function (event) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (trySceneZoneHandleDoubleTap("zones", index, vertexIndex)) {
+                            var zRemove = sceneDraftZones[index];
+                            if (zRemove
+                                && Array.isArray(zRemove.points)
+                                && zRemove.points.length > 3
+                                && vertexIndex >= 0
+                                && vertexIndex < zRemove.points.length) {
+                                zRemove.points.splice(vertexIndex, 1);
+                                sceneSelectedZoneIndex = index;
+                                sceneSelectedZoneVertex = -1;
+                                sceneZoneDrag = null;
+                                sceneZonesDirty = true;
+                                syncSceneZoneToolButtons();
+                                syncSceneZoneInspector();
+                                paintSceneZonesEditor();
+                            }
+                            return;
+                        }
+                        sceneSelectedZoneIndex = index;
+                        sceneSelectedZoneVertex = vertexIndex;
+                        sceneZoneDrag = {
+                            zoneIndex: index,
+                            vertexIndex: vertexIndex,
+                            pointerId: event.pointerId,
+                            handleEl: handle,
+                            polyEl: poly,
+                            moved: false
+                        };
+                        try {
+                            handle.setPointerCapture(event.pointerId);
+                        } catch (ignore) {
+                        }
+                        syncSceneZoneToolButtons();
+                        syncSceneZoneInspector();
+                    });
+                    svg.appendChild(handle);
+                });
+            });
+            svg.addEventListener("pointerdown", function (event) {
+                if (sceneZoneDrag || event.target !== svg) {
+                    return;
+                }
+                sceneSelectedZoneIndex = -1;
+                sceneSelectedZoneVertex = -1;
+                syncSceneZoneToolButtons();
+                syncSceneZoneInspector();
+                paintSceneZonesEditor();
+            });
+            svg.addEventListener("pointermove", onSceneZonesSvgPointerMove);
+            svg.addEventListener("pointerup", onSceneZonesSvgPointerUp);
+            svg.addEventListener("pointercancel", onSceneZonesSvgPointerUp);
+            overlays.appendChild(svg);
+            syncSceneZoneToolButtons();
+        }
+
+        function onSceneZonesSvgPointerMove(event) {
+            if (!sceneZoneDrag || sceneZoneDrag.bindPreview) {
+                return;
+            }
+            if (sceneZoneDrag.pointerId != null && event.pointerId !== sceneZoneDrag.pointerId) {
+                return;
+            }
+            var zone = sceneDraftZones[sceneZoneDrag.zoneIndex];
+            if (!zone || !Array.isArray(zone.points)) {
+                return;
+            }
+            var norm = sceneZonesNormFromEvent(event);
+            // No Shift axis-lock for camera zones (spec).
+            var nextX = SceneKit.clamp01(norm.x);
+            var nextY = SceneKit.clamp01(norm.y);
+            var prev = zone.points[sceneZoneDrag.vertexIndex];
+            if (!prev
+                || Math.abs(prev.x - nextX) > 0.003
+                || Math.abs(prev.y - nextY) > 0.003) {
+                sceneZoneDrag.moved = true;
+                sceneZoneHandleLastTap = null;
+            }
+            zone.points[sceneZoneDrag.vertexIndex] = {
+                x: nextX,
+                y: nextY
+            };
+            sceneZonesDirty = true;
+            var handle = sceneZoneDrag.handleEl;
+            if (handle) {
+                handle.setAttribute("cx", String(zone.points[sceneZoneDrag.vertexIndex].x));
+                handle.setAttribute("cy", String(zone.points[sceneZoneDrag.vertexIndex].y));
+            }
+            var poly = sceneZoneDrag.polyEl;
+            if (poly) {
+                poly.setAttribute("points", zone.points.map(function (p) {
+                    return SceneKit.clamp01(p.x) + "," + SceneKit.clamp01(p.y);
+                }).join(" "));
+            }
+        }
+
+        function onSceneZonesSvgPointerUp(event) {
+            if (!sceneZoneDrag || sceneZoneDrag.bindPreview) {
+                return;
+            }
+            if (sceneZoneDrag.pointerId != null && event.pointerId !== sceneZoneDrag.pointerId) {
+                return;
+            }
+            var moved = !!sceneZoneDrag.moved;
+            sceneZoneDrag = null;
+            if (moved) {
+                paintSceneZonesEditor();
+            } else {
+                syncSceneZoneToolButtons();
+                syncSceneZoneInspector();
+            }
+        }
+
+        function insertSceneZoneVertexAtEvent(zoneIndex, event) {
+            var zone = sceneDraftZones[zoneIndex];
+            if (!zone || !Array.isArray(zone.points) || zone.points.length < 2) {
+                return;
+            }
+            var norm = sceneZonesNormFromEvent(event);
+            var bestEdge = 0;
+            var bestDist = Infinity;
+            var i;
+            for (i = 0; i < zone.points.length; i++) {
+                var a = zone.points[i];
+                var b = zone.points[(i + 1) % zone.points.length];
+                var mx = (a.x + b.x) * 0.5;
+                var my = (a.y + b.y) * 0.5;
+                var dx = norm.x - mx;
+                var dy = norm.y - my;
+                var dist = dx * dx + dy * dy;
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestEdge = i;
+                }
+            }
+            zone.points.splice(bestEdge + 1, 0, {
+                x: SceneKit.clamp01(norm.x),
+                y: SceneKit.clamp01(norm.y)
+            });
+            sceneSelectedZoneIndex = zoneIndex;
+            sceneSelectedZoneVertex = bestEdge + 1;
+            sceneZonesDirty = true;
+            syncSceneZoneInspector();
+            paintSceneZonesEditor();
+        }
+
+        function removeSelectedSceneZoneOrVertex() {
+            if (sceneSelectedZoneIndex < 0 || sceneSelectedZoneIndex >= sceneDraftZones.length) {
+                return;
+            }
+            var zone = sceneDraftZones[sceneSelectedZoneIndex];
+            if (sceneSelectedZoneVertex >= 0
+                && Array.isArray(zone.points)
+                && zone.points.length > 3
+                && sceneSelectedZoneVertex < zone.points.length) {
+                zone.points.splice(sceneSelectedZoneVertex, 1);
+                sceneSelectedZoneVertex = -1;
+                sceneZonesDirty = true;
+                syncSceneZoneToolButtons();
+                paintSceneZonesEditor();
+                return;
+            }
+            sceneDraftZones.splice(sceneSelectedZoneIndex, 1);
+            sceneSelectedZoneIndex = -1;
+            sceneSelectedZoneVertex = -1;
+            sceneZonesDirty = true;
+            syncSceneZoneToolButtons();
+            syncSceneZoneInspector();
+            paintSceneZonesEditor();
+        }
+
+        function syncSceneZoneInspector() {
+            var inspector = document.getElementById("sceneZoneInspector");
+            var zone = sceneSelectedZoneIndex >= 0 ? sceneDraftZones[sceneSelectedZoneIndex] : null;
+            if (!inspector) {
+                return;
+            }
+            if (!zone) {
+                inspector.hidden = true;
+                return;
+            }
+            inspector.hidden = false;
+            var transparencyInput = document.getElementById("sceneZoneTransparency");
+            var colorOn = document.getElementById("sceneZoneColorOn");
+            var colorOff = document.getElementById("sceneZoneColorOff");
+            var colorOnField = document.getElementById("sceneZoneColorOnField");
+            var colorOffField = document.getElementById("sceneZoneColorOffField");
+            if (transparencyInput) {
+                transparencyInput.value = String(
+                    zone.transparency != null ? zone.transparency : 0.3
+                );
+            }
+            if (colorOn) {
+                colorOn.value = zone.colorOn || "#22c55e";
+            }
+            if (colorOff) {
+                colorOff.value = zone.colorOff || "#ef4444";
+            }
+            var fullyTransparent = Number(zone.transparency) >= 1;
+            if (colorOnField) {
+                colorOnField.hidden = fullyTransparent;
+            }
+            if (colorOffField) {
+                colorOffField.hidden = fullyTransparent;
+            }
+        }
+
+        function onSceneZoneInspectorInput() {
+            var zone = sceneSelectedZoneIndex >= 0 ? sceneDraftZones[sceneSelectedZoneIndex] : null;
+            if (!zone) {
+                return;
+            }
+            var transparencyInput = document.getElementById("sceneZoneTransparency");
+            var colorOn = document.getElementById("sceneZoneColorOn");
+            var colorOff = document.getElementById("sceneZoneColorOff");
+            var transparency = Number(transparencyInput && transparencyInput.value);
+            if (!isFinite(transparency)) {
+                transparency = 0;
+            }
+            if (transparency < 0) {
+                transparency = 0;
+            }
+            if (transparency > 1) {
+                transparency = 1;
+            }
+            zone.transparency = transparency;
+            if (colorOn) {
+                zone.colorOn = colorOn.value || "#22c55e";
+            }
+            if (colorOff) {
+                zone.colorOff = colorOff.value || "#ef4444";
+            }
+            sceneZonesDirty = true;
+            syncSceneZoneInspector();
+            paintSceneZonesEditor();
+        }
+
+        function sceneZoneToBinding(zone) {
+            var binding = {
+                ieee: zone.ieee || "",
+                channel: zone.channel != null ? zone.channel : 1,
+                param: zone.param || "",
+                viewStyle: "default",
+                title: "",
+                showTitle: false,
+                unit: "",
+                decimals: -1
+            };
+            if (zone.automation || zone.automationId) {
+                binding.automation = zone.automation || zone.automationId || "";
+                binding.automationControl = zone.automationControl || "enableDisable";
+                delete binding.ieee;
+            }
+            if (zone.cluster != null) {
+                binding.cluster = zone.cluster;
+            }
+            if (zone.attrId != null) {
+                binding.attrId = zone.attrId;
+            }
+            if (zone.asLogical) {
+                binding.asLogical = true;
+                binding.logicalThreshold = zone.logicalThreshold;
+            }
+            if (zone.actionOff) {
+                binding.clickActionFalse = zone.actionOff;
+            }
+            if (zone.actionOn) {
+                binding.clickActionTrue = zone.actionOn;
+            }
+            return binding;
+        }
+
+        function applyBindingBodyToSceneZone(zone, body) {
+            if (body.automation) {
+                zone.automation = body.automation;
+                zone.automationId = body.automation;
+                zone.automationControl = body.automationControl || "enableDisable";
+                zone.ieee = "";
+                zone.param = "";
+                delete zone.cluster;
+                delete zone.attrId;
+                delete zone.asLogical;
+                delete zone.logicalThreshold;
+            } else {
+                zone.ieee = body.ieee || "";
+                zone.channel = body.channel != null ? body.channel : 1;
+                zone.param = body.param || "";
+                delete zone.automation;
+                delete zone.automationId;
+                delete zone.automationControl;
+                if (body.cluster != null) {
+                    zone.cluster = body.cluster;
+                } else {
+                    delete zone.cluster;
+                }
+                if (body.attrId != null) {
+                    zone.attrId = body.attrId;
+                } else {
+                    delete zone.attrId;
+                }
+                if (body.asLogical) {
+                    zone.asLogical = true;
+                    zone.logicalThreshold = body.logicalThreshold;
+                } else {
+                    delete zone.asLogical;
+                    delete zone.logicalThreshold;
+                }
+            }
+            zone.actionOn = body.clickActionTrue || null;
+            zone.actionOff = body.clickActionFalse || null;
+            return zone;
+        }
+
+        function openSelectedSceneZoneBinding() {
+            if (sceneSelectedZoneIndex < 0 || sceneSelectedZoneIndex >= sceneDraftZones.length) {
+                var errorLine = document.getElementById("sceneZonesError");
+                if (errorLine) {
+                    errorLine.hidden = false;
+                    errorLine.textContent = "Select a zone first";
+                }
+                return;
+            }
+            scenePendingZone = sceneDraftZones[sceneSelectedZoneIndex];
+            sceneZoneDialogIsNew = false;
+            consoleDeviceDialogSceneZone = true;
+            openConsoleDeviceDialog(-1, -1);
+        }
+
+        function closeSceneZoneBindingDialog() {
+            scenePendingZone = null;
+            sceneZoneDialogIsNew = false;
+            consoleDeviceDialogSceneZone = false;
+            if (document.getElementById("consoleDeviceDialog")
+                && !document.getElementById("consoleDeviceDialog").hidden) {
+                document.getElementById("consoleDeviceDialog").hidden = true;
+            }
+            paintSceneZonesEditor();
         }
 
         function openSceneGeometryEditor() {
@@ -15556,11 +17018,20 @@
             }
             var body = {
                 name: name,
+                kind: normalizeSceneKind(sceneDraftKind),
+                cameraId: sceneDraftKind === "camera" ? (sceneDraftCameraId || "") : "",
+                refreshInterval: clampSceneRefreshInterval(sceneDraftRefreshInterval),
                 sceneModel: sceneDraftModel || SceneKit.defaultModel(),
-                pins: sceneEditorPins
+                pins: sceneDraftKind === "camera" ? [] : sceneEditorPins,
+                zones: sceneDraftKind === "camera" ? sceneEditorZones : []
             };
             if (sceneDialogIsEdit && sceneDialogOriginalId) {
                 body.id = sceneDialogOriginalId;
+            }
+            if (sceneDraftKind === "camera" && !body.cameraId) {
+                errorLine.hidden = false;
+                errorLine.textContent = "Select a camera";
+                return;
             }
             var savePromise = sceneDialogIsEdit
                 ? fetch("/api/scenes/update?id=" + encodeURIComponent(sceneDialogOriginalId), {
@@ -15587,7 +17058,7 @@
                             sceneDialogOriginalId = "";
                         }
                     }
-                    if (!scenePendingBakeBlob || !sceneDialogOriginalId) {
+                    if (sceneDraftKind === "camera" || !scenePendingBakeBlob || !sceneDialogOriginalId) {
                         return null;
                     }
                     return fetch("/api/scenes/bake?id=" + encodeURIComponent(sceneDialogOriginalId), {
@@ -18038,6 +19509,86 @@
 
         var consoleEditorCameras = [];
 
+        function sceneZoneResolvedIsOn(zone) {
+            if (!zone) {
+                return false;
+            }
+            var binding = sceneZoneToBinding(zone);
+            if (binding.automation) {
+                return typeof placeAutomationIsActive === "function"
+                    ? !!placeAutomationIsActive(binding.automation)
+                    : false;
+            }
+            var device = typeof findRegisteredDevice === "function"
+                ? findRegisteredDevice(binding.ieee)
+                : null;
+            if (!device) {
+                return false;
+            }
+            var typeId = device.type || "";
+            if (typeId === "onOff") {
+                var onState = placeOnOffState(device, binding);
+                return String(onState).toUpperCase() === "ON";
+            }
+            if (bindingUsesAsLogical(device, binding)) {
+                return isBinaryStateOn(bindingLogicalStateText(
+                    binding,
+                    placeBindingNumericValue(device, binding)
+                ));
+            }
+            if (isBinarySensorDeviceType(typeId)
+                || (typeId === "userData"
+                    && userDataFieldTypeForParam(device, binding.param || "") === "bool")) {
+                return isBinaryStateOn(placeBindingResolvedState(device, binding));
+            }
+            var stateText = placeBindingResolvedState(device, binding);
+            return isBinaryStateOn(stateText);
+        }
+
+        function runSceneZoneDefaultDeviceCommand(binding, currentlyOn) {
+            if (!binding || binding.automation) {
+                return;
+            }
+            var device = typeof findRegisteredDevice === "function"
+                ? findRegisteredDevice(binding.ieee)
+                : null;
+            if (!device) {
+                return;
+            }
+            // Controllable On/Off actuators: toggle. Binary sensors have no command path.
+            if ((device.type || "") !== "onOff") {
+                return;
+            }
+            var channel = typeof placeBindingChannel === "function"
+                ? placeBindingChannel(binding)
+                : (binding.channel != null ? binding.channel : 1);
+            var nextOn = !currentlyOn;
+            if (typeof setActuatorOptimistic === "function") {
+                setActuatorOptimistic(device.ieee, channel, nextOn);
+            }
+            if (typeof placeSendCommand === "function") {
+                placeSendCommand(device.ieee, nextOn ? "ON" : "OFF", channel);
+            }
+            if (typeof refreshPlaceConsolesIfActive === "function") {
+                refreshPlaceConsolesIfActive();
+            }
+        }
+
+        function runSceneZoneClick(zone, isOn) {
+            if (!zone) {
+                return;
+            }
+            var binding = sceneZoneToBinding(zone);
+            var currentlyOn = !!isOn;
+            // Current state ON → actionOn replaces OFF command; OFF → actionOff replaces ON.
+            var handler = makeBindingClickActionHandler(binding, currentlyOn);
+            if (handler) {
+                handler();
+                return;
+            }
+            runSceneZoneDefaultDeviceCommand(binding, currentlyOn);
+        }
+
         function mountLiveSceneCell(host, sceneId) {
             if (!window.SceneKit) {
                 host.textContent = "Scene";
@@ -18055,6 +19606,12 @@
                     } else {
                         pinEl.textContent = "•";
                     }
+                },
+                resolveZoneIsOn: function (zone) {
+                    return sceneZoneResolvedIsOn(zone);
+                },
+                onZoneClick: function (zone, index, isOn) {
+                    runSceneZoneClick(zone, isOn);
                 }
             });
         }
@@ -20489,6 +22046,37 @@
             }
         }
 
+        function applyZoneBindingDialogChrome() {
+            if (!consoleDeviceDialogSceneZone) {
+                return;
+            }
+            // Active zones have no icon/gauge/title presentation — only state source + click actions.
+            setHidden(document.getElementById("consoleDeviceViewStyleField"), true);
+            setHidden(document.getElementById("consoleDeviceGaugeGroup"), true);
+            setHidden(document.getElementById("consoleDeviceIconGroup"), true);
+            setHidden(document.getElementById("consoleDeviceIconScaleField"), true);
+            setHidden(document.getElementById("consoleDeviceTitleField"), true);
+            setHidden(document.getElementById("consoleDeviceTitlePositionField"), true);
+            setHidden(document.getElementById("consoleDeviceAlignHField"), true);
+            setHidden(document.getElementById("consoleDeviceAlignVField"), true);
+            var showTitleCheck = document.getElementById("consoleDeviceShowTitle");
+            if (showTitleCheck) {
+                showTitleCheck.checked = false;
+            }
+            var viewStyleSelect = document.getElementById("consoleDeviceViewStyle");
+            if (viewStyleSelect) {
+                viewStyleSelect.value = "default";
+            }
+            var clickHint = document.querySelector("#consoleDeviceClickActionSection > .field-hint");
+            if (clickHint) {
+                clickHint.textContent = "Optional automations for binary state (empty = send device command)";
+            }
+            var enableRow = document.querySelector(
+                "#consoleDeviceClickActionSection .console-binding-general-row"
+            );
+            setHidden(enableRow, true);
+        }
+
         function refreshConsoleDeviceGaugeFields() {
             var target = document.getElementById("consoleBindingTarget");
             var isAutomation = !!(target && target.value === "automation");
@@ -20507,6 +22095,11 @@
                 }
             }
             setHidden(thresholdField, !(isNumericParam && consoleDialogAsLogicalChecked()));
+            if (consoleDeviceDialogSceneZone) {
+                applyZoneBindingDialogChrome();
+                refreshConsoleDeviceTitleLayoutFields();
+                return;
+            }
             var allowsIconStyle = isAutomation || consoleBindingAllowsIcon(device, paramValue);
             var allowsGauge = !isAutomation
                 && !allowsIconStyle
@@ -20624,10 +22217,88 @@
             renderConsoleDeviceClickActionEditor();
         }
 
+        function zoneStateAutomationNameFromDraft(draft) {
+            if (!draft || typeof draft !== "object") {
+                return "";
+            }
+            if (draft.target === "automation" || draft.automation || draft.name) {
+                return String(draft.name || draft.automation || "");
+            }
+            return "";
+        }
+
+        function makeZoneStateAutomationDraft(name) {
+            var trimmed = String(name || "").trim();
+            if (!trimmed) {
+                return null;
+            }
+            return { target: "automation", name: trimmed, op: "RUN" };
+        }
+
+        function renderZoneStateActionPickers(host) {
+            host.hidden = false;
+            host.innerHTML = "";
+            var automationSelect = document.getElementById("consoleAutomationSelect");
+            var names = [];
+            if (automationSelect) {
+                Array.prototype.forEach.call(automationSelect.options || [], function (opt) {
+                    if (opt && opt.value) {
+                        names.push(opt.value);
+                    }
+                });
+            }
+            if (!names.length && Array.isArray(automationNameListCache)) {
+                names = automationNameListCache.slice();
+            }
+            function renderPicker(which, labelText) {
+                var section = document.createElement("div");
+                section.className = "console-click-action-section-state";
+                var label = document.createElement("p");
+                label.className = "field-hint";
+                label.textContent = labelText;
+                var select = document.createElement("select");
+                select.setAttribute("aria-label", labelText);
+                var noneOpt = document.createElement("option");
+                noneOpt.value = "";
+                noneOpt.textContent = "(none)";
+                select.appendChild(noneOpt);
+                var i;
+                for (i = 0; i < names.length; i++) {
+                    var opt = document.createElement("option");
+                    opt.value = names[i];
+                    opt.textContent = names[i];
+                    select.appendChild(opt);
+                }
+                select.value = zoneStateAutomationNameFromDraft(getConsoleClickActionDraft(which));
+                if (select.value && !names.some(function (n) { return n === select.value; })) {
+                    var orphan = document.createElement("option");
+                    orphan.value = select.value;
+                    orphan.textContent = select.value;
+                    select.appendChild(orphan);
+                }
+                select.onchange = function () {
+                    setConsoleClickActionDraft(which, makeZoneStateAutomationDraft(select.value));
+                };
+                section.appendChild(label);
+                section.appendChild(select);
+                host.appendChild(section);
+            }
+            // OFF state action replaces the ON command; ON state action replaces OFF.
+            renderPicker("false", "Action for OFF");
+            renderPicker("true", "Action for ON");
+        }
+
         function renderConsoleDeviceClickActionEditor() {
             var host = document.getElementById("consoleDeviceClickActionEditor");
             var enableInput = document.getElementById("consoleDeviceClickActionEnable");
             if (!host) {
+                return;
+            }
+            if (consoleDeviceDialogSceneZone) {
+                if (enableInput) {
+                    enableInput.checked = false;
+                }
+                renderZoneStateActionPickers(host);
                 return;
             }
             if (enableInput) {
@@ -20995,14 +22666,16 @@
         }
 
         function openConsoleDeviceDialog(widgetIndex, bindingIndex) {
-            if (!consoleDeviceDialogScenePin) {
+            if (!consoleDeviceDialogScenePin && !consoleDeviceDialogSceneZone) {
                 readConsoleEditorFields();
             }
             var openSeq = ++consoleDeviceDialogOpenSeq;
             consoleDeviceDialogWidgetIndex = widgetIndex;
             consoleDeviceDialogBindingIndex = bindingIndex;
             var binding;
-            if (consoleDeviceDialogScenePin && scenePendingPin) {
+            if (consoleDeviceDialogSceneZone && scenePendingZone) {
+                binding = sceneZoneToBinding(scenePendingZone);
+            } else if (consoleDeviceDialogScenePin && scenePendingPin) {
                 binding = scenePinToBinding(scenePendingPin);
             } else if (bindingIndex >= 0
                 && consoleEditorDraft
@@ -21030,9 +22703,12 @@
                 binding.iconOffColor, CONSOLE_ICON_OFF_COLOR_DEFAULT
             );
             // Apply after option lists exist — setting .value before Icon/Gauge options are built drops it.
-            consoleDevicePreferredViewStyle = binding.viewStyle === "gauge"
-                ? "gauge"
-                : (binding.viewStyle === "icon" ? "icon" : "default");
+            // Zones never use icon/gauge chrome.
+            consoleDevicePreferredViewStyle = consoleDeviceDialogSceneZone
+                ? "default"
+                : (binding.viewStyle === "gauge"
+                    ? "gauge"
+                    : (binding.viewStyle === "icon" ? "icon" : "default"));
             Promise.all([
                 fetch("/api/devices", { cache: "no-store" }).then(function (response) { return response.json(); }),
                 fetch("/api/automations", { cache: "no-store" }).then(function (response) { return response.json(); })
@@ -21204,6 +22880,33 @@
                     consoleDeviceClickActionEnabled = false;
                     consoleDeviceClickActionFalseDraft = null;
                     consoleDeviceClickActionTrueDraft = null;
+                } else if (consoleDeviceDialogSceneZone) {
+                    // Optional Action for ON/OFF — keep null when empty (device command fallback).
+                    consoleDeviceClickActionEnabled = false;
+                    consoleDeviceClickActionFalseDraft = loadedFalse
+                        || (loadedLegacy ? cloneAutomationActionObject(loadedLegacy) : null)
+                        || null;
+                    consoleDeviceClickActionTrueDraft = loadedTrue
+                        || (loadedLegacy ? cloneAutomationActionObject(loadedLegacy) : null)
+                        || null;
+                    if (consoleDeviceClickActionFalseDraft
+                        && zoneStateAutomationNameFromDraft(consoleDeviceClickActionFalseDraft) === ""
+                        && consoleDeviceClickActionFalseDraft.target !== "automation") {
+                        consoleDeviceClickActionFalseDraft = makeZoneStateAutomationDraft(
+                            consoleDeviceClickActionFalseDraft.name
+                            || consoleDeviceClickActionFalseDraft.automation
+                            || ""
+                        );
+                    }
+                    if (consoleDeviceClickActionTrueDraft
+                        && zoneStateAutomationNameFromDraft(consoleDeviceClickActionTrueDraft) === ""
+                        && consoleDeviceClickActionTrueDraft.target !== "automation") {
+                        consoleDeviceClickActionTrueDraft = makeZoneStateAutomationDraft(
+                            consoleDeviceClickActionTrueDraft.name
+                            || consoleDeviceClickActionTrueDraft.automation
+                            || ""
+                        );
+                    }
                 } else if (loadedFalse || loadedTrue || loadedLegacy) {
                     consoleDeviceClickActionEnabled = true;
                     consoleDeviceClickActionFalseDraft = loadedFalse
@@ -21217,16 +22920,36 @@
                     consoleDeviceClickActionFalseDraft = null;
                     consoleDeviceClickActionTrueDraft = null;
                 }
+                if (!consoleDeviceDialogSceneZone) {
+                    var clickHintRestore = document.querySelector(
+                        "#consoleDeviceClickActionSection > .field-hint"
+                    );
+                    if (clickHintRestore) {
+                        clickHintRestore.textContent =
+                            "Click actions (one icon; OFF and ON may each run a different action)";
+                    }
+                    var enableRowRestore = document.querySelector(
+                        "#consoleDeviceClickActionSection .console-binding-general-row"
+                    );
+                    setHidden(enableRowRestore, false);
+                }
                 renderConsoleDeviceClickActionEditor();
                 var dialogTitle = document.querySelector("#consoleDeviceDialog .upload-title");
                 if (dialogTitle) {
-                    dialogTitle.textContent = consoleDeviceDialogScenePin ? "Pin" : "Binding";
+                    dialogTitle.textContent = consoleDeviceDialogSceneZone
+                        ? "Zone binding"
+                        : (consoleDeviceDialogScenePin ? "Pin" : "Binding");
                 }
                 var removeBtn = document.getElementById("consoleDeviceRemoveBtn");
                 if (removeBtn) {
-                    // Scene pins: Remove only for an already-saved pin.
-                    removeBtn.hidden = consoleDeviceDialogScenePin && scenePinDialogIsNew;
+                    // Scene pins: Remove only for an already-saved pin. Zones use toolbar delete.
+                    removeBtn.hidden = consoleDeviceDialogSceneZone
+                        || (consoleDeviceDialogScenePin && scenePinDialogIsNew);
                 }
+                if (targetSelect) {
+                    targetSelect.disabled = false;
+                }
+                applyZoneBindingDialogChrome();
                 refreshConsoleDeviceTitleLayoutFields();
                 document.getElementById("consoleDeviceDialog").hidden = false;
                 consoleDeviceDialogBaseline = JSON.stringify(readConsoleDeviceDialogBody());
@@ -21236,8 +22959,14 @@
                 }
                 var dialogTitleFail = document.querySelector("#consoleDeviceDialog .upload-title");
                 if (dialogTitleFail) {
-                    dialogTitleFail.textContent = consoleDeviceDialogScenePin ? "Pin" : "Binding";
+                    dialogTitleFail.textContent = consoleDeviceDialogSceneZone
+                        ? "Zone binding"
+                        : (consoleDeviceDialogScenePin ? "Pin" : "Binding");
                 }
+                if (targetSelect) {
+                    targetSelect.disabled = false;
+                }
+                applyZoneBindingDialogChrome();
                 refreshConsoleDeviceTitleLayoutFields();
                 document.getElementById("consoleDeviceDialog").hidden = false;
                 document.getElementById("consoleDeviceDialogError").hidden = false;
@@ -21384,6 +23113,18 @@
 
 
         function applyClickActionsToBindingBody(body) {
+            // Zone bind: optional Action for ON/OFF automations (empty = device command).
+            if (consoleDeviceDialogSceneZone) {
+                if (consoleDeviceClickActionFalseDraft) {
+                    body.clickActionFalse = cloneAutomationActionObject(consoleDeviceClickActionFalseDraft)
+                        || consoleDeviceClickActionFalseDraft;
+                }
+                if (consoleDeviceClickActionTrueDraft) {
+                    body.clickActionTrue = cloneAutomationActionObject(consoleDeviceClickActionTrueDraft)
+                        || consoleDeviceClickActionTrueDraft;
+                }
+                return body;
+            }
             if (!consoleDeviceClickActionEnabled) {
                 return body;
             }
@@ -21557,6 +23298,17 @@
                 syncSceneBindToolButtons();
                 updateSceneBindPreview();
             }
+            if (consoleDeviceDialogSceneZone) {
+                consoleDeviceDialogSceneZone = false;
+                scenePendingZone = null;
+                sceneZoneDialogIsNew = false;
+                var zoneTarget = document.getElementById("consoleBindingTarget");
+                if (zoneTarget) {
+                    zoneTarget.disabled = false;
+                }
+                paintSceneZonesEditor();
+                paintSceneBindZonesInteractive();
+            }
         }
 
         function readConsoleSpacerDialogBody() {
@@ -21729,6 +23481,22 @@
                 }
                 return;
             }
+            if (consoleDeviceDialogSceneZone) {
+                if (!scenePendingZone) {
+                    return;
+                }
+                applyBindingBodyToSceneZone(scenePendingZone, body);
+                sceneZonesDirty = true;
+                sceneBindDirty = true;
+                consoleDeviceDialogSceneZone = false;
+                scenePendingZone = null;
+                sceneZoneDialogIsNew = false;
+                closeConsoleDeviceDialog();
+                paintSceneZonesEditor();
+                paintSceneBindZonesInteractive();
+                syncSceneBindZoneChrome();
+                return;
+            }
             if (!body.title) {
                 body.title = body.automation || body.ieee;
             }
@@ -21763,6 +23531,13 @@
         }
 
         function removeConsoleDeviceBinding() {
+            if (consoleDeviceDialogSceneZone) {
+                consoleDeviceDialogSceneZone = false;
+                scenePendingZone = null;
+                sceneZoneDialogIsNew = false;
+                closeConsoleDeviceDialog();
+                return;
+            }
             if (consoleDeviceDialogScenePin) {
                 if (!scenePinDialogIsNew && sceneSelectedPinIndex >= 0
                     && sceneSelectedPinIndex < sceneEditorPins.length) {
@@ -23831,13 +25606,55 @@
             <input id="sceneName" type="text" maxlength="63" oninput="sceneBindDirty = true">
         </div>
         <div class="scene-bind-toolbar">
-            <button type="button" class="btn btn-secondary" onclick="openSceneGeometryEditor()">Edit scene</button>
+            <select id="sceneKindSelect" class="scene-toolbar-select" aria-label="Scene kind"
+                    onchange="onSceneKindChanged()">
+                <option value="plan">Plan</option>
+                <option value="camera">Camera</option>
+            </select>
+            <button type="button" id="sceneEditSceneBtn" class="btn btn-secondary"
+                    onclick="openSceneEditForKind()">Edit scene</button>
+            <select id="sceneCameraSelect" class="scene-toolbar-select" aria-label="Camera" hidden
+                    onchange="onSceneCameraChanged()">
+                <option value="">Select camera</option>
+            </select>
+            <div id="sceneRefreshField" class="scene-refresh-field" hidden>
+                <input id="sceneRefreshInterval" type="number" min="1" max="60" step="1" value="3"
+                       aria-label="Refresh interval seconds" oninput="onSceneRefreshIntervalChanged()">
+                <span>sec</span>
+            </div>
+            <div id="sceneZoneOpacityField" class="scene-zone-opacity-field scene-zone-toolbar-lead" hidden>
+                <span class="scene-zone-opacity-label">opacity</span>
+                <input id="sceneZoneOpacity" type="number" min="0" max="100" step="1" value="90"
+                       aria-label="Zone opacity percent" oninput="onSceneZoneOpacityInput()">
+                <span>%</span>
+            </div>
+            <div id="sceneZoneColorOnField" class="scene-zone-color-field" hidden title="ON color">
+                <span class="scene-zone-color-label">ON</span>
+                <div id="sceneZoneColorOnControl" class="console-color-picker-control-host"
+                     aria-label="Zone ON color"></div>
+            </div>
+            <div id="sceneZoneColorOffField" class="scene-zone-color-field" hidden title="OFF color">
+                <span class="scene-zone-color-label">OFF</span>
+                <div id="sceneZoneColorOffControl" class="console-color-picker-control-host"
+                     aria-label="Zone OFF color"></div>
+            </div>
+            <button type="button" id="sceneBindAddZoneBtn"
+                    class="btn btn-secondary btn-icon" title="Add zone"
+                    aria-label="Add zone" hidden onclick="addSceneBindZone()">
+                <span class="mdi mdi-vector-polygon" aria-hidden="true"></span>
+            </button>
+            <button type="button" id="sceneBindDeleteZoneBtn"
+                    class="btn btn-secondary btn-icon" title="Delete selected zone"
+                    aria-label="Delete selected zone" hidden disabled onclick="deleteSelectedSceneBindZone()">
+                <span class="mdi mdi-trash-can-outline" aria-hidden="true"></span>
+            </button>
             <button type="button" id="sceneBindAddPinBtn" class="btn btn-secondary btn-icon" title="Add pin"
                     aria-label="Add pin" aria-pressed="false" onclick="setSceneBindAddPinTool()">
                 <span class="mdi mdi-map-marker-plus" aria-hidden="true"></span>
             </button>
-            <button type="button" class="btn btn-secondary btn-icon" title="Remove selected pin"
-                    aria-label="Remove selected pin" onclick="removeSelectedScenePin()">
+            <button type="button" id="sceneBindRemovePinBtn" class="btn btn-secondary btn-icon"
+                    title="Remove selected pin" aria-label="Remove selected pin"
+                    onclick="removeSelectedScenePin()">
                 <span class="mdi mdi-trash-can-outline" aria-hidden="true"></span>
             </button>
         </div>
@@ -23928,6 +25745,54 @@
         <div class="dialog-actions">
             <button type="button" class="btn btn-primary" onclick="saveSceneGeometryTemp()">Save</button>
             <button type="button" class="btn btn-secondary" onclick="requestCloseSceneGeometryEditor()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<div id="sceneZonesDialog" class="dialog-overlay console-edit-overlay dialog-overlay-nested" hidden
+     onclick="if (event.target === this) requestCloseSceneZonesEditor()">
+    <div class="dialog-panel console-edit-panel scene-edit-dialog" role="dialog" aria-label="Edit camera zones">
+        <h3>Edit scene</h3>
+        <p id="sceneZonesError" class="save-error" hidden></p>
+        <div class="scene-zones-toolbar">
+            <button type="button" id="sceneZoneAddBtn" class="btn btn-secondary btn-icon" title="Add zone"
+                    aria-label="Add zone" onclick="addSceneZonesDialogZone()">
+                <span class="mdi mdi-vector-polygon" aria-hidden="true"></span>
+            </button>
+            <button type="button" id="sceneZoneDeleteBtn" class="btn btn-secondary btn-icon"
+                    title="Remove selected zone or vertex" aria-label="Remove selected" disabled
+                    onclick="removeSelectedSceneZoneOrVertex()">
+                <span class="mdi mdi-trash-can-outline" aria-hidden="true"></span>
+            </button>
+            <button type="button" class="btn btn-secondary" onclick="openSelectedSceneZoneBinding()">
+                Binding &amp; actions
+            </button>
+        </div>
+        <div class="scene-bind-stage">
+            <div id="sceneZonesEmpty" class="scene-bind-empty">Select a camera first</div>
+            <div id="sceneZonesFrame" class="scene-bind-frame" hidden>
+                <img id="sceneZonesImage" class="scene-bind-image" alt="Camera">
+                <div id="sceneZonesOverlays" class="scene-bind-overlays scene-cell-overlays--zones"></div>
+            </div>
+        </div>
+        <div id="sceneZoneInspector" class="scene-zone-inspector" hidden>
+            <div class="field">
+                <label for="sceneZoneTransparency">Transparency</label>
+                <input id="sceneZoneTransparency" type="number" min="0" max="1" step="0.05" value="0.3"
+                       oninput="onSceneZoneInspectorInput()">
+            </div>
+            <div class="field" id="sceneZoneColorOnField">
+                <label for="sceneZoneColorOn">ON color</label>
+                <input id="sceneZoneColorOn" type="color" value="#22c55e" oninput="onSceneZoneInspectorInput()">
+            </div>
+            <div class="field" id="sceneZoneColorOffField">
+                <label for="sceneZoneColorOff">OFF color</label>
+                <input id="sceneZoneColorOff" type="color" value="#ef4444" oninput="onSceneZoneInspectorInput()">
+            </div>
+        </div>
+        <div class="dialog-actions">
+            <button type="button" class="btn btn-primary" onclick="saveSceneZonesTemp()">Save</button>
+            <button type="button" class="btn btn-secondary" onclick="requestCloseSceneZonesEditor()">Cancel</button>
         </div>
     </div>
 </div>

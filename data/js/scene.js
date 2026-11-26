@@ -3474,8 +3474,52 @@
         return size;
     }
 
+    function emptyContentBox(frameRect) {
+        return {
+            frameLeft: frameRect.left,
+            frameTop: frameRect.top,
+            left: 0,
+            top: 0,
+            width: 0,
+            height: 0,
+            leftPct: 0,
+            topPct: 0,
+            widthPct: 100,
+            heightPct: 100
+        };
+    }
+
+    function fullFrameContentBox(frameRect) {
+        var fw = frameRect.width;
+        var fh = frameRect.height;
+        return {
+            frameLeft: frameRect.left,
+            frameTop: frameRect.top,
+            left: 0,
+            top: 0,
+            width: fw,
+            height: fh,
+            leftPct: 0,
+            topPct: 0,
+            widthPct: 100,
+            heightPct: 100
+        };
+    }
+
+    function imageObjectFit(img) {
+        try {
+            if (img && typeof window !== "undefined" && window.getComputedStyle) {
+                return String(window.getComputedStyle(img).objectFit || "contain").toLowerCase();
+            }
+        } catch (ignore) {
+        }
+        return "contain";
+    }
+
     /**
-     * object-fit: contain content box of img inside frame (letterbox-aware).
+     * Content box of img inside frame.
+     * object-fit: fill → full frame (camera scenes / console-like stretch).
+     * object-fit: contain → letterbox-aware (plan bake).
      * left/top/width/height are frame-local CSS pixels; *Pct are % of frame size.
      */
     function containContentBox(frame, img) {
@@ -3484,35 +3528,16 @@
             : { left: 0, top: 0, width: 0, height: 0 };
         var fw = frameRect.width;
         var fh = frameRect.height;
+        if (!(fw > 0) || !(fh > 0)) {
+            return emptyContentBox(frameRect);
+        }
+        if (imageObjectFit(img) === "fill") {
+            return fullFrameContentBox(frameRect);
+        }
         var nw = img && img.naturalWidth ? img.naturalWidth : 0;
         var nh = img && img.naturalHeight ? img.naturalHeight : 0;
-        if (!(fw > 0) || !(fh > 0)) {
-            return {
-                frameLeft: frameRect.left,
-                frameTop: frameRect.top,
-                left: 0,
-                top: 0,
-                width: 0,
-                height: 0,
-                leftPct: 0,
-                topPct: 0,
-                widthPct: 100,
-                heightPct: 100
-            };
-        }
         if (!(nw > 0) || !(nh > 0)) {
-            return {
-                frameLeft: frameRect.left,
-                frameTop: frameRect.top,
-                left: 0,
-                top: 0,
-                width: fw,
-                height: fh,
-                leftPct: 0,
-                topPct: 0,
-                widthPct: 100,
-                heightPct: 100
-            };
+            return fullFrameContentBox(frameRect);
         }
         var scale = Math.min(fw / nw, fh / nh);
         var contentW = nw * scale;
@@ -3628,42 +3653,313 @@
         overlays.setAttribute("data-pins-struct", structSig);
     }
 
+    function sceneKindOf(view) {
+        return view && String(view.kind || "").toLowerCase() === "camera" ? "camera" : "plan";
+    }
+
+    function clampSceneRefreshSec(value) {
+        var n = Math.round(Number(value));
+        if (!isFinite(n) || n < 1) {
+            return 3;
+        }
+        if (n > 60) {
+            return 60;
+        }
+        return n;
+    }
+
+    function hexToRgba(hex, alpha) {
+        var text = String(hex || "").trim();
+        var match = /^#?([0-9a-fA-F]{6})$/.exec(text);
+        if (!match) {
+            return "rgba(56, 189, 248, " + alpha + ")";
+        }
+        var raw = match[1];
+        var r = parseInt(raw.slice(0, 2), 16);
+        var g = parseInt(raw.slice(2, 4), 16);
+        var b = parseInt(raw.slice(4, 6), 16);
+        return "rgba(" + r + ", " + g + ", " + b + ", " + alpha + ")";
+    }
+
+    function zoneFillOpacity(transparency, designTime) {
+        if (designTime) {
+            return 0.3;
+        }
+        var t = Number(transparency);
+        if (!isFinite(t)) {
+            t = 0;
+        }
+        if (t < 0) {
+            t = 0;
+        }
+        if (t > 1) {
+            t = 1;
+        }
+        return 1 - t;
+    }
+
+    function pointInPolygon(nx, ny, points) {
+        var inside = false;
+        var i;
+        var j;
+        if (!Array.isArray(points) || points.length < 3) {
+            return false;
+        }
+        for (i = 0, j = points.length - 1; i < points.length; j = i++) {
+            var xi = clamp01(points[i].x);
+            var yi = clamp01(points[i].y);
+            var xj = clamp01(points[j].x);
+            var yj = clamp01(points[j].y);
+            var intersect = ((yi > ny) !== (yj > ny))
+                && (nx < (xj - xi) * (ny - yi) / ((yj - yi) || 1e-12) + xi);
+            if (intersect) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    }
+
+    function paintSceneCellZones(overlays, zones, options) {
+        options = options || {};
+        overlays.innerHTML = "";
+        overlays.classList.add("scene-cell-overlays--zones");
+        var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("class", "scene-cell-zones-svg");
+        svg.setAttribute("viewBox", "0 0 1 1");
+        svg.setAttribute("preserveAspectRatio", "none");
+        svg.style.pointerEvents = "auto";
+        (zones || []).forEach(function (zone, index) {
+            var points = Array.isArray(zone.points) ? zone.points : [];
+            if (points.length < 3) {
+                return;
+            }
+            var isOn = typeof options.resolveZoneIsOn === "function"
+                ? !!options.resolveZoneIsOn(zone, index)
+                : false;
+            var transparency = Number(zone.transparency);
+            if (!isFinite(transparency)) {
+                transparency = 0;
+            }
+            var poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+            var pts = points.map(function (p) {
+                return clamp01(p.x) + "," + clamp01(p.y);
+            }).join(" ");
+            poly.setAttribute("points", pts);
+            poly.setAttribute("class", "scene-cell-zone");
+            if (transparency >= 1) {
+                poly.setAttribute("fill", "rgba(0,0,0,0)");
+            } else {
+                var color = isOn
+                    ? (zone.colorOn || "#22c55e")
+                    : (zone.colorOff || "#ef4444");
+                poly.setAttribute("fill", hexToRgba(color, zoneFillOpacity(transparency, false)));
+            }
+            // Place / user live view: fill only — no contour stroke.
+            poly.setAttribute("stroke", "none");
+            poly.setAttribute("stroke-width", "0");
+            poly.style.cursor = "pointer";
+            poly.addEventListener("click", function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                if (typeof options.onZoneClick === "function") {
+                    options.onZoneClick(zone, index, isOn);
+                }
+            });
+            svg.appendChild(poly);
+        });
+        overlays.appendChild(svg);
+        overlays.removeAttribute("data-pins-struct");
+    }
+
+    function stopSceneCameraRefresh(host) {
+        if (!host) {
+            return;
+        }
+        if (host._sceneCameraTimer) {
+            window.clearTimeout(host._sceneCameraTimer);
+            host._sceneCameraTimer = null;
+        }
+        host._sceneCameraArmed = false;
+        host._sceneCameraSnapshotUrl = "";
+        host._sceneCameraFrontImg = null;
+        host._sceneCameraBackImg = null;
+    }
+
+    function sceneCameraUrlWithCacheBuster(url) {
+        return url + (url.indexOf("?") >= 0 ? "&" : "?") + "_=" + Date.now();
+    }
+
+    function sceneCameraSwapJpeg(host) {
+        var url = host && host._sceneCameraSnapshotUrl;
+        var front = host && host._sceneCameraFrontImg;
+        var back = host && host._sceneCameraBackImg;
+        if (!url || !front || !back) {
+            return;
+        }
+        var generation = (host._sceneCameraJpegGeneration || 0) + 1;
+        host._sceneCameraJpegGeneration = generation;
+        var bustedUrl = sceneCameraUrlWithCacheBuster(url);
+        back.onload = function () {
+            if (!host.isConnected || host._sceneCameraJpegGeneration !== generation) {
+                return;
+            }
+            back.classList.add("is-front");
+            back.classList.remove("is-back");
+            front.classList.add("is-back");
+            front.classList.remove("is-front");
+            host._sceneCameraFrontImg = back;
+            host._sceneCameraBackImg = front;
+        };
+        back.onerror = function () { /* keep front */ };
+        back.src = bustedUrl;
+    }
+
+    function armSceneCameraJpegRefresh(host, intervalMs) {
+        if (!host || !host._sceneCameraSnapshotUrl || host._sceneCameraArmed) {
+            return;
+        }
+        host._sceneCameraArmed = true;
+        var refreshMs = intervalMs > 0 ? intervalMs : 3000;
+        function tick() {
+            host._sceneCameraTimer = null;
+            if (!host.isConnected) {
+                host._sceneCameraArmed = false;
+                return;
+            }
+            sceneCameraSwapJpeg(host);
+            host._sceneCameraTimer = window.setTimeout(tick, refreshMs);
+        }
+        var delay = host._sceneCameraInitialDelay != null
+            ? host._sceneCameraInitialDelay
+            : refreshMs;
+        host._sceneCameraInitialDelay = refreshMs;
+        host._sceneCameraTimer = window.setTimeout(tick, delay);
+    }
+
+    function mountCameraSceneCell(host, view, options) {
+        options = options || {};
+        var cameraId = view && view.cameraId ? String(view.cameraId) : "";
+        var sceneKey = String(view && view.id || "");
+        var refreshSec = clampSceneRefreshSec(view && view.refreshInterval);
+        var refreshMs = refreshSec * 1000;
+        host.classList.add("scene-cell", "scene-cell--camera");
+        host.classList.remove("scene-cell--empty");
+
+        // Reuse live camera DOM on Place refresh (zone click / console redraw) — avoid JPEG blink.
+        var reuseFrame = host.querySelector(".scene-cell-frame--camera");
+        var reuseStack = host.querySelector(".scene-cell-camera-stack");
+        var reuseOverlays = host.querySelector(".scene-cell-overlays--zones");
+        var canReuse = !!reuseFrame
+            && !!reuseStack
+            && !!reuseOverlays
+            && host.getAttribute("data-scene-id") === sceneKey
+            && host.getAttribute("data-scene-kind") === "camera"
+            && host.getAttribute("data-camera-id") === cameraId
+            && !!host._sceneCameraSnapshotUrl
+            && !!host._sceneCameraFrontImg;
+        if (canReuse) {
+            host.setAttribute("data-scene-id", sceneKey);
+            host.setAttribute("data-scene-kind", "camera");
+            host.setAttribute("data-camera-id", cameraId);
+            bindSceneOverlayLayout(reuseFrame, host._sceneCameraFrontImg, reuseOverlays);
+            paintSceneCellZones(reuseOverlays, view.zones || [], options);
+            if (!host._sceneCameraTimer && !host._sceneCameraArmed) {
+                armSceneCameraJpegRefresh(host, refreshMs);
+            }
+            return;
+        }
+
+        stopSceneCameraRefresh(host);
+        host.setAttribute("data-scene-id", sceneKey);
+        host.setAttribute("data-scene-kind", "camera");
+        host.setAttribute("data-camera-id", cameraId);
+        host.innerHTML = "";
+        var frame = document.createElement("div");
+        frame.className = "scene-cell-frame scene-cell-frame--camera";
+        var stack = document.createElement("div");
+        stack.className = "scene-cell-camera-stack";
+        var front = document.createElement("img");
+        front.className = "scene-cell-camera-img is-front";
+        front.alt = "Camera";
+        var back = document.createElement("img");
+        back.className = "scene-cell-camera-img is-back";
+        back.alt = "";
+        stack.appendChild(front);
+        stack.appendChild(back);
+        var overlays = document.createElement("div");
+        overlays.className = "scene-cell-overlays scene-cell-overlays--zones";
+        frame.appendChild(stack);
+        frame.appendChild(overlays);
+        host.appendChild(frame);
+        if (!cameraId) {
+            host.classList.add("scene-cell--empty");
+            overlays.remove();
+            stack.innerHTML = "";
+            var missing = document.createElement("div");
+            missing.className = "scene-cell-camera-unavailable";
+            missing.textContent = "Camera unavailable";
+            frame.appendChild(missing);
+            return;
+        }
+        fetch("/api/cameras/media?id=" + encodeURIComponent(cameraId), { cache: "no-store" })
+            .then(function (response) {
+                if (!response.ok) {
+                    return null;
+                }
+                return response.json();
+            })
+            .then(function (media) {
+                var channel = media && Array.isArray(media.channels) ? media.channels[0] : null;
+                var snapshotUrl = channel && channel.snapshotUrl ? String(channel.snapshotUrl) : "";
+                if (!snapshotUrl) {
+                    host.classList.add("scene-cell--empty");
+                    stack.innerHTML = "";
+                    var note = document.createElement("div");
+                    note.className = "scene-cell-camera-unavailable";
+                    note.textContent = "Camera unavailable";
+                    frame.appendChild(note);
+                    return;
+                }
+                host._sceneCameraSnapshotUrl = snapshotUrl;
+                host._sceneCameraFrontImg = front;
+                host._sceneCameraBackImg = back;
+                var hash = 0;
+                var key = String(view.id || "") + "|" + cameraId;
+                var i;
+                for (i = 0; i < key.length; i++) {
+                    hash = ((hash << 5) - hash) + key.charCodeAt(i);
+                    hash |= 0;
+                }
+                host._sceneCameraInitialDelay = Math.abs(hash) % refreshMs;
+                front.src = sceneCameraUrlWithCacheBuster(snapshotUrl);
+                bindSceneOverlayLayout(frame, front, overlays);
+                paintSceneCellZones(overlays, view.zones || [], options);
+                armSceneCameraJpegRefresh(host, refreshMs);
+            })
+            .catch(function () {
+                host.classList.add("scene-cell--empty");
+                stack.innerHTML = "";
+                var fail = document.createElement("div");
+                fail.className = "scene-cell-camera-unavailable";
+                fail.textContent = "Camera unavailable";
+                frame.appendChild(fail);
+            });
+    }
+
     function mountSceneCell(host, sceneId, options) {
         options = options || {};
         host.classList.add("scene-cell");
-        host.classList.remove("scene-cell--empty");
+        host.classList.remove("scene-cell--empty", "scene-cell--camera");
         if (!sceneId) {
+            stopSceneCameraRefresh(host);
             host.removeAttribute("data-scene-id");
+            host.removeAttribute("data-scene-kind");
             host.innerHTML = "";
             host.classList.add("scene-cell--empty");
             host.textContent = "No scene";
             return;
         }
         var sceneKey = String(sceneId);
-        var reuse = host.getAttribute("data-scene-id") === sceneKey
-            && host.querySelector("img.scene-cell-bake")
-            && host.querySelector(".scene-cell-overlays");
-        var frame;
-        var img;
-        var overlays;
-        if (reuse) {
-            frame = host.querySelector(".scene-cell-frame");
-            img = host.querySelector("img.scene-cell-bake");
-            overlays = host.querySelector(".scene-cell-overlays");
-        } else {
-            host.setAttribute("data-scene-id", sceneKey);
-            host.innerHTML = "";
-            frame = document.createElement("div");
-            frame.className = "scene-cell-frame";
-            img = document.createElement("img");
-            img.className = "scene-cell-bake";
-            img.alt = "Scene";
-            overlays = document.createElement("div");
-            overlays.className = "scene-cell-overlays";
-            frame.appendChild(img);
-            frame.appendChild(overlays);
-            host.appendChild(frame);
-        }
         fetch("/api/scenes/view?id=" + encodeURIComponent(sceneId), { cache: "no-store" })
             .then(function (response) {
                 if (!response.ok) {
@@ -3672,6 +3968,37 @@
                 return response.json();
             })
             .then(function (view) {
+                if (sceneKindOf(view) === "camera") {
+                    mountCameraSceneCell(host, view, options);
+                    return;
+                }
+                stopSceneCameraRefresh(host);
+                host.setAttribute("data-scene-kind", "plan");
+                var reuse = host.getAttribute("data-scene-id") === sceneKey
+                    && host.querySelector("img.scene-cell-bake")
+                    && host.querySelector(".scene-cell-overlays")
+                    && !host.querySelector(".scene-cell-camera-stack");
+                var frame;
+                var img;
+                var overlays;
+                if (reuse) {
+                    frame = host.querySelector(".scene-cell-frame");
+                    img = host.querySelector("img.scene-cell-bake");
+                    overlays = host.querySelector(".scene-cell-overlays");
+                } else {
+                    host.setAttribute("data-scene-id", sceneKey);
+                    host.innerHTML = "";
+                    frame = document.createElement("div");
+                    frame.className = "scene-cell-frame";
+                    img = document.createElement("img");
+                    img.className = "scene-cell-bake";
+                    img.alt = "Scene";
+                    overlays = document.createElement("div");
+                    overlays.className = "scene-cell-overlays";
+                    frame.appendChild(img);
+                    frame.appendChild(overlays);
+                    host.appendChild(frame);
+                }
                 // Stable bake URL — avoid cache-bust remount flicker on every console refresh.
                 var bakeSrc = "/api/scenes/bake?id=" + encodeURIComponent(sceneId);
                 if (img.getAttribute("src") !== bakeSrc) {
@@ -3681,7 +4008,9 @@
                 paintSceneCellPins(overlays, view.pins || [], options);
             })
             .catch(function () {
+                stopSceneCameraRefresh(host);
                 host.removeAttribute("data-scene-id");
+                host.removeAttribute("data-scene-kind");
                 host.classList.add("scene-cell--empty");
                 host.textContent = "Scene unavailable";
             });
@@ -3728,6 +4057,13 @@
         containContentBox: containContentBox,
         layoutSceneOverlaysToImage: layoutSceneOverlaysToImage,
         normFromClientInContentBox: normFromClientInContentBox,
-        bindSceneOverlayLayout: bindSceneOverlayLayout
+        bindSceneOverlayLayout: bindSceneOverlayLayout,
+        sceneKindOf: sceneKindOf,
+        clampSceneRefreshSec: clampSceneRefreshSec,
+        hexToRgba: hexToRgba,
+        zoneFillOpacity: zoneFillOpacity,
+        pointInPolygon: pointInPolygon,
+        paintSceneCellZones: paintSceneCellZones,
+        stopSceneCameraRefresh: stopSceneCameraRefresh
     };
 })(window);

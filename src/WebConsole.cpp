@@ -2426,15 +2426,29 @@ void WebConsole::handleSceneViewGet(AsyncWebServerRequest *request) {
         request->send(404, "text/plain", "Scene not found");
         return;
     }
+    const char *kindText = scene->kind[0] != '\0' ? scene->kind : "plan";
+    int refreshInterval = scene->refreshInterval;
+    if (refreshInterval < SCENE_REFRESH_INTERVAL_MIN
+        || refreshInterval > SCENE_REFRESH_INTERVAL_MAX) {
+        refreshInterval = SCENE_REFRESH_INTERVAL_DEFAULT;
+    }
     PsramJsonBuffer json;
     json += "{\"id\":\"";
     appendJsonEscaped(json, scene->id, SCENE_ID_BUF);
     json += "\",\"name\":\"";
     appendJsonEscaped(json, scene->name, SCENE_NAME_MAX);
-    json += "\",\"bakePath\":\"";
+    json += "\",\"kind\":\"";
+    appendJsonEscaped(json, kindText, SCENE_KIND_BUF);
+    json += "\",\"cameraId\":\"";
+    appendJsonEscaped(json, scene->cameraId, CAMERA_ID_BUF);
+    json += "\",\"refreshInterval\":";
+    json += String(refreshInterval);
+    json += ",\"bakePath\":\"";
     appendJsonEscaped(json, scene->bakePath, SCENE_BAKE_PATH_MAX);
     json += "\",\"pins\":";
     json += scene->pinsJson != nullptr ? scene->pinsJson : "[]";
+    json += ",\"zones\":";
+    json += scene->zonesJson != nullptr ? scene->zonesJson : "[]";
     json += "}";
     sendJsonDocument(request, std::move(json));
 }

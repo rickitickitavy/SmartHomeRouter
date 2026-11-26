@@ -141,6 +141,7 @@ void SceneStore::freeScene(SceneRecord *scene) {
     }
     free(scene->modelJson);
     free(scene->pinsJson);
+    free(scene->zonesJson);
     free(scene);
 }
 
@@ -343,14 +344,24 @@ SceneWriteResult SceneStore::parseOneObject(const char *objectJson, SceneRecord 
     String idText;
     String nameText;
     String bakePathText;
+    String kindText;
+    String cameraIdText;
     String modelJson;
     String pinsJson;
+    String zonesJson;
+    int refreshInterval = SCENE_REFRESH_INTERVAL_DEFAULT;
     extractJsonString(objectJson, "id", idText);
     extractJsonString(objectJson, "name", nameText);
     extractJsonString(objectJson, "bakePath", bakePathText);
+    extractJsonString(objectJson, "kind", kindText);
+    extractJsonString(objectJson, "cameraId", cameraIdText);
+    extractJsonInt(objectJson, "refreshInterval", refreshInterval);
     extractJsonKeyedSlice(objectJson, "sceneModel", '{', modelJson);
     if (!extractJsonKeyedSlice(objectJson, "pins", '[', pinsJson)) {
         pinsJson = "[]";
+    }
+    if (!extractJsonKeyedSlice(objectJson, "zones", '[', zonesJson)) {
+        zonesJson = "[]";
     }
     if (nameText.length() == 0 || nameText.length() >= SCENE_NAME_MAX) {
         freeScene(scene);
@@ -364,6 +375,20 @@ SceneWriteResult SceneStore::parseOneObject(const char *objectJson, SceneRecord 
         copyBounded(scene->id, sizeof(scene->id), idText.c_str());
     }
     copyBounded(scene->name, sizeof(scene->name), nameText.c_str());
+    if (kindText.length() > 0 && kindText.equalsIgnoreCase("camera")) {
+        copyBounded(scene->kind, sizeof(scene->kind), "camera");
+    } else {
+        copyBounded(scene->kind, sizeof(scene->kind), "plan");
+    }
+    if (cameraIdText.length() > 0 && cameraIdText.length() < CAMERA_ID_BUF) {
+        copyBounded(scene->cameraId, sizeof(scene->cameraId), cameraIdText.c_str());
+    }
+    if (refreshInterval < SCENE_REFRESH_INTERVAL_MIN) {
+        refreshInterval = SCENE_REFRESH_INTERVAL_MIN;
+    } else if (refreshInterval > SCENE_REFRESH_INTERVAL_MAX) {
+        refreshInterval = SCENE_REFRESH_INTERVAL_MAX;
+    }
+    scene->refreshInterval = refreshInterval;
     if (bakePathText.length() > 0 && bakePathText.length() < SCENE_BAKE_PATH_MAX) {
         copyBounded(scene->bakePath, sizeof(scene->bakePath), bakePathText.c_str());
     }
@@ -371,7 +396,8 @@ SceneWriteResult SceneStore::parseOneObject(const char *objectJson, SceneRecord 
         modelJson = "{\"sceneSize\":1,\"wallHeight\":0.15,\"floors\":[{\"y\":0,\"height\":0.01,\"walls\":[],\"windows\":[],\"doors\":[]}]}";
     }
     if (!assignOwnedJson(&scene->modelJson, modelJson.c_str(), SCENE_MODEL_MAX)
-        || !assignOwnedJson(&scene->pinsJson, pinsJson.c_str(), SCENE_PINS_JSON_MAX)) {
+        || !assignOwnedJson(&scene->pinsJson, pinsJson.c_str(), SCENE_PINS_JSON_MAX)
+        || !assignOwnedJson(&scene->zonesJson, zonesJson.c_str(), SCENE_ZONES_JSON_MAX)) {
         freeScene(scene);
         return SceneWriteOutOfMemory;
     }
@@ -509,11 +535,23 @@ bool SceneStore::loadFromFile() {
 
 void SceneStore::appendSceneFull(PsramJsonBuffer &json, const SceneRecord *scene) const {
     const bool hasBake = scene->bakePath[0] != '\0' && LittleFS.exists(scene->bakePath);
+    const char *kindText = scene->kind[0] != '\0' ? scene->kind : "plan";
+    int refreshInterval = scene->refreshInterval;
+    if (refreshInterval < SCENE_REFRESH_INTERVAL_MIN
+        || refreshInterval > SCENE_REFRESH_INTERVAL_MAX) {
+        refreshInterval = SCENE_REFRESH_INTERVAL_DEFAULT;
+    }
     json += "{\"id\":\"";
     appendJsonEscaped(json, scene->id, SCENE_ID_BUF);
     json += "\",\"name\":\"";
     appendJsonEscaped(json, scene->name, SCENE_NAME_MAX);
-    json += "\",\"bakePath\":\"";
+    json += "\",\"kind\":\"";
+    appendJsonEscaped(json, kindText, SCENE_KIND_BUF);
+    json += "\",\"cameraId\":\"";
+    appendJsonEscaped(json, scene->cameraId, CAMERA_ID_BUF);
+    json += "\",\"refreshInterval\":";
+    json += String(refreshInterval);
+    json += ",\"bakePath\":\"";
     appendJsonEscaped(json, scene->bakePath, SCENE_BAKE_PATH_MAX);
     json += "\",\"hasBake\":";
     json += hasBake ? "true" : "false";
@@ -521,15 +559,22 @@ void SceneStore::appendSceneFull(PsramJsonBuffer &json, const SceneRecord *scene
     json += scene->modelJson != nullptr ? scene->modelJson : "{}";
     json += ",\"pins\":";
     json += scene->pinsJson != nullptr ? scene->pinsJson : "[]";
+    json += ",\"zones\":";
+    json += scene->zonesJson != nullptr ? scene->zonesJson : "[]";
     json += "}";
 }
 
 void SceneStore::appendSceneListItem(PsramJsonBuffer &json, const SceneRecord *scene) const {
     const bool hasBake = scene->bakePath[0] != '\0' && LittleFS.exists(scene->bakePath);
+    const char *kindText = scene->kind[0] != '\0' ? scene->kind : "plan";
     json += "{\"id\":\"";
     appendJsonEscaped(json, scene->id, SCENE_ID_BUF);
     json += "\",\"name\":\"";
     appendJsonEscaped(json, scene->name, SCENE_NAME_MAX);
+    json += "\",\"kind\":\"";
+    appendJsonEscaped(json, kindText, SCENE_KIND_BUF);
+    json += "\",\"cameraId\":\"";
+    appendJsonEscaped(json, scene->cameraId, CAMERA_ID_BUF);
     json += "\",\"bakePath\":\"";
     appendJsonEscaped(json, scene->bakePath, SCENE_BAKE_PATH_MAX);
     json += "\",\"hasBake\":";
@@ -638,13 +683,19 @@ SceneWriteResult SceneStore::replaceFromJson(const char *sceneId, const char *js
     }
     free(existing->modelJson);
     free(existing->pinsJson);
+    free(existing->zonesJson);
     copyBounded(existing->id, sizeof(existing->id), replacement->id);
     copyBounded(existing->name, sizeof(existing->name), replacement->name);
+    copyBounded(existing->kind, sizeof(existing->kind), replacement->kind);
+    copyBounded(existing->cameraId, sizeof(existing->cameraId), replacement->cameraId);
+    existing->refreshInterval = replacement->refreshInterval;
     copyBounded(existing->bakePath, sizeof(existing->bakePath), replacement->bakePath);
     existing->modelJson = replacement->modelJson;
     existing->pinsJson = replacement->pinsJson;
+    existing->zonesJson = replacement->zonesJson;
     replacement->modelJson = nullptr;
     replacement->pinsJson = nullptr;
+    replacement->zonesJson = nullptr;
     freeScene(replacement);
     requestPersist();
     return SceneWriteOk;

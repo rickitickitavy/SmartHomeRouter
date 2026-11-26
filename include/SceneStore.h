@@ -11,9 +11,13 @@
 struct SceneRecord {
     char id[SCENE_ID_BUF];
     char name[SCENE_NAME_MAX];
+    char kind[SCENE_KIND_BUF];
+    char cameraId[CAMERA_ID_BUF];
+    int refreshInterval;
     char *modelJson;
     char bakePath[SCENE_BAKE_PATH_MAX];
     char *pinsJson;
+    char *zonesJson;
     SceneRecord *next;
 };
 

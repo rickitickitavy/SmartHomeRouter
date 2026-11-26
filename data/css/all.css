@@ -2487,7 +2487,9 @@ html, body {
     box-sizing: border-box;
 }
 
-.console-composite-cell-body > .console-camera-view {
+.console-composite-cell-body > .console-camera-view,
+.console-composite-cell-body > .scene-cell-host,
+.console-composite-cell-body > .scene-cell {
     flex: 1 1 auto;
     width: 100%;
     max-width: 100%;
@@ -5345,6 +5347,11 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     pointer-events: none;
 }
 
+/* Camera scene editor: stretch like console camera cells (zones use full frame). */
+.scene-bind-image.is-fill {
+    object-fit: fill;
+}
+
 .scene-bind-overlays {
     /* left/top/width/height set by SceneKit.layoutSceneOverlaysToImage (contain box). */
     position: absolute;
@@ -5479,6 +5486,12 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     background: #10131a;
 }
 
+/* Camera scenes fill the Place cell (same as console camera widgets). */
+.scene-cell-frame--camera {
+    aspect-ratio: auto;
+    max-height: none;
+}
+
 .scene-cell-bake {
     display: block;
     width: 100%;
@@ -5486,11 +5499,175 @@ html[data-theme="light"] .console-binary-icon.is-action-flash .mdi {
     object-fit: contain;
 }
 
+.scene-cell-camera-stack {
+    position: absolute;
+    inset: 0;
+}
+
+.scene-cell-camera-img {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: fill;
+    opacity: 0;
+    transition: none;
+}
+
+.scene-cell-camera-img.is-front {
+    opacity: 1;
+    z-index: 1;
+}
+
+.scene-cell-camera-img.is-back {
+    opacity: 0;
+    z-index: 0;
+}
+
+.scene-cell-camera-unavailable {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    background: #10131a;
+    z-index: 2;
+}
+
 .scene-cell-overlays {
     /* left/top/width/height set by SceneKit.layoutSceneOverlaysToImage (contain box). */
     position: absolute;
     inset: 0;
     pointer-events: none;
+}
+
+.scene-cell-overlays--zones {
+    pointer-events: none;
+    z-index: 3;
+}
+
+.scene-cell-zones-svg,
+.scene-zones-edit-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    pointer-events: auto;
+}
+
+.scene-zone-inspector {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.5rem 0.75rem;
+    margin-top: 0.75rem;
+}
+
+.scene-zone-inspector .field {
+    margin: 0;
+}
+
+/* Toolbar controls stay inline — never inherit .dialog-panel select { width:100% }. */
+.scene-bind-toolbar .scene-toolbar-select {
+    width: auto;
+    max-width: 14rem;
+    min-width: 7rem;
+    flex: 0 0 auto;
+    height: 44px;
+    min-height: 44px;
+    padding: 0 0.75rem;
+    font-size: 1rem;
+    font-family: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-sizing: border-box;
+}
+
+.scene-bind-toolbar .scene-refresh-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex: 0 0 auto;
+    min-width: 0;
+    height: 44px;
+}
+
+.scene-bind-toolbar .scene-refresh-field[hidden],
+.scene-bind-toolbar .scene-toolbar-select[hidden],
+.scene-bind-toolbar .btn-icon[hidden],
+.scene-bind-toolbar .btn[hidden] {
+    display: none !important;
+}
+
+.scene-bind-toolbar .btn-icon:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+/* 1.5 × 44px button width between refresh interval and zone tools. */
+.scene-bind-toolbar .scene-zone-toolbar-lead {
+    margin-left: 66px;
+}
+
+.scene-bind-toolbar .scene-zone-opacity-field,
+.scene-bind-toolbar .scene-zone-color-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex: 0 0 auto;
+    height: 44px;
+}
+
+.scene-bind-toolbar .scene-zone-opacity-field[hidden],
+.scene-bind-toolbar .scene-zone-color-field[hidden] {
+    display: none !important;
+}
+
+.scene-bind-toolbar .scene-zone-opacity-field input {
+    width: 2.7rem; /* 4.5rem − 40% */
+    height: 44px;
+    min-height: 44px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-sizing: border-box;
+}
+
+.scene-bind-toolbar .scene-zone-opacity-field span,
+.scene-bind-toolbar .scene-zone-opacity-label,
+.scene-bind-toolbar .scene-zone-color-label {
+    color: var(--muted);
+    white-space: nowrap;
+    font-size: 0.85rem;
+}
+
+.scene-bind-toolbar .scene-refresh-field input {
+    width: 4.5rem;
+    height: 44px;
+    min-height: 44px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-sizing: border-box;
+}
+
+.scene-bind-toolbar .scene-refresh-field span {
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+.scene-zones-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    margin-bottom: 0.75rem;
 }
 
 .scene-cell-pin {
