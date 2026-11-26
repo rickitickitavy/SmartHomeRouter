@@ -2052,14 +2052,44 @@
             if (isNaN(date.getTime())) {
                 return "";
             }
-            return date.toLocaleString([], {
+            // Date and clock on separate lines so the tip stays readable.
+            var datePart = date.toLocaleDateString([], {
                 year: "numeric",
                 month: "short",
-                day: "numeric",
+                day: "numeric"
+            });
+            var timePart = date.toLocaleTimeString([], {
                 hour: "2-digit",
                 minute: "2-digit",
                 second: "2-digit"
             });
+            return datePart + "\n" + timePart;
+        }
+
+        function historyPlaceChartTooltip(tip, cursorX, cursorY, wrapWidth, wrapHeight) {
+            var gap = 12;
+            var pad = 8;
+            var tipW = tip.offsetWidth || 0;
+            var tipH = tip.offsetHeight || 0;
+            var left = cursorX + gap;
+            if (left + tipW > wrapWidth - pad) {
+                left = cursorX - tipW - gap;
+            }
+            if (left < pad) {
+                left = pad;
+            }
+            if (left + tipW > wrapWidth - pad) {
+                left = Math.max(pad, wrapWidth - tipW - pad);
+            }
+            var top = cursorY - tipH - gap;
+            if (top < pad) {
+                top = cursorY + gap;
+            }
+            if (top + tipH > wrapHeight - pad) {
+                top = Math.max(pad, wrapHeight - tipH - pad);
+            }
+            tip.style.left = left + "px";
+            tip.style.top = top + "px";
         }
 
         function historyToDatetimeLocalValue(unixSec) {
@@ -2721,10 +2751,7 @@
             }
             tip.textContent = text;
             tip.hidden = false;
-            var tipX = Math.min(rect.width - 8, Math.max(8, x + 12));
-            var tipY = Math.min(rect.height - 8, Math.max(8, y - 12));
-            tip.style.left = tipX + "px";
-            tip.style.top = tipY + "px";
+            historyPlaceChartTooltip(tip, x, y, rect.width, rect.height);
         }
 
         function formatUtcOffsetLabel(offsetMin) {

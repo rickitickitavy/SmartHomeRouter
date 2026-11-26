@@ -256,10 +256,39 @@
         function historyFormatTooltipTime(unixSec) {
             var date = new Date(unixSec * 1000);
             if (isNaN(date.getTime())) return "";
-            return date.toLocaleString([], {
-                year: "numeric", month: "short", day: "numeric",
+            // Date and clock on separate lines so the tip stays readable.
+            var datePart = date.toLocaleDateString([], {
+                year: "numeric", month: "short", day: "numeric"
+            });
+            var timePart = date.toLocaleTimeString([], {
                 hour: "2-digit", minute: "2-digit", second: "2-digit"
             });
+            return datePart + "\n" + timePart;
+        }
+        function historyPlaceChartTooltip(tip, cursorX, cursorY, wrapWidth, wrapHeight) {
+            var gap = 12;
+            var pad = 8;
+            var tipW = tip.offsetWidth || 0;
+            var tipH = tip.offsetHeight || 0;
+            var left = cursorX + gap;
+            if (left + tipW > wrapWidth - pad) {
+                left = cursorX - tipW - gap;
+            }
+            if (left < pad) {
+                left = pad;
+            }
+            if (left + tipW > wrapWidth - pad) {
+                left = Math.max(pad, wrapWidth - tipW - pad);
+            }
+            var top = cursorY - tipH - gap;
+            if (top < pad) {
+                top = cursorY + gap;
+            }
+            if (top + tipH > wrapHeight - pad) {
+                top = Math.max(pad, wrapHeight - tipH - pad);
+            }
+            tip.style.left = left + "px";
+            tip.style.top = top + "px";
         }
         function historyToDatetimeLocalValue(unixSec) {
             var date = new Date(unixSec * 1000);
@@ -713,8 +742,7 @@
             }
             tip.textContent = text;
             tip.hidden = false;
-            tip.style.left = Math.min(rect.width - 8, Math.max(8, x + 12)) + "px";
-            tip.style.top = Math.min(rect.height - 8, Math.max(8, y - 12)) + "px";
+            historyPlaceChartTooltip(tip, x, y, rect.width, rect.height);
         }
 
         var signedInUser = null;
