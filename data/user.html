@@ -4066,6 +4066,12 @@
                                     } else {
                                         pinEl.textContent = "•";
                                     }
+                                },
+                                resolveZoneIsOn: function (zone) {
+                                    return sceneZoneResolvedIsOn(zone);
+                                },
+                                onZoneClick: function (zone, index, isOn) {
+                                    runSceneZoneClick(zone, isOn);
                                 }
                             });
                         } else {
@@ -4570,6 +4576,85 @@
             return function () {
                 runConsoleClickAction(stored);
             };
+        }
+
+        function sceneZoneToBinding(zone) {
+            var binding = {
+                ieee: zone && zone.ieee ? zone.ieee : "",
+                channel: zone && zone.channel != null ? zone.channel : 1,
+                param: zone && zone.param ? zone.param : "",
+                viewStyle: "default",
+                title: "",
+                showTitle: false,
+                unit: "",
+                decimals: -1
+            };
+            if (zone && (zone.automation || zone.automationId)) {
+                binding.automation = zone.automation || zone.automationId || "";
+                binding.automationControl = zone.automationControl || "enableDisable";
+                delete binding.ieee;
+            }
+            if (zone && zone.cluster != null) {
+                binding.cluster = zone.cluster;
+            }
+            if (zone && zone.attrId != null) {
+                binding.attrId = zone.attrId;
+            }
+            if (zone && zone.asLogical) {
+                binding.asLogical = true;
+                binding.logicalThreshold = zone.logicalThreshold;
+            }
+            if (zone && zone.actionOff) {
+                binding.clickActionFalse = zone.actionOff;
+            }
+            if (zone && zone.actionOn) {
+                binding.clickActionTrue = zone.actionOn;
+            }
+            return binding;
+        }
+
+        function sceneZoneResolvedIsOn(zone) {
+            if (!zone) {
+                return false;
+            }
+            var binding = sceneZoneToBinding(zone);
+            if (binding.automation) {
+                return typeof automationIsActive === "function"
+                    ? !!automationIsActive(binding.automation)
+                    : false;
+            }
+            var device = findRegisteredDevice(binding.ieee);
+            if (!device) {
+                return false;
+            }
+            var typeId = device.type || "";
+            if (typeId === "onOff") {
+                var onState = onOffStateForBinding(device, binding);
+                return String(onState).toUpperCase() === "ON";
+            }
+            if (bindingUsesAsLogical(device, binding)) {
+                return isBinaryStateOn(bindingLogicalStateText(
+                    binding,
+                    userBindingNumericValue(device, binding)
+                ));
+            }
+            if (isBinarySensorDeviceType(typeId)
+                || (typeId === "userData"
+                    && userDataFieldTypeForParam(device, binding.param || "") === "bool")) {
+                return isBinaryStateOn(bindingResolvedState(device, binding));
+            }
+            return isBinaryStateOn(bindingResolvedState(device, binding));
+        }
+
+        function runSceneZoneClick(zone, isOn) {
+            if (!zone) {
+                return;
+            }
+            var binding = sceneZoneToBinding(zone);
+            var handler = makeBindingClickActionHandler(binding, !!isOn);
+            if (handler) {
+                handler();
+            }
         }
 
         function buildBindingRow(binding, layoutOptions) {
