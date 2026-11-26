@@ -2488,15 +2488,19 @@ Place view-mode and the simple-user control page MUST both render composite scen
 - **THEN** bake, pin positions, and click behavior match between those surfaces
 
 ### Requirement: Scene kind and camera selectors
-On the Scenes editor, a fixed dropdown for scene kind (**Camera** | **Plan**) MUST appear before the **Edit scene** control. When kind is **Camera**, a fixed dropdown of registered cameras MUST appear after **Edit scene**. Changing kind MUST switch the authoring model (Plan → bake/pins; Camera → camera + zones) without inventing Plan geometry tools on Camera scenes.
+On the Scenes editor, a fixed dropdown for scene kind (**Camera** | **Plan**) MUST appear before the **Edit scene** control. **Edit scene** MUST be visible only when kind is **Plan** (geometry bake editor) and MUST be hidden when kind is **Camera**. When kind is **Camera**, a fixed dropdown of registered cameras MUST appear after the kind control (where Edit scene would be for Plan). Changing kind MUST switch the authoring model (Plan → bake/pins; Camera → camera + zones on the bind preview) without inventing Plan geometry tools on Camera scenes.
 
 #### Scenario: Kind before Edit scene
-- **WHEN** the operator views the scene editor chrome
+- **WHEN** the operator views the scene editor chrome with kind Plan
 - **THEN** the kind dropdown is shown before Edit scene
+
+#### Scenario: Edit scene hidden for Camera
+- **WHEN** kind is Camera
+- **THEN** the Edit scene button is not shown
 
 #### Scenario: Camera picker when Camera
 - **WHEN** kind is Camera
-- **THEN** a camera dropdown is shown after Edit scene and lists registered cameras
+- **THEN** a camera dropdown is shown after the kind control and lists registered cameras
 
 #### Scenario: No camera picker for Plan
 - **WHEN** kind is Plan

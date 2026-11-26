@@ -7,10 +7,11 @@
 ## 2. Scene editor UI
 
 - [x] 2.1 Add fixed kind dropdown (**Camera** | **Plan**) before **Edit scene**
-- [x] 2.2 When kind is Camera, show fixed registered-camera dropdown after **Edit scene**; hide for Plan
-- [x] 2.3 Camera Edit scene: zone polygon editor (floor-like vertex tools, **no Shift lock**); design-time fill always 70% transparent
+- [x] 2.2 When kind is Camera, hide **Edit scene**; show fixed registered-camera dropdown after kind; hide camera dropdown for Plan
+- [x] 2.3 Camera bind preview: zone polygon editor (floor-like vertex tools, **no Shift lock**); design-time fill always 70% transparent
 - [x] 2.4 Zone inspector: transparency, ON/OFF colors (required when not fully transparent), state binding, ON/OFF actions, refresh interval field
 - [x] 2.5 Save only after successful Save; Cancel discards unsaved new zones/scenes per no-preadd rule
+- [x] 2.6 **Edit scene** invisible when kind is Camera (Plan-only geometry editor)
 
 ## 3. Live view (Place + simple-user)
 

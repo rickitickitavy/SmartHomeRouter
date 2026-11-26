@@ -12,7 +12,7 @@ Operators need to control devices on a live camera picture. Today scenes only us
 - Active zones: polygon edit like floor plan authoring **without Shift**; runtime fill uses zone transparency; if not fully transparent, ON and OFF colors; design-time fill is always **70%** transparent for visibility.
 - Zone state (ON/OFF color) comes from a **bound device/reportable value**; click runs the action for the **current** state (same pattern as console click actions — device or automation).
 - Zones scale with the scene (normalized to the visible camera image box, like plan pin math on the bake).
-- Design UI: fixed dropdown **Camera** / **Plan** before **Edit scene**; when kind is Camera, a fixed dropdown of registered cameras after **Edit scene**.
+- Design UI: fixed dropdown **Camera** / **Plan** before **Edit scene**; **Edit scene** only for Plan (hidden for Camera); when kind is Camera, a fixed dropdown of registered cameras after kind.
 - Persist kind, camera id, refresh interval, and zones with the scene; include in scene export and global settings export/restore.
 
 ## Capabilities

@@ -14524,6 +14524,7 @@
 
         function syncSceneKindChrome() {
             var kindSelect = document.getElementById("sceneKindSelect");
+            var editSceneBtn = document.getElementById("sceneEditSceneBtn");
             var cameraSelect = document.getElementById("sceneCameraSelect");
             var refreshField = document.getElementById("sceneRefreshField");
             var refreshInput = document.getElementById("sceneRefreshInterval");
@@ -14534,6 +14535,10 @@
             var isCamera = sceneDraftKind === "camera";
             if (kindSelect) {
                 kindSelect.value = isCamera ? "camera" : "plan";
+            }
+            // Plan-only geometry editor — Camera authors zones on the bind preview.
+            if (editSceneBtn) {
+                editSceneBtn.hidden = isCamera;
             }
             if (cameraSelect) {
                 cameraSelect.hidden = !isCamera;
@@ -14775,7 +14780,7 @@
 
         function openSceneEditForKind() {
             if (sceneDraftKind === "camera") {
-                openSceneZonesEditor();
+                // Edit scene is hidden for Camera; zones are edited on the bind preview.
                 return;
             }
             openSceneGeometryEditor();
@@ -15593,7 +15598,7 @@
                 return;
             }
             empty.hidden = true;
-            empty.textContent = "No image — use Edit scene to create one";
+            empty.textContent = "Select a camera";
             frame.hidden = false;
             fetch("/api/cameras/media?id=" + encodeURIComponent(sceneDraftCameraId), { cache: "no-store" })
                 .then(function (response) {

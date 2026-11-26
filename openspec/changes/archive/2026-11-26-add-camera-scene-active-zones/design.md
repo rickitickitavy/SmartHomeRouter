@@ -15,7 +15,7 @@
 - Active zones: polygons; edit like floor polygons **without Shift**; runtime transparency; ON/OFF colors when not fully transparent; design-time always **70%** transparent.
 - State from bound device/reportable; click runs action for **current** state (console-equivalent: device or automation action per state).
 - Camera scenes: **zones only** (no pins). Plan scenes: pins as today.
-- Kind dropdown before Edit scene; camera dropdown after Edit scene when kind is Camera.
+- Kind dropdown before Edit scene; **Edit scene** only for Plan (hidden for Camera); camera dropdown after kind when Camera.
 - Zones/normalized geometry scale with the displayed camera image box.
 - Persist + export/restore.
 
@@ -32,7 +32,7 @@
 3. **Zone model** — polygon points in 0..1 image-box space; `transparency` 0..1 (1 = fully transparent); `colorOn` / `colorOff` required when transparency &lt; 1; binding for state; `actionOn` / `actionOff` (same shape as console click actions / scene-pin-compatible device|automation actions).
 4. **Fully transparent** — still clickable; no ON/OFF fill colors required; design-time still 70% transparent.
 5. **Click** — resolve current binary state from binding; run that state’s action (like `makeBindingClickActionHandler(binding, isOn)`).
-6. **Edit UX** — Camera “Edit scene” opens zone editor over camera still (or last frame), polygon tools analogous to floor (add/move vertices) **without** Shift axis lock; camera picker fixed dropdown after Edit scene when kind is Camera.
+6. **Edit UX** — **Edit scene** is Plan-only (geometry bake). For Camera, Edit scene is hidden; zones are authored on the bind preview with polygon tools analogous to floor (add/move vertices) **without** Shift axis lock; camera picker fixed dropdown after kind when Camera.
 7. **Refresh** — default 3 s (match console JPEG); per-scene field; clamp 1..60 s.
 8. **Both pages** — Place and simple-user render Camera scenes the same way.
 
