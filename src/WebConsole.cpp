@@ -51,17 +51,6 @@ struct OwnedJsonBytes {
     }
 };
 
-#if defined(BOARD_ROLE_HOST)
-struct OwnedZipBytes {
-    uint8_t *bytes = nullptr;
-    size_t length = 0;
-    ~OwnedZipBytes() {
-        fullBackupFreeZip(bytes);
-        bytes = nullptr;
-    }
-};
-#endif
-
 // LED3 hold until the HTTP response is finished (not TCP disconnect).
 constexpr size_t kWebLedHoldSlots = 32;
 struct WebLedHoldSlot {
@@ -859,6 +848,33 @@ void WebConsole::tearDown() {
     LOGGER.info("Web console torn down for low-memory fail-safe");
 }
 
+namespace {
+
+bool cameraHeavyUrlIsHttps(const String &urlText) {
+    return urlText.length() >= 8 && urlText.substring(0, 8).equalsIgnoreCase("https://");
+}
+
+// Resolve/Test body may carry https:// on url or snapshot URL fields (TLS needs more stack).
+bool cameraHeavyBodyNeedsHttps(const char *body) {
+    if (body == nullptr || body[0] == '\0') {
+        return false;
+    }
+    String urlText;
+    String snapshotUrl;
+    String snapshotUrl1;
+    String snapshotUrl2;
+    extractJsonString(body, "url", urlText);
+    extractJsonString(body, "snapshotUrl", snapshotUrl);
+    extractJsonString(body, "snapshotUrl1", snapshotUrl1);
+    extractJsonString(body, "snapshotUrl2", snapshotUrl2);
+    return cameraHeavyUrlIsHttps(urlText)
+        || cameraHeavyUrlIsHttps(snapshotUrl)
+        || cameraHeavyUrlIsHttps(snapshotUrl1)
+        || cameraHeavyUrlIsHttps(snapshotUrl2);
+}
+
+}  // namespace
+
 void WebConsole::clearCameraHeavyOp() {
     cameraHeavyOp = CameraHeavyNone;
     cameraHeavyRunning = false;
@@ -920,12 +936,16 @@ bool WebConsole::queueCameraHeavyOp(CameraHeavyOp op, const char *body, String *
     cameraHeavyOp = op;
     cameraHeavyDone = false;
     cameraHeavyRunning = true;
-    // HTTPClient + SOAP locals are large; keep well above async_tcp / loop stacks.
-    constexpr uint32_t kCameraHeavyStackWords = 16384;  // 64 KB
+    // Free RAM task stack: 16 KiB for plain HTTP, 32 KiB when any URL is HTTPS (TLS).
+    // HTTPClient is heap-allocated in OnvifClient; SOAP bodies prefer PSRAM.
+    const bool needsHttps = cameraHeavyBodyNeedsHttps(copy);
+    const uint32_t stackWords = needsHttps
+        ? (32u * 1024u / sizeof(StackType_t))
+        : (16u * 1024u / sizeof(StackType_t));
     const BaseType_t created = xTaskCreatePinnedToCore(
         cameraHeavyWorkerTask,
         "camOnvif",
-        kCameraHeavyStackWords,
+        stackWords,
         this,
         1,
         &cameraHeavyTask,
@@ -945,6 +965,9 @@ bool WebConsole::queueCameraHeavyOp(CameraHeavyOp op, const char *body, String *
     LOGGER.info(
         String("Camera ")
         + (op == CameraHeavyResolve ? "resolve" : "test")
+        + (needsHttps ? " HTTPS" : " HTTP")
+        + " stackKiB="
+        + String((unsigned)(stackWords * sizeof(StackType_t) / 1024u))
         + ": queued on camOnvif worker (poll /api/cameras/test/status)"
     );
     return true;
@@ -4903,38 +4926,37 @@ void WebConsole::handleFullBackupPost(AsyncWebServerRequest *request) {
     options.includeWifi = includeWifi;
     options.includeHistory = includeHistory;
     options.includeSecrets = includeSecrets;
-    FullBackupBuildResult built = fullBackupBuildZip(
-        settingsJson.c_str(),
-        options,
-        sceneStore,
-        historyStore,
-        FIRMWARE_VERSION
-    );
-    if (built.zipBytes == nullptr || built.zipLength == 0) {
+    std::shared_ptr<FullBackupStreamSession> stream = std::make_shared<FullBackupStreamSession>();
+    if (!stream->begin(
+            static_cast<PsramJsonBuffer &&>(settingsJson),
+            options,
+            sceneStore,
+            historyStore,
+            FIRMWARE_VERSION
+        )) {
         request->send(
             500,
             "text/plain",
-            built.errorText.length() > 0 ? built.errorText : "Failed to build ZIP"
+            stream->errorText()[0] != '\0' ? stream->errorText() : "Failed to start backup"
         );
         return;
     }
-    std::shared_ptr<OwnedZipBytes> payload = std::make_shared<OwnedZipBytes>();
-    payload->bytes = built.zipBytes;
-    payload->length = built.zipLength;
-    built.zipBytes = nullptr;
-    AsyncWebServerResponse *response = request->beginResponse(
+    // Prefer 8 KiB work chunks; AsyncWebServer picks maxLen per callback (often smaller).
+    AsyncWebServerResponse *response = request->beginChunkedResponse(
         "application/zip",
-        payload->length,
-        [payload](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
-            if (payload->bytes == nullptr || index >= payload->length) {
+        [stream](uint8_t *buffer, size_t maxLen, size_t /*index*/) -> size_t {
+            if (stream == nullptr || buffer == nullptr || maxLen == 0) {
                 return 0;
             }
-            size_t chunk = payload->length - index;
-            if (chunk > maxLen) {
-                chunk = maxLen;
+            size_t room = maxLen;
+            if (room > FullBackupStreamSession::kWorkBufferMax) {
+                room = FullBackupStreamSession::kWorkBufferMax;
             }
-            memcpy(buffer, payload->bytes + index, chunk);
-            return chunk;
+            const size_t written = stream->fill(buffer, room);
+            if (!stream->ok()) {
+                return 0;
+            }
+            return written;
         }
     );
     if (response == nullptr) {
