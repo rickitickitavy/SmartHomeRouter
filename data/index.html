@@ -5356,6 +5356,20 @@
             return upper === "ON" || upper === "1" || upper === "TRUE";
         }
 
+        function normalizeIconFlip(value) {
+            var text = String(value || "").trim().toLowerCase();
+            if (text === "vertical") {
+                return "vertical";
+            }
+            if (text === "horizontal") {
+                return "horizontal";
+            }
+            if (text === "both") {
+                return "both";
+            }
+            return "normal";
+        }
+
         function normalizeIconScale(value) {
             var scale = parseFloat(value);
             if (isNaN(scale) || scale <= 0) {
@@ -5572,6 +5586,10 @@
             var iconScaleValue = normalizeIconScale(binding && binding.iconScale);
             wrap.style.setProperty("--console-icon-scale", String(iconScaleValue));
             wrap.setAttribute("data-binding-scale", String(iconScaleValue));
+            var iconFlipValue = normalizeIconFlip(binding && binding.iconFlip);
+            if (iconFlipValue !== "normal") {
+                wrap.setAttribute("data-icon-flip", iconFlipValue);
+            }
             if (binding && binding.iconOnColor) {
                 wrap.style.setProperty("--console-icon-on-color", String(binding.iconOnColor));
             }
@@ -16351,6 +16369,9 @@
             if (pin.iconOffColor) {
                 binding.iconOffColor = pin.iconOffColor;
             }
+            if (pin.iconFlip) {
+                binding.iconFlip = normalizeIconFlip(pin.iconFlip);
+            }
             if (pin.gauge) {
                 binding.gauge = pin.gauge;
             }
@@ -22324,6 +22345,7 @@
             setHidden(document.getElementById("consoleDeviceGaugeGroup"), true);
             setHidden(document.getElementById("consoleDeviceIconGroup"), true);
             setHidden(document.getElementById("consoleDeviceIconScaleField"), true);
+            setHidden(document.getElementById("consoleDeviceIconFlipField"), true);
             setHidden(document.getElementById("consoleDeviceTitleField"), true);
             setHidden(document.getElementById("consoleDeviceTitlePositionField"), true);
             setHidden(document.getElementById("consoleDeviceAlignHField"), true);
@@ -22415,6 +22437,10 @@
                 document.getElementById("consoleDeviceIconScaleField"),
                 !displayAsIcon || consoleDeviceDialogScenePin
             );
+            setHidden(
+                document.getElementById("consoleDeviceIconFlipField"),
+                !displayAsIcon
+            );
             if (displayAsGauge) {
                 ensureConsoleDeviceGaugeAddColorControl();
                 refreshConsoleDeviceLinearStyleField();
@@ -22447,6 +22473,7 @@
                 setHidden(document.getElementById("consoleDeviceGaugeGroup"), true);
                 setHidden(document.getElementById("consoleDeviceIconGroup"), true);
                 setHidden(document.getElementById("consoleDeviceIconScaleField"), true);
+                setHidden(document.getElementById("consoleDeviceIconFlipField"), true);
                 setHidden(document.getElementById("consoleDeviceAsLogicalField"), true);
                 setHidden(document.getElementById("consoleDeviceLogicalThresholdField"), true);
                 updateConsoleDeviceUnitField();
@@ -23056,6 +23083,10 @@
                 if (iconScaleInput) {
                     iconScaleInput.value = String(normalizeIconScale(binding.iconScale));
                 }
+                var iconFlipSelect = document.getElementById("consoleDeviceIconFlip");
+                if (iconFlipSelect) {
+                    iconFlipSelect.value = normalizeIconFlip(binding.iconFlip);
+                }
                 var clusterInput = document.getElementById("consoleDeviceCluster");
                 var attrInput = document.getElementById("consoleDeviceAttr");
                 if (clusterInput) {
@@ -23363,6 +23394,7 @@
             var alignHSelect = document.getElementById("consoleDeviceAlignH");
             var alignVSelect = document.getElementById("consoleDeviceAlignV");
             var iconScaleInput = document.getElementById("consoleDeviceIconScale");
+            var iconFlipSelect = document.getElementById("consoleDeviceIconFlip");
             body.showTitle = !showTitleCheck || showTitleCheck.checked;
             body.titlePosition = normalizeTitlePosition(
                 titlePositionSelect ? titlePositionSelect.value : "left"
@@ -23371,6 +23403,9 @@
             body.alignV = normalizeAlignV(alignVSelect ? alignVSelect.value : "center");
             if (body.viewStyle === "icon") {
                 body.iconAlign = body.alignH;
+                body.iconFlip = normalizeIconFlip(
+                    iconFlipSelect ? iconFlipSelect.value : "normal"
+                );
                 if (!consoleDeviceDialogScenePin) {
                     body.iconScale = normalizeIconScale(
                         iconScaleInput ? iconScaleInput.value : 1
@@ -23434,6 +23469,10 @@
                     );
                     automationBody.iconOffColor = normalizeCssHexColor(
                         consoleDeviceIconOffColorDraft, CONSOLE_ICON_OFF_COLOR_DEFAULT
+                    );
+                    var automationFlipSelect = document.getElementById("consoleDeviceIconFlip");
+                    automationBody.iconFlip = normalizeIconFlip(
+                        automationFlipSelect ? automationFlipSelect.value : "normal"
                     );
                 } else {
                     automationBody.viewStyle = "default";
@@ -23521,6 +23560,10 @@
                 );
                 body.iconOffColor = normalizeCssHexColor(
                     consoleDeviceIconOffColorDraft, CONSOLE_ICON_OFF_COLOR_DEFAULT
+                );
+                var deviceFlipSelect = document.getElementById("consoleDeviceIconFlip");
+                body.iconFlip = normalizeIconFlip(
+                    deviceFlipSelect ? deviceFlipSelect.value : "normal"
                 );
             }
             body = applyDialogLayoutFieldsToBody(body);
@@ -26218,6 +26261,15 @@
                 <div id="consoleDeviceIconScaleField" class="console-binding-general-row">
                     <label for="consoleDeviceIconScale">Icon scale</label>
                     <input id="consoleDeviceIconScale" type="number" min="0.1" step="0.1" value="1">
+                </div>
+                <div id="consoleDeviceIconFlipField" class="console-binding-general-row">
+                    <label for="consoleDeviceIconFlip">Flip</label>
+                    <select id="consoleDeviceIconFlip">
+                        <option value="normal">Normal</option>
+                        <option value="vertical">Vertical</option>
+                        <option value="horizontal">Horizontal</option>
+                        <option value="both">Vert + horiz</option>
+                    </select>
                 </div>
                 <div id="consoleDeviceIconGrid" class="console-icon-grid"></div>
                 <div class="console-binding-general-row">

@@ -26,6 +26,7 @@ struct ConsoleIconConfig {
     char *offColor;
     float iconScale;
     uint8_t iconAlign;
+    uint8_t iconFlip;
 };
 
 struct ConsoleLogicalConfig {
@@ -188,6 +189,8 @@ private:
     static const char *titlePositionJsonId(uint8_t titlePosition);
     static uint8_t parseIconAlignId(const char *text);
     static const char *iconAlignJsonId(uint8_t iconAlign);
+    static uint8_t parseIconFlipId(const char *text);
+    static const char *iconFlipJsonId(uint8_t iconFlip);
     static uint8_t parseAlignVId(const char *text);
     static const char *alignVJsonId(uint8_t alignV);
     static uint8_t parseGaugeTypeId(const char *text);
