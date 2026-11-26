@@ -15,6 +15,7 @@
 - Never keep the **complete** ZIP (all members concatenated + central directory) resident in DRAM or as one download blob.
 - Avoid DRAM duplication of each member solely for ZIP staging (`addFile` malloc copies).
 - Preserve ZIP compatibility with Full restore / `StoreZipReader`.
+- Cap Camera Resolve/Test worker **Free RAM** stack at **16 KiB** (HTTP) / **32 KiB** (HTTPS).
 
 **Non-Goals**
 
@@ -23,6 +24,7 @@
 - Changing which slices/options Full backup includes.
 - Reworking the live history PSRAM slab layout.
 - Guaranteeing zero temporary PSRAM for a single large **member source** (e.g. settings JSON string, or a history snapshot blob used only as a stream source) — the forbidden object is the **whole archive**.
+- Reworking ONVIF SOAP/HTTPClient allocation beyond stack sizing (HTTPClient already heap-allocated).
 
 ## Decisions
 
@@ -48,12 +50,18 @@
 6. **Content-Length**  
    Prefer **chunked** HTTP (unknown length) so the host need not compute the full ZIP size up front. If the stack requires a length, compute size from metadata + member lengths with a size-only pass that does not retain member payloads (settings length known; bake sizes from FS; history size from snapshot header/file size).
 
+7. **Camera Resolve/Test Free RAM stack**  
+   Replace the flat **64 KiB** `camOnvif` stack with **16 KiB** when request URLs are HTTP-only, and **32 KiB** when any of `url` / `snapshotUrl` / `snapshotUrl1` / `snapshotUrl2` is `https://`. Detect from the queued JSON body before `xTaskCreatePinnedToCore`.  
+   *Alternative considered:* Always 16 KiB — may stack-overflow on HTTPS/TLS. Rejected.  
+   *Alternative considered:* Always 32 KiB — wastes Free RAM on common HTTP Resolve paths. Rejected per operator choice.
+
 ## Risks / Trade-offs
 
 - [Slow client / long stream] → Hold stream state until complete or aborted; free promptly on disconnect; do not pin a finished ZIP.  
 - [ZIP bit-3 consumers] → Full restore uses our `StoreZipReader`; verify it accepts data descriptors (extend reader if needed — today it may assume sizes in local headers).  
 - [History still large in PSRAM as member source] → Acceptable per Non-Goals; ensure it is not also mirrored into DRAM ZIP staging. Prefer file-backed stream when a durable snapshot exists.  
-- [Concurrent Full backup] → Keep single-flight / existing admin gate; streaming state is not re-entrant.
+- [Concurrent Full backup] → Keep single-flight / existing admin gate; streaming state is not re-entrant.  
+- [HTTPS still overflows 32 KiB] → Log stack high-water later if needed; do not silently raise back to 64 KiB without a new decision.
 
 ## Migration Plan
 

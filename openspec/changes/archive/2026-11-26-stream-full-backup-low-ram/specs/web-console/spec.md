@@ -14,3 +14,14 @@ When Maintenance Full backup downloads the ZIP, the host SHALL generate and send
 #### Scenario: ZIP still restores
 - **WHEN** the streamed Full backup ZIP is later used with Full restore
 - **THEN** the host accepts the archive the same way as a previously built store-method Full backup ZIP
+
+### Requirement: Camera Resolve/Test Free RAM stack cap
+When Camera Resolve or Camera Test Snapshots runs on the dedicated `camOnvif` worker, the host SHALL size that worker’s FreeRTOS stack (Free RAM) to **16 KiB** when every relevant request URL is HTTP, and to **32 KiB** when any relevant URL is HTTPS. Relevant URLs are the request body’s `url`, `snapshotUrl`, `snapshotUrl1`, and `snapshotUrl2` fields. The host SHALL NOT use a 64 KiB stack for this worker.
+
+#### Scenario: HTTP Resolve uses 16 KiB stack
+- **WHEN** an admin runs Camera Resolve with only `http://` device URLs
+- **THEN** the `camOnvif` worker is created with a 16 KiB stack
+
+#### Scenario: HTTPS Test uses 32 KiB stack
+- **WHEN** an admin runs Camera Test Snapshots with an `https://` snapshot URL
+- **THEN** the `camOnvif` worker is created with a 32 KiB stack

@@ -20,3 +20,9 @@
 
 - [x] 4.1 Confirm Full backup ZIP still opens under Full restore; Free RAM no longer collapses by whole-archive size during/after download
 - [x] 4.2 Confirm host firmware build is **4.6.41** (apply bump; propose was 4.6.40)
+
+## 5. Camera Resolve/Test Free RAM stack
+
+- [x] 5.1 Size `camOnvif` stack to **16 KiB** when request URLs are HTTP-only
+- [x] 5.2 Size `camOnvif` stack to **32 KiB** when any `url` / snapshot URL field is HTTPS
+- [x] 5.3 Bump host firmware build to **4.6.42** for this follow-up

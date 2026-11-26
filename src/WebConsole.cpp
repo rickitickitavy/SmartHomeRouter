@@ -848,6 +848,33 @@ void WebConsole::tearDown() {
     LOGGER.info("Web console torn down for low-memory fail-safe");
 }
 
+namespace {
+
+bool cameraHeavyUrlIsHttps(const String &urlText) {
+    return urlText.length() >= 8 && urlText.substring(0, 8).equalsIgnoreCase("https://");
+}
+
+// Resolve/Test body may carry https:// on url or snapshot URL fields (TLS needs more stack).
+bool cameraHeavyBodyNeedsHttps(const char *body) {
+    if (body == nullptr || body[0] == '\0') {
+        return false;
+    }
+    String urlText;
+    String snapshotUrl;
+    String snapshotUrl1;
+    String snapshotUrl2;
+    extractJsonString(body, "url", urlText);
+    extractJsonString(body, "snapshotUrl", snapshotUrl);
+    extractJsonString(body, "snapshotUrl1", snapshotUrl1);
+    extractJsonString(body, "snapshotUrl2", snapshotUrl2);
+    return cameraHeavyUrlIsHttps(urlText)
+        || cameraHeavyUrlIsHttps(snapshotUrl)
+        || cameraHeavyUrlIsHttps(snapshotUrl1)
+        || cameraHeavyUrlIsHttps(snapshotUrl2);
+}
+
+}  // namespace
+
 void WebConsole::clearCameraHeavyOp() {
     cameraHeavyOp = CameraHeavyNone;
     cameraHeavyRunning = false;
@@ -909,12 +936,16 @@ bool WebConsole::queueCameraHeavyOp(CameraHeavyOp op, const char *body, String *
     cameraHeavyOp = op;
     cameraHeavyDone = false;
     cameraHeavyRunning = true;
-    // HTTPClient + SOAP locals are large; keep well above async_tcp / loop stacks.
-    constexpr uint32_t kCameraHeavyStackWords = 16384;  // 64 KB
+    // Free RAM task stack: 16 KiB for plain HTTP, 32 KiB when any URL is HTTPS (TLS).
+    // HTTPClient is heap-allocated in OnvifClient; SOAP bodies prefer PSRAM.
+    const bool needsHttps = cameraHeavyBodyNeedsHttps(copy);
+    const uint32_t stackWords = needsHttps
+        ? (32u * 1024u / sizeof(StackType_t))
+        : (16u * 1024u / sizeof(StackType_t));
     const BaseType_t created = xTaskCreatePinnedToCore(
         cameraHeavyWorkerTask,
         "camOnvif",
-        kCameraHeavyStackWords,
+        stackWords,
         this,
         1,
         &cameraHeavyTask,
@@ -934,6 +965,9 @@ bool WebConsole::queueCameraHeavyOp(CameraHeavyOp op, const char *body, String *
     LOGGER.info(
         String("Camera ")
         + (op == CameraHeavyResolve ? "resolve" : "test")
+        + (needsHttps ? " HTTPS" : " HTTP")
+        + " stackKiB="
+        + String((unsigned)(stackWords * sizeof(StackType_t) / 1024u))
         + ": queued on camOnvif worker (poll /api/cameras/test/status)"
     );
     return true;
