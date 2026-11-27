@@ -1,2 +1,21 @@
 dependencies:
   idf: '>=5.1'
+  joltwallet/littlefs: "^1.20.0"
+  # P4 Wi-Fi is remote over ESP-Hosted (C6). S3 keeps on-chip esp_wifi.
+  espressif/esp_wifi_remote:
+    version: "~1.6.3"
+    rules:
+      - if: "target in [esp32p4]"
+  espressif/esp_hosted:
+    version: "~2.12.11"
+    rules:
+      - if: "target in [esp32p4]"
+  # C6 slave Zigbee coordinator (ZCZR).
+  espressif/esp-zboss-lib:
+    version: "~1.6.0"
+    rules:
+      - if: "target in [esp32c6]"
+  espressif/esp-zigbee-lib:
+    version: "~1.6.0"
+    rules:
+      - if: "target in [esp32c6]"

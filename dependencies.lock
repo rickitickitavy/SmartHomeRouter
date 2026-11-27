@@ -1,0 +1,43 @@
+dependencies:
+  espressif/esp-zboss-lib:
+    component_hash: 6aa640ab7f820509b2ec199dd1a1d8857d02515f0d1091626e90c10174ad0e78
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.6.9
+  espressif/esp-zigbee-lib:
+    component_hash: ae5040e00b6d68bc4270a0ee85062953a530df172ed7a87039a88c076231b264
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.6.9
+  idf:
+    source:
+      type: idf
+    version: 5.5.5
+  joltwallet/littlefs:
+    component_hash: f633efcd615b58206ec1b131591f7fc5b212716603ebc24697900aab71e9d3bd
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.23.3
+direct_dependencies:
+- espressif/esp-zboss-lib
+- espressif/esp-zigbee-lib
+- idf
+- joltwallet/littlefs
+manifest_hash: 626ba6be2cd5f1f7aa684d8a79b413a8be27578075a159d6b5b592d2421e480a
+target: esp32c6
+version: 2.0.0
